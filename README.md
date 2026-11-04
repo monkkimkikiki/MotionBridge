@@ -42,7 +42,7 @@ GitHub 에 올리면 `.github/workflows/build-windows.yml` 이 같은 일을 자
 CLI: `python -m motionbridge extract scan --game "D:\...\Sparta"` / `extract list ...` / `extract export ... --out 폴더`
 
 실제 추출은 **추출 도우미 `mbextract`** (CUE4Parse = FModel 이 쓰는 라이브러리 기반, `tools/mbextract`)가 합니다.
-빌드: .NET 8 SDK + git 이 있는 Windows 에서 `packaging\build_windows.bat`(자동) 또는
+빌드: .NET 10 SDK + git 이 있는 Windows 에서 `packaging\build_windows.bat`(자동) 또는
 ```
 git clone --depth 1 --recursive https://github.com/FabianFG/CUE4Parse third_party/CUE4Parse
 dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o tools/mbextract/out

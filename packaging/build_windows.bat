@@ -10,7 +10,7 @@ python -m pip install -U pip || goto :err
 pip install -r requirements.txt pyinstaller || goto :err
 set PYTHONUTF8=1
 python tests\run_all.py || echo [WARN] some tests failed - continuing
-REM (선택) 추출 도우미: .NET 8 SDK 와 git 이 있으면 빌드한다. 실패해도 계속 진행.
+REM (선택) 추출 도우미: .NET 10 SDK 와 git 이 있으면 빌드한다. 실패해도 계속 진행.
 where dotnet >nul 2>nul
 if %errorlevel%==0 (
     if not exist third_party\CUE4Parse git clone --depth 1 --recursive https://github.com/FabianFG/CUE4Parse third_party\CUE4Parse

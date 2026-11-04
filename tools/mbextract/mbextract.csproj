@@ -2,13 +2,13 @@
   <!--
     MotionBridge extraction helper. Opens Unreal containers with CUE4Parse (the library FModel uses)
     and exports animations as ActorX PSA.
-    Build on Windows with the .NET 8 SDK: clone CUE4Parse recursively into third_party/CUE4Parse,
+    Build on Windows with the .NET 10 SDK: clone CUE4Parse recursively into third_party/CUE4Parse,
     then run: dotnet publish tools/mbextract -c Release with runtime win-x64, self-contained, single file, output folder tools/mbextract/out
     Note: the CUE4Parse API changes between versions. Program.cs was written against one point in time.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>mbextract</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
