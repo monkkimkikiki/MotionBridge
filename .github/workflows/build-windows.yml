@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -44,3 +46,10 @@ jobs:
           path: |
             dist_installer/*.exe
             dist/MotionBridge/
+      - name: Release (설치 파일을 릴리스로 게시)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" dist_installer/*.exe --title "MotionBridge $TAG" --notes "자동 빌드 $TAG" --target "${{ github.sha }}"
