@@ -76,7 +76,7 @@ def reframe(skel: Skeleton, anim: Optional[Animation], rot: np.ndarray, scale: f
         an2 = Animation(anim.name, anim.fps, arot, apos)
     ms2 = None
     if meshes:
-        ms2 = [Mesh(m.name, Q.rotate(rot, m.vertices * scale), m.faces, m.joints, m.weights, m.uv) for m in meshes]
+        ms2 = [Mesh(m.name, Q.rotate(rot, m.vertices * scale), m.faces, m.joints, m.weights, m.uv, m.color, m.texture) for m in meshes]
     return sk2, an2, ms2
 
 

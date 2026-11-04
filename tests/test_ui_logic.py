@@ -176,6 +176,115 @@ def test_worker_failure():
 
 
 
+def test_undo_shortcuts_meshmode():
+    with tempfile.TemporaryDirectory() as d:
+        src, src2, tgt, _, _ = TP.make_inputs(d)
+        from motionbridge.core import bridge
+
+        bridge.CONFIG_PATH = os.path.join(d, "cfg.json")
+        mw = A.MainWindow()
+        # ---- 단축키 표
+        table = dict(mw.shortcut_table())
+        keys = [k for v in table.values() for k in v.split(" / ")]
+        assert len(keys) == len(set(keys)), "단축키 중복: %s" % sorted(k for k in keys if keys.count(k) > 1)
+        assert table["실행 취소"] == "Ctrl+Z" and "Ctrl+Y" in table["다시 실행"] and "Ctrl+Shift+Z" in table["다시 실행"]
+        for need in ("Ctrl+O", "Ctrl+S", "Ctrl+E", "Space", "F", "B", "Ctrl+Q"):
+            assert need in keys, need
+        assert [table["메시: " + n] for n in ("표시 안 함", "점", "와이어", "반투명", "솔리드", "머티리얼")] == ["0", "1", "2", "3", "4", "5"]
+        # 모든 메뉴 동작이 실제 메서드로 연결되어 있다
+        for key, (qa, sc, action, text) in mw._actions.items():
+            assert hasattr(mw, action.partition(":")[0]), (key, action)
+        QFileDialog.open_ret = (src, "")
+        mw.open_source()
+        QFileDialog.open_ret = (tgt, "")
+        mw.open_target()
+        assert mw.pr.result is not None and not mw.history.can_undo(), "파일을 연 직후에는 되돌릴 것이 없다"
+        # ---- 실행 취소 / 다시 실행: 설정
+        mw.undo()
+        assert "없습니다" in mw.statusBar().last
+        nf = mw._fields["scale_mult"][0]
+        nf.spin.setValue(1.5)
+        mw._timer_fire()  # 조절이 멈춘 시점
+        nf.spin.setValue(2.0)
+        mw._timer_fire()
+        assert mw.pr.settings.scale_mult == 2.0 and len(mw.history.undo_stack) == 2
+        mw.undo()
+        assert abs(mw.pr.settings.scale_mult - 1.5) < 1e-9 and abs(nf.value() - 1.5) < 1e-9, "위젯도 되돌아가야 함"
+        mw.undo()
+        assert mw.pr.settings.scale_mult == 1.0 and nf.value() == 1.0
+        mw.redo()
+        assert abs(mw.pr.settings.scale_mult - 1.5) < 1e-9
+        mw.redo()
+        assert mw.pr.settings.scale_mult == 2.0
+        mw.redo()
+        assert "없습니다" in mw.statusBar().last
+        # 타이머 확정 전의 변경도 한 번에 되돌린다 (확정 + 되돌림)
+        mw.hip_fields[1].spin.setValue(3.0)
+        mw.undo()
+        assert mw.pr.settings.hip_offset[1] == 0.0 and mw.pr.settings.scale_mult == 2.0
+        mw.redo()
+        assert mw.pr.settings.hip_offset[1] == 3.0
+        # ---- 실행 취소: 본 매핑
+        rows = {mw.map_table.item(r, 0).data(A.Qt.ItemDataRole.UserRole): r for r in range(mw.map_table.rowCount())}
+        cb_t = mw.map_table.cellWidget(rows["L_Foot"], 2)
+        orig = mw.pr.tgt_slots["L_Foot"]
+        cb_t.setCurrentIndex(0)
+        mw._timer_fire()
+        assert "L_Foot" not in mw.pr.tgt_slots
+        mw.undo()
+        assert mw.pr.tgt_slots.get("L_Foot") == orig
+        assert mw.map_table.cellWidget(rows["L_Foot"], 2).currentIndex() - 1 == orig, "매핑 표도 되돌아가야 함"
+        mw.redo()
+        assert "L_Foot" not in mw.pr.tgt_slots
+        mw.undo()
+        # 새 파일을 열면 기록이 지워진다
+        QFileDialog.open_ret = (tgt, "")
+        mw.open_target()
+        assert not mw.history.can_undo()
+        # ---- 프레임 이동 단축키
+        mw.frame_slider.setValue(5)
+        mw.step_frame(1)
+        assert mw.frame_slider.value() == 6
+        mw.step_frame(-10)
+        assert mw.frame_slider.value() == 0, "범위 밖으로 나가지 않는다"
+        mw.goto_frame("last")
+        assert mw.frame_slider.value() == mw.vd.n_frames - 1
+        mw.step_frame(10)
+        assert mw.frame_slider.value() == mw.vd.n_frames - 1
+        mw.goto_frame("first")
+        assert mw.frame_slider.value() == 0
+        mw._viewport_key("next")
+        assert mw.frame_slider.value() == 1
+        mw.toggle_play()
+        assert mw.btn_play.isChecked() and mw.play_timer.active
+        mw._viewport_key("play")
+        assert not mw.btn_play.isChecked()
+        # 탭 / 보기 토글
+        mw._dispatch("goto_tab:2")
+        mw._dispatch("toggle_view:bones")
+        assert mw.viewport.show_bones is False
+        mw._dispatch("toggle_view:ghost")
+        assert mw.viewport.show_ghost is False
+        mw._dispatch("toggle_view:bones")
+        assert mw.viewport.show_bones is True
+        # ---- 메시 보기 방식
+        assert mw.viewport.mesh_mode == "solid"
+        for k in ("points", "wire", "translucent", "solid", "material", "off"):
+            mw._dispatch("mesh:" + k)
+            assert mw.viewport.mesh_mode == k and mw.cfg["mesh_mode"] == k
+            mw.viewport.paintEvent(None)  # 예외 없이 그려진다 (가짜 Qt)
+        mw._dispatch("mesh:off")
+        mw.mesh_cycle()
+        assert mw.viewport.mesh_mode == "points"
+        for _ in range(5):
+            mw.mesh_cycle()
+        assert mw.viewport.mesh_mode == "off", "순환해서 처음으로"
+        QMessageBox.calls.clear()
+        mw.show_shortcuts()
+        assert "Ctrl+Z" in QMessageBox.calls[-1][2]
+    print("undo/shortcuts/mesh mode OK")
+
+
 def test_extract_tab():
     if os.name == "nt":
         print("test_extract_tab: Windows 에서는 건너뜀 (셔뱅 가짜 실행파일 사용)")
@@ -263,5 +372,6 @@ def test_extract_tab():
 if __name__ == "__main__":
     test_full_flow()
     test_worker_failure()
+    test_undo_shortcuts_meshmode()
     test_extract_tab()
     print("test_ui_logic ALL OK")

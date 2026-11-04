@@ -116,8 +116,127 @@ def test_reduced_parents():
     print("reduced parents OK")
 
 
+def _sphere(n_lat=24, n_lon=32, r=0.5, center=(0.0, 1.0, 0.0), color=None, texture=None):
+    from motionbridge.core.model import Mesh
+
+    lat = np.linspace(0, np.pi, n_lat + 1)
+    lon = np.linspace(0, 2 * np.pi, n_lon, endpoint=False)
+    v = [(0, 1, 0)]
+    for a in lat[1:-1]:
+        for b in lon:
+            v.append((np.sin(a) * np.cos(b), np.cos(a), np.sin(a) * np.sin(b)))
+    v.append((0, -1, 0))
+    v = np.array(v, float)
+    f = []
+    for i in range(n_lon):
+        f.append((0, 1 + i, 1 + (i + 1) % n_lon))
+    for k in range(n_lat - 2):
+        for i in range(n_lon):
+            a, b = 1 + k * n_lon + i, 1 + k * n_lon + (i + 1) % n_lon
+            c, d = a + n_lon, b + n_lon
+            f += [(a, c, b), (b, c, d)]
+    last = len(v) - 1
+    for i in range(n_lon):
+        f.append((last, 1 + (n_lat - 2) * n_lon + (i + 1) % n_lon, 1 + (n_lat - 2) * n_lon + i))
+    uv = np.stack([(np.arctan2(v[:, 2], v[:, 0]) / (2 * np.pi)) % 1.0, 0.5 - np.arcsin(v[:, 1]) / np.pi], axis=1)
+    pos = v * r + np.array(center)
+    J = np.zeros((len(v), 1), int)
+    W = np.ones((len(v), 1))
+    return Mesh("sph", pos, np.array(f), J, W, uv, color, texture)
+
+
+def _tiny_png(rgb=(255, 0, 0)):
+    import struct
+    import zlib
+
+    def chunk(t, d):
+        c = struct.pack(">I", len(d)) + t + d
+        return c + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + bytes(rgb) * 2 for _ in range(2))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+def test_display_mesh_render():
+    from motionbridge.ui.viewer_math import DEFAULT_SURFACE_RGB, build_display_mesh, render_surface, wire_segments
+
+    cam = OrbitCamera()
+    cam.frame(np.array([0.0, 1.0, 0.0]), 1.2)
+    # 큰 메시는 줄어든다
+    m = _sphere(60, 80)
+    dm = build_display_mesh(m, max_tris=1500, want_edges=True)
+    assert len(dm.tris) <= 1500 and dm.n_full_faces == len(m.faces) and dm.orient != 0.0, "닫힌 메시로 판정"
+    assert len(dm.sub.vertices) == len(dm.sub.joints) == len(dm.sub.weights), "스킨 정보가 같이 줄어야 함"
+    assert dm.edges is not None and wire_segments(dm, dm.sub.vertices).shape == (len(dm.edges), 2, 3)
+    assert build_display_mesh(_sphere(2, 3).__class__("e", np.zeros((0, 3)), np.zeros((0, 3), int), np.zeros((0, 1), int), np.zeros((0, 1)))) is None
+    # 솔리드: 화면 가운데가 칠해지고 모서리는 비어 있다
+    img = render_surface([(dm, dm.sub.vertices)], cam, 200, 200, material=False)
+    assert img.shape == (200, 200, 4) and img[100, 100, 3] == 255 and img[2, 2, 3] == 0
+    cov = (img[..., 3] > 0).mean()
+    assert 0.05 < cov < 0.6, cov
+    # 기본 색(머티리얼 없음)은 기본 회청색 계열: 파랑 >= 빨강
+    px = img[100, 100, :3].astype(int)
+    assert px[2] >= px[0], px
+    # 머티리얼 색: 빨강 baseColor -> 머티리얼 모드는 빨갛고, 솔리드는 그대로 회청색
+    mr = _sphere(60, 80, color=(1.0, 0.0, 0.0, 1.0))
+    dmr = build_display_mesh(mr, max_tris=1500)
+    assert dmr.has_material
+    a = render_surface([(dmr, dmr.sub.vertices)], cam, 200, 200, material=True)[100, 100, :3].astype(int)
+    b = render_surface([(dmr, dmr.sub.vertices)], cam, 200, 200, material=False)[100, 100, :3].astype(int)
+    assert a[0] > 60 and a[1] < 10 and a[2] < 10, a
+    assert b[2] >= b[0] and b[1] > 40, b
+    # 텍스처(2x2 PNG) 디코더를 넣으면 샘플마다 텍스처 색이 쓰인다
+    def dec(_bytes):
+        t = np.zeros((2, 2, 3), np.uint8)
+        t[:, :, 1] = 255  # 초록
+        return t
+
+    mt = _sphere(60, 80, color=(1.0, 1.0, 1.0, 1.0), texture=b"x")
+    dmt = build_display_mesh(mt, decode=dec, max_tris=1500)
+    c = render_surface([(dmt, dmt.sub.vertices)], cam, 200, 200, material=True)[100, 100, :3].astype(int)
+    assert c[1] > 60 and c[0] < 10 and c[2] < 10, c
+    # 디코더가 실패(None)해도 기본 색으로 계속
+    dmn = build_display_mesh(mt, decode=lambda _b: None, max_tris=1500)
+    assert dmn.has_material and render_surface([(dmn, dmn.sub.vertices)], cam, 200, 200, material=True) is not None
+    v = dm.sub.vertices
+    # 입력이 없거나 이미지가 너무 작으면 None
+    assert render_surface([], cam, 100, 100, False) is None
+    assert render_surface([(dm, v)], cam, 1, 1, False) is None
+    # 점 수를 줄여도 구멍 없이 채워진다 (적은 샘플 -> 큰 점 + 메우기)
+    dm_sparse = build_display_mesh(m, max_tris=1500, n_samples=8000)
+    sp = render_surface([(dm_sparse, dm_sparse.sub.vertices)], cam, 200, 200, False)
+    inner = sp[80:120, 80:120, 3]
+    assert (inner > 0).mean() > 0.97, (inner > 0).mean()
+    print("display mesh render OK")
+
+
+def test_gltf_material_roundtrip():
+    from motionbridge.core.io_gltf import read_gltf, write_glb
+    from motionbridge.core.model import Skeleton
+
+    sk = Skeleton(["root"], np.array([-1]), np.zeros((1, 3)), None, "s")
+    png = _tiny_png((255, 0, 0))
+    m = _sphere(8, 10, color=(0.2, 0.4, 0.6, 1.0), texture=png)
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "a.glb")
+        write_glb(p, sk, None, [m])
+        back = read_gltf(p)
+        mm = back.meshes[0]
+        assert mm.color is not None and np.allclose(mm.color[:3], (0.2, 0.4, 0.6), atol=1e-3)
+        assert mm.texture is not None and mm.texture[:8] == b"\x89PNG\r\n\x1a\n" and mm.texture == png
+        assert mm.uv is not None and mm.uv.shape == (len(m.vertices), 2)
+        # 머티리얼이 없는 메시는 None 그대로
+        p2 = os.path.join(d, "b.glb")
+        write_glb(p2, sk, None, [_sphere(8, 10)])
+        m2 = read_gltf(p2).meshes[0]
+        assert m2.color is None and m2.texture is None
+    print("gltf material roundtrip OK")
+
+
 if __name__ == "__main__":
     test_camera()
     test_reduced_parents()
+    test_display_mesh_render()
+    test_gltf_material_roundtrip()
     test_scene_and_render()
     print("test_viewer ALL OK")

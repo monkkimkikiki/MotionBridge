@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from ..core import quat as Q
-from ..core.model import fk
+from ..core.model import Mesh, fk
 
 
 class OrbitCamera:
@@ -263,3 +263,217 @@ COLORS = {
     "pt_bad": (255, 80, 80),
 }
 DRAW_ORDER = ["seg_grid", "pt_mesh", "seg_ghost", "seg_target", "pt_target_joints", "pt_plant", "pt_bad"]
+
+
+
+# ===================================================================== 메시 표면 표시
+# 솔리드/머티리얼: 삼각형을 칠하지 않고 표면을 촘촘한 점으로 찍어(깊이 정렬 + 음영) 이미지로 만든다.
+# 파이썬 루프 없이 numpy 로만 처리해서 큰 메시도 재생 중에 돌릴 수 있다.
+DEFAULT_SURFACE_RGB = (0.74, 0.78, 0.86)
+
+
+@dataclass
+class DisplayMesh:
+    sub: Mesh  # 축소된 정점(스킨 정보 포함, 바인드 포즈)
+    tris: np.ndarray  # (T,3) sub 기준
+    samp_tri: np.ndarray  # (N,) 표면 샘플이 속한 삼각형
+    samp_bary: np.ndarray  # (N,3)
+    samp_rgb: np.ndarray  # (N,3) 머티리얼 색(0..1)
+    has_material: bool
+    n_full_faces: int
+    edges: Optional[np.ndarray] = None  # (E,2) 와이어 표시용
+    orient: float = 0.0  # +1/-1: 삼각형 법선이 바깥/안쪽(닫힌 메시일 때), 0: 알 수 없음 -> 뒷면 제거 안 함
+
+
+def _reduce_mesh(verts: np.ndarray, faces: np.ndarray, max_tris: int):
+    """정점 군집화로 삼각형 수를 max_tris 이하로 줄인다. (대표 정점 인덱스, 삼각형) 을 돌려준다."""
+    faces = np.asarray(faces, dtype=np.int64)
+    if len(faces) > max_tris:
+        lo, hi = verts.min(axis=0), verts.max(axis=0)
+        diag = float(np.linalg.norm(hi - lo)) or 1.0
+        best = None
+        a, b = diag / 3000.0, diag / 3.0
+        for _ in range(9):  # 로그 스케일 이분 탐색: 삼각형이 max_tris 이하인 가장 작은 칸 크기
+            c = float(np.sqrt(a * b))
+            cid, tri = _cluster(verts, faces, lo, c)
+            if len(tri) <= max_tris:
+                best, b = (cid, tri), c
+            else:
+                a = c
+        if best is None:
+            best = _cluster(verts, faces, lo, b)
+        cid, tri = best
+        nclu = int(cid.max()) + 1
+        cnt = np.bincount(cid, minlength=nclu).astype(float)
+        mean = np.stack([np.bincount(cid, weights=verts[:, k], minlength=nclu) for k in range(3)], axis=1) / np.maximum(cnt, 1)[:, None]
+        d = np.linalg.norm(verts - mean[cid], axis=1)
+        order = np.lexsort((d, cid))
+        first = np.ones(len(order), bool)
+        first[1:] = cid[order][1:] != cid[order][:-1]
+        rep = np.full(nclu, -1, dtype=np.int64)
+        rep[cid[order][first]] = order[first]
+    else:
+        used = np.unique(faces)
+        rep = used
+        remap = np.full(len(verts), -1, dtype=np.int64)
+        remap[used] = np.arange(len(used))
+        tri = remap[faces]
+    keep = np.unique(tri)
+    remap = np.full(len(rep), -1, dtype=np.int64)
+    remap[keep] = np.arange(len(keep))
+    return rep[keep], remap[tri]
+
+
+def _cluster(verts: np.ndarray, faces: np.ndarray, lo: np.ndarray, cell: float):
+    q = np.floor((verts - lo) / cell).astype(np.int64)
+    n = q.max(axis=0) + 1
+    key = (q[:, 0] * n[1] + q[:, 1]) * n[2] + q[:, 2]
+    _, cid = np.unique(key, return_inverse=True)
+    cid = cid.astype(np.int64)
+    t = cid[faces]
+    ok = (t[:, 0] != t[:, 1]) & (t[:, 1] != t[:, 2]) & (t[:, 0] != t[:, 2])
+    t = t[ok]
+    if len(t) == 0:
+        return cid, t
+    R = int(cid.max()) + 1
+    k = np.sort(t, axis=1)
+    code = (k[:, 0] * R + k[:, 1]) * R + k[:, 2]
+    _, idx = np.unique(code, return_index=True)
+    return cid, t[np.sort(idx)]
+
+
+def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples: int = 90000, seed: int = 1, want_edges: bool = False) -> Optional[DisplayMesh]:
+    """decode(bytes) -> (H,W,3|4) uint8 또는 None. 텍스처 해독은 Qt 쪽에서 넣어 준다."""
+    if len(mesh.faces) == 0 or len(mesh.vertices) == 0:
+        return None
+    rep, tris = _reduce_mesh(mesh.vertices, mesh.faces, max_tris)
+    if len(tris) == 0:
+        return None
+    uv = mesh.uv[rep] if mesh.uv is not None and len(mesh.uv) == len(mesh.vertices) else None
+    sub = Mesh(mesh.name, mesh.vertices[rep], tris, mesh.joints[rep], mesh.weights[rep], uv)
+    v = sub.vertices
+    area = 0.5 * np.linalg.norm(np.cross(v[tris[:, 1]] - v[tris[:, 0]], v[tris[:, 2]] - v[tris[:, 0]]), axis=1)
+    if not np.isfinite(area).all() or area.sum() <= 0:
+        area = np.ones(len(tris))
+    rng = np.random.default_rng(seed)
+    cum = np.cumsum(area) / area.sum()
+    st = np.minimum(np.searchsorted(cum, rng.random(n_samples)), len(tris) - 1)
+    r1, r2 = np.sqrt(rng.random(n_samples)), rng.random(n_samples)
+    bary = np.stack([1 - r1, r1 * (1 - r2), r1 * r2], axis=1)
+    base = np.array(mesh.color[:3] if mesh.color is not None else DEFAULT_SURFACE_RGB, float)
+    rgb = np.tile(base, (n_samples, 1))
+    has_mat = mesh.color is not None
+    tex = None
+    if mesh.texture is not None and uv is not None and decode is not None:
+        tex = decode(mesh.texture)
+    if tex is not None and tex.ndim == 3 and tex.shape[0] > 0 and tex.shape[1] > 0:
+        suv = np.einsum("nk,nkc->nc", bary, uv[tris[st]])
+        H, W = tex.shape[:2]
+        px = np.clip(((suv[:, 0] % 1.0) * W).astype(int), 0, W - 1)
+        py = np.clip(((suv[:, 1] % 1.0) * H).astype(int), 0, H - 1)
+        rgb = tex[py, px, :3].astype(float) / 255.0 * base
+        has_mat = True
+    edges = None
+    if want_edges:
+        e = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+        e.sort(axis=1)
+        R = len(v)
+        _, ui = np.unique(e[:, 0] * R + e[:, 1], return_index=True)
+        edges = e[ui]
+    # 닫힌 메시의 바깥 방향: 법선과 (삼각형 중심 - 메시 중심) 의 내적 합으로 판정. 열린 메시(천 등)는 0.
+    cn = np.cross(v[tris[:, 1]] - v[tris[:, 0]], v[tris[:, 2]] - v[tris[:, 0]])
+    cc = v[tris].mean(axis=1) - v.mean(axis=0)
+    dots = np.einsum("ij,ij->i", cn, cc)
+    denom = float(np.abs(dots).sum())
+    orient = 0.0
+    if denom > 1e-12 and abs(float(dots.sum())) / denom > 0.5:
+        orient = 1.0 if dots.sum() > 0 else -1.0
+    return DisplayMesh(sub, tris, st, bary, np.clip(rgb, 0.0, 1.0), has_mat, len(mesh.faces), edges, orient)
+
+
+def skin_display(dm: DisplayMesh, skel, wr: np.ndarray, wp: np.ndarray, Ft: np.ndarray) -> np.ndarray:
+    """한 프레임의 축소 메시 정점(표준 프레임)."""
+    return Q.rotate(Ft, dm.sub.skin(skel, wr, wp))
+
+
+def render_surface(items, cam: "OrbitCamera", w: int, h: int, material: bool) -> Optional[np.ndarray]:
+    """items = [(DisplayMesh, 정점(R,3))]. 깊이 순서대로 점을 찍은 (h,w,4) uint8 RGBA 이미지. 덮이지 않은 곳은 알파 0."""
+    if w < 2 or h < 2 or not items:
+        return None
+    Ps, Ns, Cs, Os = [], [], [], []
+    for dm, v in items:
+        tv = v[dm.tris]
+        n = np.cross(tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0])
+        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+        Ps.append(np.einsum("nk,nkc->nc", dm.samp_bary, tv[dm.samp_tri]))
+        Ns.append(n[dm.samp_tri])
+        Cs.append(dm.samp_rgb if material and dm.has_material else np.tile(DEFAULT_SURFACE_RGB, (len(dm.samp_tri), 1)))
+        Os.append(np.full(len(dm.samp_tri), dm.orient))
+    P, N, C, O = np.concatenate(Ps), np.concatenate(Ns), np.concatenate(Cs), np.concatenate(Os)
+    xy, z = cam.project(P, float(w), float(h))
+    ix, iy = np.floor(xy[:, 0]), np.floor(xy[:, 1])
+    ok = (z > 0) & np.isfinite(ix) & np.isfinite(iy) & (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+    if not ok.any():
+        return None
+    view = cam.eye() - cam.target
+    view = view / max(float(np.linalg.norm(view)), 1e-12)
+    sndv = (N @ view) * O  # 닫힌 메시에서 음수면 뒷면
+    ok &= sndv > -0.12  # 뒷면은 그리지 않는다(앞면 틈으로 비쳐 보이는 것 방지). O==0 이면 항상 통과
+    if not ok.any():
+        return None
+    ix, iy, z, N, C = ix[ok].astype(np.int64), iy[ok].astype(np.int64), z[ok], N[ok], C[ok]
+    ndv = np.abs(N @ view)
+    shade = 0.30 + 0.70 * ndv
+    col = np.clip(C * shade[:, None], 0.0, 1.0)
+    rgba = np.empty((len(z), 4), np.uint8)
+    rgba[:, :3] = (col * 255.0 + 0.5).astype(np.uint8)
+    rgba[:, 3] = 255
+    order = np.argsort(-z, kind="stable")  # 먼 것부터 찍어서 가까운 것이 덮는다
+    ix, iy, rgba = ix[order], iy[order], rgba[order]
+    # 칠해진 면적을 8px 칸 점유율로 추정하고, 면적당 점 수 x 점 크기^2 >= 4 가 되게 점 크기를 정한다(틈이 거의 안 남는 기준).
+    cells = np.unique((ix // 8) * ((h + 7) // 8 + 1) + iy // 8)
+    dens = len(ix) / max(len(cells) * 64.0, 1.0)
+    k = int(np.clip(np.ceil(np.sqrt(4.0 / max(dens, 1e-9))), 1, 4))
+    img = np.zeros((h, w, 4), np.uint8)
+    flat = img.reshape(-1, 4)
+    lo = -(k // 2)
+    for dy in range(lo, lo + k):
+        for dx in range(lo, lo + k):
+            x2, y2 = ix + dx, iy + dy
+            m = (x2 >= 0) & (x2 < w) & (y2 >= 0) & (y2 < h)
+            flat[y2[m] * w + x2[m]] = rgba[m]
+    _fill_holes(img, int(ix.min()) + lo, int(ix.max()) + lo + k + 1, int(iy.min()) + lo, int(iy.max()) + lo + k + 1)
+    return img
+
+
+def _fill_holes(img: np.ndarray, x0: int, x1: int, y0: int, y1: int, passes: int = 4) -> None:
+    """점 사이의 틈을 이웃 색으로 메운다 (이웃 8칸 중 3칸 이상이 칠해진 빈 픽셀만, 최대 4번 반복)."""
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = max(x0 - 1, 0), max(y0 - 1, 0), min(x1 + 1, w), min(y1 + 1, h)
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        return
+    sub = img[y0:y1, x0:x1]
+    for _ in range(passes):
+        cov = (sub[..., 3] > 0).astype(np.float32)
+        pad_c = np.pad(cov, 1)
+        pad_rgb = np.pad(sub[..., :3].astype(np.float32) * cov[..., None], ((1, 1), (1, 1), (0, 0)))
+        hh, ww = cov.shape
+        cnt = np.zeros_like(cov)
+        acc = np.zeros(sub.shape[:2] + (3,), np.float32)
+        for dy in (0, 1, 2):
+            for dx in (0, 1, 2):
+                if dy == 1 and dx == 1:
+                    continue
+                cnt += pad_c[dy:dy + hh, dx:dx + ww]
+                acc += pad_rgb[dy:dy + hh, dx:dx + ww]
+        holes = (cov == 0) & (cnt >= 3)
+        if not holes.any():
+            break
+        sub[holes, :3] = (acc[holes] / cnt[holes][:, None] + 0.5).astype(np.uint8)
+        sub[holes, 3] = 255
+
+
+def wire_segments(dm: DisplayMesh, v: np.ndarray) -> np.ndarray:
+    """와이어프레임 선분 (E,2,3). dm 은 want_edges=True 로 만든 것이어야 한다."""
+    e = dm.edges if dm.edges is not None else np.zeros((0, 2), int)
+    return np.stack([v[e[:, 0]], v[e[:, 1]]], axis=1) if len(e) else np.zeros((0, 2, 3))

@@ -89,6 +89,31 @@ def _accessor(gltf, buffers, idx: int) -> np.ndarray:
     return arr
 
 
+def _material_of(gltf, buffers, prim, base_dir: str):
+    """프리미티브의 머티리얼에서 (기본 색 RGBA 또는 None, 기본 색 텍스처 바이트 또는 None). 읽지 못하면 None."""
+    try:
+        mi = prim.get("material")
+        if mi is None:
+            return None, None
+        mat = gltf["materials"][mi]
+        pbr = mat.get("pbrMetallicRoughness", {})
+        col = pbr.get("baseColorFactor")
+        color = tuple(float(x) for x in col) if col and len(col) == 4 else None
+        tex = None
+        bt = pbr.get("baseColorTexture")
+        if bt is not None:
+            img = gltf["images"][gltf["textures"][bt["index"]]["source"]]
+            if "bufferView" in img:
+                bv = gltf["bufferViews"][img["bufferView"]]
+                off = bv.get("byteOffset", 0)
+                tex = bytes(buffers[bv["buffer"]][off:off + bv["byteLength"]])
+            elif "uri" in img:
+                tex = _read_uri(img["uri"], base_dir)
+        return color, tex
+    except (KeyError, IndexError, OSError, ValueError, TypeError):
+        return None, None
+
+
 def _trs_matrix(node) -> np.ndarray:
     if "matrix" in node:
         return np.array(node["matrix"], dtype=float).reshape(4, 4).T
@@ -330,7 +355,8 @@ def read_gltf(path: str, fps: Optional[float] = None) -> Model:
                 else:
                     vw = (world(ni) @ vh.T).T[:, :3]
                 uv = _accessor(gltf, buffers, at["TEXCOORD_0"]).astype(float) if "TEXCOORD_0" in at else None
-                meshes.append(Mesh(nd.get("name", "mesh%d" % ni) + ("_%d" % pi if pi else ""), vw, faces, jn_skel, wt, uv))
+                mcolor, mtex = _material_of(gltf, buffers, prim, os.path.dirname(path))
+                meshes.append(Mesh(nd.get("name", "mesh%d" % ni) + ("_%d" % pi if pi else ""), vw, faces, jn_skel, wt, uv, mcolor, mtex))
     return Model(path=path, skeleton=skel, animations=anims, meshes=meshes, notes=notes)
 
 
@@ -396,6 +422,9 @@ def write_glb(
     skin = {"joints": list(range(J)), "inverseBindMatrices": ibm_acc, "skeleton": root_nodes[0]}
 
     gl_meshes: List[dict] = []
+    materials: List[dict] = []
+    textures: List[dict] = []
+    images: List[dict] = []
     scene_nodes = list(root_nodes)
     if meshes:
         for mi, m in enumerate(meshes):
@@ -414,7 +443,23 @@ def write_glb(
             if m.uv is not None:
                 at["TEXCOORD_0"] = buf.add(m.uv.astype(np.float32), 5126, "VEC2", 34962)
             idx = buf.add(m.faces.astype(np.uint32).reshape(-1, 1), 5125, "SCALAR", 34963)
-            gl_meshes.append({"name": m.name, "primitives": [{"attributes": at, "indices": idx, "mode": 4}]})
+            prim = {"attributes": at, "indices": idx, "mode": 4}
+            if m.color is not None or m.texture is not None:
+                pbr: dict = {"metallicFactor": 0.0, "roughnessFactor": 1.0}
+                if m.color is not None:
+                    pbr["baseColorFactor"] = [float(x) for x in m.color]
+                if m.texture is not None and m.uv is not None:
+                    while len(buf.data) % 4:
+                        buf.data.append(0)
+                    buf.views.append({"buffer": 0, "byteOffset": len(buf.data), "byteLength": len(m.texture)})
+                    buf.data.extend(m.texture)
+                    mime = "image/png" if m.texture[:4] == b"\x89PNG" else "image/jpeg"
+                    images.append({"bufferView": len(buf.views) - 1, "mimeType": mime})
+                    textures.append({"source": len(images) - 1})
+                    pbr["baseColorTexture"] = {"index": len(textures) - 1}
+                materials.append({"name": m.name + "_mat", "pbrMetallicRoughness": pbr, "doubleSided": True})
+                prim["material"] = len(materials) - 1
+            gl_meshes.append({"name": m.name, "primitives": [prim]})
             nodes.append({"name": m.name, "mesh": mi, "skin": 0})
             scene_nodes.append(len(nodes) - 1)
 
@@ -451,6 +496,11 @@ def write_glb(
     }
     if gl_meshes:
         doc["meshes"] = gl_meshes
+    if materials:
+        doc["materials"] = materials
+    if textures:
+        doc["textures"] = textures
+        doc["images"] = images
     if animations:
         doc["animations"] = animations
 

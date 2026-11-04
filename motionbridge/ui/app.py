@@ -1,12 +1,13 @@
 """MotionBridge 메인 창 (PySide6)."""
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QTimer, QUrl, Qt
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QPalette
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton,
@@ -17,11 +18,12 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..core import bridge, extractor, gamescan
 from ..core.export import PRESETS
+from ..core.history import History
 from ..core.loader import FILE_FILTER
 from ..core.mapping import FINGERS, SLOT_ORDER, slot_label
 from ..core.pipeline import ExportOptions, Project
 from .help_text import EXTRACT_HELP
-from .viewer import Viewport
+from .viewer import MESH_MODES, Viewport
 from .viewer_math import ViewData
 from .widgets import NumField, Worker
 
@@ -50,7 +52,9 @@ class MainWindow(QMainWindow):
         self.recompute_timer = QTimer(self)
         self.recompute_timer.setSingleShot(True)
         self.recompute_timer.setInterval(120)
-        self.recompute_timer.timeout.connect(self.recompute)
+        self.recompute_timer.timeout.connect(self._timer_fire)
+        self.history = History()
+        self._actions: Dict[str, tuple] = {}  # 키 -> (QAction, 단축키 목록)
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self._tick)
 
@@ -63,30 +67,157 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.status_progress)
 
     # ================================================================== 메뉴
+    # 단축키 표: (메뉴, 키, 이름, 동작 메서드, 단축키들). 메뉴 항목이 곧 단축키 등록이다.
+    def _menu_spec(self):
+        mesh_items = [("mesh_" + k, "메시: " + n, "mesh:" + k, ("%d" % i,) if i <= 5 else ()) for i, (k, n) in enumerate(MESH_MODES) if True]
+        spec = [
+            ("파일", "open_source", "소스 모션 열기…", "open_source", ("Ctrl+O",)),
+            ("파일", "open_target", "타깃 모델 열기…", "open_target", ("Ctrl+Shift+O",)),
+            ("파일", None, None, None, ()),
+            ("파일", "load_profile", "프로필 불러오기…", "load_profile", ("Ctrl+Shift+P",)),
+            ("파일", "save_profile", "프로필 저장…", "save_profile", ("Ctrl+S",)),
+            ("파일", None, None, None, ()),
+            ("파일", "export", "내보내기", "do_export", ("Ctrl+E",)),
+            ("파일", "pick_blender", "Blender 경로 지정…", "pick_blender", ()),
+            ("파일", None, None, None, ()),
+            ("파일", "quit", "종료", "close", ("Ctrl+Q",)),
+            ("편집", "undo", "실행 취소", "undo", ("Ctrl+Z",)),
+            ("편집", "redo", "다시 실행", "redo", ("Ctrl+Y", "Ctrl+Shift+Z")),
+            ("편집", None, None, None, ()),
+            ("편집", "automap", "자동 매핑 다시 하기", "_automap", ("Ctrl+M",)),
+            ("편집", "reset_settings", "리타깃 설정 모두 기본값으로", "_reset_settings", ("Ctrl+Shift+R",)),
+            ("보기", "play", "재생 / 정지", "toggle_play", ("Space",)),
+            ("보기", "prev", "이전 프레임", "step_frame:-1", (",",)),
+            ("보기", "next", "다음 프레임", "step_frame:1", (".",)),
+            ("보기", "back10", "10프레임 뒤로", "step_frame:-10", ("Ctrl+Left",)),
+            ("보기", "fwd10", "10프레임 앞으로", "step_frame:10", ("Ctrl+Right",)),
+            ("보기", "first", "처음 프레임", "goto_frame:first", ("Ctrl+Home",)),
+            ("보기", "last", "마지막 프레임", "goto_frame:last", ("Ctrl+End",)),
+            ("보기", None, None, None, ()),
+            ("보기", "reframe", "화면 맞추기", "_reframe", ("F",)),
+            ("보기", "bones", "뼈대 표시 켬/끔", "toggle_view:bones", ("B",)),
+            ("보기", "ghost", "소스 겹쳐 보기 켬/끔", "toggle_view:ghost", ("G",)),
+            ("보기", "follow", "카메라 따라가기 켬/끔", "toggle_view:follow", ("T",)),
+            ("보기", None, None, None, ()),
+        ]
+        spec += [("보기", k, n, a, sc) for k, n, a, sc in mesh_items]
+        spec += [
+            ("보기", "mesh_cycle", "메시 보기 방식 순환", "mesh_cycle", ("M",)),
+            ("탭", "tab0", "0. 게임에서 추출", "goto_tab:0", ("Ctrl+1",)),
+            ("탭", "tab1", "1. 파일·매핑", "goto_tab:1", ("Ctrl+2",)),
+            ("탭", "tab2", "2. 리타깃 조절", "goto_tab:2", ("Ctrl+3",)),
+            ("탭", "tab3", "3. 품질 검수", "goto_tab:3", ("Ctrl+4",)),
+            ("탭", "tab4", "4. 내보내기", "goto_tab:4", ("Ctrl+5",)),
+            ("도움말", "shortcuts", "단축키 목록", "show_shortcuts", ("F1",)),
+            ("도움말", "about", "정보", "show_about", ()),
+        ]
+        return spec
+
+    def _dispatch(self, spec: str) -> None:
+        name, _, arg = spec.partition(":")
+        fn = getattr(self, name)
+        if arg:
+            fn(int(arg) if arg.lstrip("-").isdigit() else arg)
+        else:
+            fn()
+
     def _build_menu(self) -> None:
-        m = self.menuBar().addMenu("파일")
-        for text, fn in (
-            ("소스 모션 열기…", self.open_source),
-            ("타깃 모델 열기…", self.open_target),
-            (None, None),
-            ("프로필 불러오기…", self.load_profile),
-            ("프로필 저장…", self.save_profile),
-            (None, None),
-            ("Blender 경로 지정…", self.pick_blender),
-            (None, None),
-            ("종료", self.close),
-        ):
-            if text is None:
+        menus: Dict[str, object] = {}
+        for menu, key, text, action, shortcuts in self._menu_spec():
+            if menu not in menus:
+                menus[menu] = self.menuBar().addMenu(menu)
+            m = menus[menu]
+            if key is None:
                 m.addSeparator()
-            else:
-                a = QAction(text, self)
-                a.triggered.connect(lambda checked=False, f=fn: f())
-                m.addAction(a)
-        h = self.menuBar().addMenu("도움말")
-        a = QAction("정보", self)
-        a.triggered.connect(lambda checked=False: QMessageBox.information(
-            self, "MotionBridge", "MotionBridge %s\n게임 모션 → 내 모델 리타깃 / Max·Maya·Blender 내보내기" % __version__))
-        h.addAction(a)
+                continue
+            qa = QAction(text, self)
+            if shortcuts:
+                qa.setShortcuts([QKeySequence(x) for x in shortcuts])
+            qa.triggered.connect(lambda checked=False, sp=action: self._dispatch(sp))
+            m.addAction(qa)
+            self._actions[key] = (qa, tuple(shortcuts), action, text)
+
+    def shortcut_table(self) -> List[tuple]:
+        """[(이름, 단축키 문자열)] — 단축키 목록 창과 테스트에서 쓴다."""
+        return [(v[3], " / ".join(v[1])) for v in self._actions.values() if v[1]]
+
+    def show_shortcuts(self) -> None:
+        rows = ["%-26s %s" % (n, k) for n, k in self.shortcut_table()]
+        rows += ["", "3D 뷰에 포커스가 있을 때: ← → 프레임 이동, Home/End 처음/끝, Space 재생"]
+        QMessageBox.information(self, "단축키", "\n".join(rows))
+
+    def show_about(self) -> None:
+        QMessageBox.information(self, "MotionBridge", "MotionBridge %s\n게임 모션 → 내 모델 리타깃 / Max·Maya·Blender 내보내기" % __version__)
+
+    # ---- 단축키 동작
+    def toggle_play(self) -> None:
+        self.btn_play.setChecked(not self.btn_play.isChecked())
+
+    def step_frame(self, d: int) -> None:
+        n = self.vd.n_frames if self.vd else 1
+        self.frame_slider.setValue(min(max(self.frame_slider.value() + int(d), 0), max(n - 1, 0)))
+
+    def goto_frame(self, where: str) -> None:
+        n = self.vd.n_frames if self.vd else 1
+        self.frame_slider.setValue(0 if where == "first" else max(n - 1, 0))
+
+    def goto_tab(self, i: int) -> None:
+        self.tabs.setCurrentIndex(int(i))
+
+    def toggle_view(self, what: str) -> None:
+        cb = self._view_checks.get(what)
+        if cb is not None:
+            cb.setChecked(not cb.isChecked())
+
+    def mesh(self, key: str) -> None:
+        i = self.mesh_combo.findData(key)
+        if i >= 0:
+            self.mesh_combo.setCurrentIndex(i)
+
+    def mesh_cycle(self) -> None:
+        n = self.mesh_combo.count()
+        self.mesh_combo.setCurrentIndex((self.mesh_combo.currentIndex() + 1) % max(n, 1))
+
+    def _viewport_key(self, name: str) -> None:
+        {"prev": lambda: self.step_frame(-1), "next": lambda: self.step_frame(1), "first": lambda: self.goto_frame("first"),
+         "last": lambda: self.goto_frame("last"), "play": self.toggle_play}[name]()
+
+    # ---- 실행 취소 / 다시 실행
+    def _edit_state(self) -> dict:
+        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots)}
+
+    def _apply_edit_state(self, st: dict) -> None:
+        self.pr.settings = copy.deepcopy(st["settings"])
+        self.pr.src_slots = dict(st["src"])
+        self.pr.tgt_slots = dict(st["tgt"])
+        self._syncing = True
+        self._sync_settings_ui()
+        self._syncing = False
+        if self.pr.src is not None or self.pr.tgt is not None:
+            self._fill_mapping()
+        self.recompute_timer.stop()
+        self.recompute()
+
+    def _timer_fire(self) -> None:
+        self.history.commit(self._edit_state())  # 조절이 잠깐 멈추면 한 단계로 확정
+        self.recompute()
+
+    def undo(self) -> None:
+        st = self.history.undo(self._edit_state())
+        if st is None:
+            self.statusBar().showMessage("되돌릴 내용이 없습니다")
+            return
+        self._apply_edit_state(st)
+        self.statusBar().showMessage("실행 취소 (남은 %d단계)" % len(self.history.undo_stack))
+
+    def redo(self) -> None:
+        self.history.commit(self._edit_state())
+        st = self.history.redo()
+        if st is None:
+            self.statusBar().showMessage("다시 실행할 내용이 없습니다")
+            return
+        self._apply_edit_state(st)
+        self.statusBar().showMessage("다시 실행")
 
     # ================================================================== UI
     def _build_ui(self) -> None:
@@ -108,13 +239,26 @@ class MainWindow(QMainWindow):
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         self.viewport = Viewport()
+        self.viewport.key_action.connect(self._viewport_key)
         rl.addWidget(self.viewport, 1)
         opts = QHBoxLayout()
-        for text, attr, default in (("소스 겹쳐 보기", "show_ghost", True), ("메시 표시", "show_mesh", True), ("발 고정 표시", "show_ik", True), ("카메라 따라가기", "follow", True)):
+        self._view_checks: Dict[str, object] = {}
+        for text, attr, default, key in (("뼈대", "show_bones", True, "bones"), ("소스 겹쳐 보기", "show_ghost", True, "ghost"),
+                                         ("발 고정 표시", "show_ik", True, "ik"), ("카메라 따라가기", "follow", True, "follow")):
             cb = QCheckBox(text)
             cb.setChecked(default)
             cb.toggled.connect(lambda v, a=attr: (setattr(self.viewport, a, bool(v)), self.viewport.update()))
             opts.addWidget(cb)
+            self._view_checks[key] = cb
+        opts.addWidget(QLabel("메시"))
+        self.mesh_combo = QComboBox()
+        for k, n in MESH_MODES:
+            self.mesh_combo.addItem(n, k)
+        self.mesh_combo.setToolTip("점 / 와이어 / 반투명 / 솔리드 / 머티리얼(색·텍스처).  단축키 0~5, M 으로 순환")
+        self.mesh_combo.setCurrentIndex(max(self.mesh_combo.findData(self.cfg.get("mesh_mode", "solid")), 0))
+        self.viewport.mesh_mode = self.mesh_combo.currentData() or "solid"
+        self.mesh_combo.currentIndexChanged.connect(self._mesh_mode_changed)
+        opts.addWidget(self.mesh_combo)
         b = QPushButton("화면 맞추기")
         b.clicked.connect(self._reframe)
         opts.addWidget(b)
@@ -766,6 +910,7 @@ class MainWindow(QMainWindow):
         self._syncing = False
         self._fill_mapping()
         self.recompute(reframe=True)
+        self.history.reset(self._edit_state())  # 새 파일을 열면 실행 취소 기록은 새로 시작
 
     def save_profile(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "프로필 저장", os.path.join(self.cfg.get("last_dir", ""), "profile.json"), "JSON (*.json)")
@@ -787,6 +932,7 @@ class MainWindow(QMainWindow):
         self._syncing = False
         self._fill_mapping()
         self.recompute()
+        self.history.commit(self._edit_state())  # 프로필 불러오기도 실행 취소 가능
         if warns:
             QMessageBox.information(self, "프로필 적용됨", "일부 항목을 적용하지 못했습니다:\n" + "\n".join(warns[:15]))
 
@@ -1071,6 +1217,12 @@ class MainWindow(QMainWindow):
     def _tick(self) -> None:
         n = self.vd.n_frames if self.vd else 1
         self.frame_slider.setValue((self.frame_slider.value() + 1) % max(n, 1))
+
+    def _mesh_mode_changed(self, *_a) -> None:
+        self.viewport.mesh_mode = self.mesh_combo.currentData() or "solid"
+        self.cfg["mesh_mode"] = self.viewport.mesh_mode
+        bridge.save_config(self.cfg)
+        self.viewport.update()
 
     def _reframe(self) -> None:
         if self.vd is not None:
