@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv-build/
+build/
+dist/
+dist_installer/
+third_party/
+tools/mbextract/out/
+tools/mbextract/obj/
+tools/mbextract/bin/
