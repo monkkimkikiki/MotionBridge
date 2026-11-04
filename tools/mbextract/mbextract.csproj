@@ -1,11 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    MotionBridge 추출 도우미. CUE4Parse(FModel 이 쓰는 라이브러리)로 언리얼 컨테이너를 열어 애니메이션을 ActorX(PSA)로 내보낸다.
-    빌드 (Windows, .NET 8 SDK):
-      git clone --depth 1 --recursive https://github.com/FabianFG/CUE4Parse third_party/CUE4Parse
-      dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o tools/mbextract/out
-    ※ CUE4Parse 의 API 는 버전마다 조금씩 바뀐다. Program.cs 는 특정 시점 기준으로 쓰였고 컴파일 검증을 못 했다.
-       컴파일 오류가 나면 오류 메시지를 알려 주면 맞춰 고칠 수 있다.
+    MotionBridge extraction helper. Opens Unreal containers with CUE4Parse (the library FModel uses)
+    and exports animations as ActorX PSA.
+    Build on Windows with the .NET 8 SDK: clone CUE4Parse recursively into third_party/CUE4Parse,
+    then run: dotnet publish tools/mbextract -c Release -r win-x64 --self-contained, single-file, output tools/mbextract/out
+    Note: the CUE4Parse API changes between versions. Program.cs was written against one point in time.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
