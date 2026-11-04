@@ -116,6 +116,24 @@ def nice_step(size: float) -> float:
     return float(10 * e)
 
 
+def reduced_parents(parents: np.ndarray, slots: Optional[dict], max_full: int = 200) -> np.ndarray:
+    """본이 아주 많은 스켈레톤(얼굴/천/보조 본 포함)은 사람 슬롯에 매핑된 본만 이어서 그린다.
+
+    각 매핑된 본의 부모를 '가장 가까운 매핑된 조상'으로 바꾸고, 나머지 본은 부모 -1(그리지 않음)로 둔다.
+    """
+    par = np.asarray(parents)
+    if len(par) <= max_full or not slots or len(set(slots.values())) < 10:
+        return par
+    keep = set(int(v) for v in slots.values())
+    out = np.full(len(par), -1, dtype=par.dtype)
+    for j in keep:
+        a = int(par[j])
+        while a >= 0 and a not in keep:
+            a = int(par[a])
+        out[j] = a
+    return out
+
+
 @dataclass
 class ViewData:
     """프레임별 위치 캐시(표준 프레임). Project 상태에서 만든다."""
@@ -147,7 +165,7 @@ class ViewData:
                 Ft = res.frame_tgt[0]
                 vd.n_frames, vd.fps = res.anim.n_frames, res.anim.fps
                 vd.ghost_pos = res.src_canon_pos * res.k
-                vd.ghost_parents = pr.src.skeleton.parents
+                vd.ghost_parents = reduced_parents(pr.src.skeleton.parents, pr.src_slots)
                 for p in res.plans:
                     vd.contact[p.label] = p.contact
                     vd.ik_target[p.label] = p.target
@@ -164,7 +182,7 @@ class ViewData:
             vd.Ft = Ft
             vd.tgt_wr, vd.tgt_wp = wr, wp
             vd.tgt_pos = Q.rotate(Ft, wp)
-            vd.tgt_parents = tk.parents
+            vd.tgt_parents = reduced_parents(tk.parents, pr.tgt_slots)
         elif pr.src is not None:
             sk = pr.src.skeleton
             from ..core.mapping import DEFAULT_FRAME, detect_frame
@@ -174,7 +192,7 @@ class ViewData:
             a = pr.anim
             wr, wp = fk(sk, a.rot, a.pos)
             vd.ghost_pos = Q.rotate(Fs, wp)
-            vd.ghost_parents = sk.parents
+            vd.ghost_parents = reduced_parents(sk.parents, pr.src_slots)
             vd.n_frames, vd.fps = a.n_frames, a.fps
         main = vd.tgt_pos if vd.tgt_pos is not None else vd.ghost_pos
         if main is not None:

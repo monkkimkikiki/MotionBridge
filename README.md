@@ -42,7 +42,7 @@ GitHub 에 올리면 `.github/workflows/build-windows.yml` 이 같은 일을 자
 CLI: `python -m motionbridge extract scan --game "D:\...\Sparta"` / `extract list ...` / `extract export ... --out 폴더`
 
 실제 추출은 **추출 도우미 `mbextract`** (CUE4Parse = FModel 이 쓰는 라이브러리 기반, `tools/mbextract`)가 합니다.
-빌드: .NET 10 SDK + git 이 있는 Windows 에서 `packaging\build_windows.bat`(자동) 또는
+빌드: .NET 8 SDK + git 이 있는 Windows 에서 `packaging\build_windows.bat`(자동) 또는
 ```
 git clone --depth 1 --recursive https://github.com/FabianFG/CUE4Parse third_party/CUE4Parse
 dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o tools/mbextract/out
@@ -96,7 +96,7 @@ python -m motionbridge retarget ... --profile 내모델.json --in-place --scale 
 
 **이 개발 환경에서 직접 실행하지 못한 것 — 처음 쓸 때 확인이 필요합니다**
 - **추출 도우미(`mbextract`, C#)**: 이 환경에 .NET/NuGet 이 없어 **컴파일도 못 해 봤습니다.** CUE4Parse API 는 버전마다 달라서 컴파일 오류가 날 수 있습니다(오류 메시지를 알려 주면 맞춰 고칠 수 있음). Python 쪽(검사, AES 입력 게이트, 호출/프로토콜, UI)은 가짜 도우미로 시험했습니다.
-- **PSA 읽기의 회전 관례**: PSA 는 도구마다 쿼터니언 켤레 관례가 달라서, 읽을 때 4가지 조합을 만들어 보고 사람 모양이 가장 잘 나오는 것을 고릅니다(합성 데이터로는 검증됨, 실제 PSA 는 미검증). 결과는 소스 파일의 "참고"에 표시되고, 모양이 이상하면 경고합니다. 루트 본 회전은 모양만으로 구분되지 않아 "위쪽이 +Z"인 쪽을 선호합니다.
+- **PSA 읽기**: FModel/CUE4Parse 가 내보낸 PSA 형식(기준 포즈는 원본 값, 키는 Y 반전 + 비루트 켤레)을 소스 코드로 확인해 그대로 해석하고, 실제 Mortal Shell 2 PSA 한 개(구르기)로 사람 동작이 나오는 것까지 확인했습니다. 다른 도구가 만든 PSA 는 4가지 관례를 시험하는 대비책으로 읽습니다. 본이 200개 넘는 스켈레톤(얼굴·천 보조 본)은 3D 뷰에서 사람 슬롯에 매핑된 본만 그립니다(데이터는 전부 유지).
 - 실제 **Qt 화면**(PySide6 설치 불가). 로직은 가짜 Qt 로 검증했지만 레이아웃/실제 렌더는 실행해 봐야 합니다.
 - 실제 **Blender** 에서의 FBX 읽기/내보내기 (`blender_scripts/`). 스크립트의 수학과 흐름은 시험했지만 실제 bpy 호출, Blender 버전별 옵션 이름 차이, FBX 축 옵션(`axis_forward/up`)이 Max/Maya 에서 의도대로 보이는지는 미검증입니다. 어긋나면 `core/export.py` 의 `PRESETS` 값만 바꾸면 됩니다.
 - **PyInstaller / Inno Setup** 빌드 (Windows 필요).

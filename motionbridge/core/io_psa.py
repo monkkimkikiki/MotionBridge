@@ -7,7 +7,12 @@ PSA 한 파일에 스켈레톤(본 이름, 부모, 기준 포즈)과 애니메�
 
 쿼터니언 켤레(conjugate) 관례: ActorX 는 본마다 회전을 뒤집어 저장하는 경우가 있어서(도구/버전마다 다름)
   루트/비루트 각각 켤레를 적용할지 네 가지 조합을 모두 만들어 보고, 사람 모양(좌우 대칭, 위/아래 일관)이 가장 잘 나오는 것을 고른다.
-  (실제 게임 데이터로는 아직 검증하지 못했다 — 선택 결과는 Model.notes 에 남는다.)
+  (이 방식은 '일반 PSA' 용 대비책이다.)
+
+CUE4Parse(FModel)가 쓰는 PSA 는 관례가 고정돼 있다(ActorXAnim.cs 확인, 실제 파일로 검증):
+  - BONENAMES 의 기준 포즈: 언리얼 원본 값(왼손 좌표, 변환 없음)
+  - ANIMKEYS: 이미 Y 반전된 위치, 쿼터니언은 (x,-y,z,w) 이고 루트만 w 부호가 뒤집힘
+  그래서 키 위치는 그대로 쓰고, 키 회전은 비루트는 켤레(conjugate), 루트는 그대로(부호만 다름) 쓰면 오른손 좌표 값이 된다.
 """
 from __future__ import annotations
 
@@ -147,10 +152,46 @@ def _score(skel: Skeleton) -> float:
     return float(s * (0.9 + 0.1 * max(0.0, float(u[2]))))
 
 
-def read_psa(path: str, conj: Optional[Tuple[bool, bool]] = None) -> Model:
-    """PSA 읽기. conj=(루트 켤레, 비루트 켤레) 를 주면 그대로 쓰고, 없으면 자동 선택."""
+def _build_cue4parse(raw: dict):
+    """CUE4Parse 가 쓴 PSA 를 오른손 좌표 값으로 복원한다."""
+    bones = raw["bones"]
+    J = len(bones)
+    names = [b[0] for b in bones]
+    parents = [b[1] if b[1] >= 0 and b[1] != i else -1 for i, b in enumerate(bones)]
+    parents[0] = -1
+    is_root = np.array([p < 0 for p in parents])
+    off = np.stack([b[2] for b in bones])
+    rq = np.stack([b[3] for b in bones])
+    off, rq = _to_right_handed(off, rq)  # 기준 포즈는 원본(왼손) 값이다
+    skel = Skeleton(names, parents, off, Q.normalize(rq), name=names[0])
+    anims: List[Animation] = []
+    keys = raw["keys"]
+    for nm, rate, nframes, first, _tb in raw["infos"]:
+        k = keys[first * J:(first + nframes) * J].reshape(nframes, J, 7)
+        pos = k[..., 0:3].copy()  # 이미 오른손 좌표
+        q = Q.normalize(k[..., 3:7].copy())
+        qc = Q.conj(q)
+        q = np.where(is_root[None, :, None], q, qc)
+        q = Q.make_continuous(q)
+        anims.append(Animation(nm, round(rate, 3) or 30.0, q, pos))
+    return skel, anims
+
+
+def read_psa(path: str, conj: Optional[Tuple[bool, bool]] = None, fmt: str = "cue4parse") -> Model:
+    """PSA 읽기.
+
+    기본(fmt="cue4parse"): FModel/CUE4Parse 형식으로 해석. 결과가 사람 모양이 아니면 일반 방식으로 다시 시도한다.
+    fmt="generic": 4가지 켤레 조합을 시험해 가장 사람 같은 것을 고른다. conj=(루트, 비루트) 를 주면 그 조합(일반 방식)을 쓴다.
+    """
     raw = parse_psa(path)
     notes: List[str] = []
+    if conj is None and fmt == "cue4parse":
+        skel, anims = _build_cue4parse(raw)
+        sc = _score(skel)
+        if sc >= 0.5:
+            notes.append("PSA: CUE4Parse 형식으로 해석 (사람 모양 점수 %.2f)" % sc)
+            return Model(path=path, skeleton=skel, animations=anims, meshes=[], notes=notes)
+        notes.append("⚠ CUE4Parse 형식으로는 사람 모양이 아니어서(점수 %.2f) 일반 방식으로 다시 해석합니다." % sc)
     if conj is None:
         best, best_s = None, -1.0
         scores = []
@@ -171,8 +212,10 @@ def read_psa(path: str, conj: Optional[Tuple[bool, bool]] = None) -> Model:
 
 
 # ----------------------------------------------------------------------------- 쓰기 (테스트/내보내기용)
-def write_psa(path: str, skel: Skeleton, anims: List[Animation], conj: Tuple[bool, bool] = (False, False), to_left_handed: bool = True) -> None:
-    """Model(오른손) -> PSA. read_psa 의 역변환."""
+def write_psa(path: str, skel: Skeleton, anims: List[Animation], conj: Optional[Tuple[bool, bool]] = None, to_left_handed: bool = True) -> None:
+    """Model(오른손) -> PSA. conj 를 안 주면 CUE4Parse 와 같은 배치로, 주면 일반 방식(read_psa 의 conj 와 짝)으로 쓴다."""
+    if conj is None:
+        return _write_psa_cue4parse(path, skel, anims)
     J = skel.n
     par = np.array([max(p, 0) for p in skel.parents])
     is_root = np.array([p < 0 for p in skel.parents])
@@ -232,6 +275,58 @@ def write_psa(path: str, skel: Skeleton, anims: List[Animation], conj: Tuple[boo
         k[..., 5] = q[..., 3]
         k[..., 6] = q[..., 0]
         k[..., 7] = np.arange(T)[:, None] / a.fps
+        keys += k.tobytes()
+        first += T
+    chunk("ANIMINFO", 168, len(anims), bytes(info))
+    chunk("ANIMKEYS", 32, first * J, bytes(keys))
+    with open(path, "wb") as f:
+        f.write(out)
+
+
+def _write_psa_cue4parse(path: str, skel: Skeleton, anims: List[Animation]) -> None:
+    """CUE4Parse ActorXAnim.cs 와 같은 값 배치로 쓴다(시험·내보내기용)."""
+    J = skel.n
+    par = np.array([max(p, 0) for p in skel.parents])
+    is_root = np.array([p < 0 for p in skel.parents])
+    out = bytearray()
+
+    def chunk(name, size, count, body=b""):
+        out.extend(_HDR.pack(name.encode("ascii"), 20100422 if name == "ANIMHEAD" else 0, size, count))
+        out.extend(body)
+
+    chunk("ANIMHEAD", 0, 0)
+    nchild = [len(skel.children[j]) for j in range(J)]
+    rp, rq = _to_right_handed(skel.offsets.copy(), skel.rest_rot.copy())  # 오른손 -> 원본(왼손), 같은 변환이 자기 역변환
+    body = bytearray()
+    for j in range(J):
+        r = bytearray(120)
+        r[:64] = skel.names[j].encode("utf-8")[:63].ljust(64, b"\0")
+        struct.pack_into("<Iii", r, 64, 0, nchild[j], int(par[j]))
+        w, x, y, z = rq[j]
+        struct.pack_into("<7f", r, 76, x, y, z, w, *rp[j])
+        body += r
+    chunk("BONENAMES", 120, J, bytes(body))
+    info = bytearray()
+    keys = bytearray()
+    first = 0
+    for a in anims:
+        T = a.n_frames
+        r = bytearray(168)
+        r[:64] = a.name.encode("utf-8")[:63].ljust(64, b"\0")
+        r[64:68] = b"None"
+        struct.pack_into("<i", r, 128, J)
+        struct.pack_into("<ff", r, 148, float(T), a.fps)
+        struct.pack_into("<iii", r, 156, 0, first, T)
+        info += r
+        q = np.asarray(a.rot, float)
+        qf = np.where(is_root[None, :, None], q, Q.conj(q))  # 파일 값 = 비루트 켤레, 루트 그대로
+        k = np.zeros((T, J, 8), dtype="<f4")
+        k[..., 0:3] = a.pos
+        k[..., 3] = qf[..., 1]
+        k[..., 4] = qf[..., 2]
+        k[..., 5] = qf[..., 3]
+        k[..., 6] = qf[..., 0]
+        k[..., 7] = 1.0
         keys += k.tobytes()
         first += T
     chunk("ANIMINFO", 168, len(anims), bytes(info))

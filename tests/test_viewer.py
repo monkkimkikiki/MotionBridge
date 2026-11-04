@@ -98,7 +98,26 @@ def test_scene_and_render():
     print("scene OK")
 
 
+def test_reduced_parents():
+    from motionbridge.ui.viewer_math import reduced_parents
+
+    # 작은 스켈레톤은 그대로
+    par = np.array([-1, 0, 1, 2])
+    assert np.array_equal(reduced_parents(par, {"a": 1}), par)
+    # 큰 스켈레톤: 매핑된 본만 가장 가까운 매핑된 조상으로 연결, 나머지는 -1
+    n = 400
+    par = np.arange(-1, n - 1)  # 일직선 사슬
+    slots = {"s%d" % i: i * 30 for i in range(12)}  # 0,30,60,...
+    r = reduced_parents(par, slots)
+    for i in range(12):
+        j = i * 30
+        assert r[j] == (j - 30 if i > 0 else -1)
+    assert (r >= 0).sum() == 11 and r[1] == -1 and r[31] == -1
+    print("reduced parents OK")
+
+
 if __name__ == "__main__":
     test_camera()
+    test_reduced_parents()
     test_scene_and_render()
     print("test_viewer ALL OK")

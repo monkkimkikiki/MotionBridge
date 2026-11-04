@@ -42,7 +42,7 @@ elif a[0] == "export":
             emit(type="skip", path=p, reason="AnimSequence 가 아님"); continue
         an, _ = synth.walk_animation(sk, meta, n_frames=24, name=os.path.basename(p)[:-7])
         f = os.path.join(out, os.path.basename(p)[:-7] + ".psa")
-        write_psa(f, sk, [an], conj=(False, True))
+        write_psa(f, sk, [an])
         emit(type="exported", path=p, file=f); n += 1
     emit(type="done", count=n)
 '''
