@@ -243,6 +243,20 @@ def test_extract_tab():
         QMessageBox.calls.clear()
         mw._search_anims()
         assert QMessageBox.calls and "mbextract" in QMessageBox.calls[-1][2]
+        # 종류 전환: 메시(GLB)
+        mw.ex_kind.setCurrentIndex(1)
+        assert mw.ex_filter.text() == A.MainWindow.KIND_FILTERS["mesh_glb"] and mw.ex_tex.isEnabled()
+        assert "GLB" in mw.btn_extract._text
+        mw.ex_kind.setCurrentIndex(2)
+        assert not mw.ex_tex.isEnabled() and "PSK" in mw.btn_extract._text
+        mw.ex_kind.setCurrentIndex(0)
+        assert mw.ex_filter.text() == "(?i)anim" and "PSA" in mw.btn_extract._text
+        mw.ex_filter.setText("(?i)내가쓴식")  # 사용자가 바꾼 식은 종류를 바꿔도 유지
+        mw.ex_kind.setCurrentIndex(1)
+        assert mw.ex_filter.text() == "(?i)내가쓴식"
+        QMessageBox.calls.clear()
+        mw._open_extracted_as_target()  # 추출 파일이 없으면 안내
+        assert QMessageBox.calls
     print("extract tab OK")
 
 

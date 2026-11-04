@@ -113,8 +113,15 @@ def list_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Opti
 
 
 def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str,
-                  on_event=None) -> List[str]:
-    """선택한 애니메이션을 out_dir 에 PSA 로 내보내고 만든 파일 경로 목록을 돌려준다."""
+                  on_event=None, kind: str = "anim", mesh_format: str = "glb", textures: bool = False) -> List[str]:
+    """선택한 에셋을 out_dir 에 내보내고 만든 파일 경로 목록을 돌려준다.
+
+    kind="anim": 애니메이션 -> PSA.  kind="mesh": 스켈레탈 메시 -> mesh_format("glb" | "psk"), textures=True 면 머티리얼/텍스처도(glb).
+    """
+    if kind not in ("anim", "mesh"):
+        raise ExtractError("알 수 없는 종류: " + kind)
+    if mesh_format not in ("glb", "psk"):
+        raise ExtractError("알 수 없는 메시 형식: " + mesh_format)
     if not paths:
         raise ExtractError("내보낼 에셋이 없습니다.")
     os.makedirs(out_dir, exist_ok=True)
@@ -122,7 +129,9 @@ def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("\n".join(paths))
-        args = ["export"] + _base_args(game, ue, aes, usmap) + ["--out", out_dir, "--paths-file", plist]
+        args = ["export"] + _base_args(game, ue, aes, usmap) + ["--out", out_dir, "--paths-file", plist, "--kind", kind]
+        if kind == "mesh":
+            args += ["--format", mesh_format] + (["--textures"] if textures else [])
         events = run_helper(helper, args, on_event)
     finally:
         try:

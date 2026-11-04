@@ -37,7 +37,11 @@ elif a[0] == "export":
     import synth
     sk, meta = synth.build_skeleton("ue", "z_up_x", 100.0, "A", "bone_x")
     out = opt("--out"); n = 0
+    mesh = opt("--kind") == "mesh"
     for p in open(opt("--paths-file"), encoding="utf-8").read().split("\\n"):
+        if mesh:
+            f = os.path.join(out, os.path.basename(p)[:-7] + "." + opt("--format")); open(f, "wb").write(b"x")
+            emit(type="exported", path=p, file=f); n += 1; continue
         if "Skip" in p:
             emit(type="skip", path=p, reason="AnimSequence 가 아님"); continue
         an, _ = synth.walk_animation(sk, meta, n_frames=24, name=os.path.basename(p)[:-7])
@@ -62,6 +66,33 @@ def make_helper(d):
     os.chmod(fb, os.stat(fb).st_mode | stat.S_IEXEC)
     os.environ["FAKE_LOG"] = os.path.join(d, "log.txt")
     return fb
+
+
+def test_mesh_args():
+    if os.name == "nt":
+        print("test_mesh_args: Windows 에서는 건너뜀 (셔뱅 가짜 실행파일 사용)")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        fb = make_helper(d)
+        out = os.path.join(d, "o")
+        files = extractor.export_assets(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, kind="mesh", mesh_format="psk", textures=True)
+        assert [os.path.basename(f) for f in files] == ["SK_Hero.psk"]
+        a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
+        assert a[a.index("--kind") + 1] == "mesh" and a[a.index("--format") + 1] == "psk" and "--textures" in a, a
+        files = extractor.export_assets(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, kind="mesh")
+        a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
+        assert files[0].endswith(".glb") and a[a.index("--format") + 1] == "glb" and "--textures" not in a
+        # 애니메이션 기본값은 그대로
+        files = extractor.export_assets(fb, d, "GAME_UE5_6", None, None, ["Game/AS_Walk.uasset"], out)
+        a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
+        assert a[a.index("--kind") + 1] == "anim" and "--format" not in a and files[0].endswith(".psa")
+        for bad in [dict(kind="x"), dict(kind="mesh", mesh_format="fbx")]:
+            try:
+                extractor.export_assets(fb, d, "GAME_UE5_6", None, None, ["a"], out, **bad)
+            except extractor.ExtractError:
+                continue
+            raise AssertionError(bad)
+    print("mesh args OK")
 
 
 def test_flow_unencrypted():
@@ -146,6 +177,7 @@ def test_no_helper():
 
 
 if __name__ == "__main__":
+    test_mesh_args()
     test_flow_unencrypted()
     test_flow_encrypted()
     test_no_helper()

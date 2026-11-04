@@ -195,10 +195,20 @@ class MainWindow(QMainWindow):
         self._update_helper_label()
         lay.addWidget(g)
 
-        g = QGroupBox("3) 애니메이션 찾기 / 추출")
+        g = QGroupBox("3) 에셋 찾기 / 추출")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
-        self.ex_filter = QLineEdit("(?i)anim")
+        h.addWidget(QLabel("종류"))
+        self.ex_kind = QComboBox()
+        for label, key in (("애니메이션 (PSA)", "anim"), ("메시 (GLB, 스켈레톤+스킨)", "mesh_glb"), ("메시 (PSK)", "mesh_psk")):
+            self.ex_kind.addItem(label, key)
+        self.ex_kind.currentIndexChanged.connect(self._kind_changed)
+        h.addWidget(self.ex_kind, 1)
+        self.ex_tex = QCheckBox("머티리얼/텍스처 포함 (GLB, 느림)")
+        h.addWidget(self.ex_tex)
+        v.addLayout(h)
+        h = QHBoxLayout()
+        self.ex_filter = QLineEdit(self.KIND_FILTERS["anim"])
         self.ex_filter.setToolTip("에셋 경로에 대한 정규식. 예: (?i)(walk|run|attack)")
         h.addWidget(self.ex_filter, 1)
         b = QPushButton("검색")
@@ -225,12 +235,13 @@ class MainWindow(QMainWindow):
         h.addWidget(b)
         v.addLayout(h)
         self.btn_extract = QPushButton("선택한 애니메이션 추출 (PSA)")
+        self._kind_changed()
         self.btn_extract.setMinimumHeight(34)
         self.btn_extract.clicked.connect(self._extract_selected)
         v.addWidget(self.btn_extract)
         lay.addWidget(g)
 
-        g = QGroupBox("4) 추출된 파일 → 소스 모션으로 열기")
+        g = QGroupBox("4) 추출된 파일 열기")
         v = QVBoxLayout(g)
         self.ex_files = QListWidget()
         self.ex_files.setMinimumHeight(110)
@@ -239,11 +250,25 @@ class MainWindow(QMainWindow):
         b = QPushButton("선택한 파일을 소스 모션으로 열기")
         b.clicked.connect(self._open_extracted)
         v.addWidget(b)
+        b = QPushButton("선택한 GLB 를 타깃 모델로 열기")
+        b.setToolTip("게임에서 뽑은 메시(GLB)를 타깃(내 모델) 자리에 불러옵니다. 소스 모션과 같은 캐릭터면 그대로 확인할 수 있습니다.")
+        b.clicked.connect(self._open_extracted_as_target)
+        v.addWidget(b)
         lay.addWidget(g)
         lay.addStretch(1)
         return sc
 
     # ---- 추출 탭 동작
+    KIND_FILTERS = {"anim": "(?i)anim", "mesh_glb": r"(?i)/sk[a-z]*_", "mesh_psk": r"(?i)/sk[a-z]*_"}
+
+    def _kind_changed(self, *_a) -> None:
+        key = self.ex_kind.currentData() or "anim"
+        cur = self.ex_filter.text().strip()
+        if cur in self.KIND_FILTERS.values() or not cur:
+            self.ex_filter.setText(self.KIND_FILTERS[key])
+        self.ex_tex.setEnabled(key == "mesh_glb")
+        self.btn_extract.setText("선택한 애니메이션 추출 (PSA)" if key == "anim" else "선택한 메시 추출 (%s)" % ("GLB" if key == "mesh_glb" else "PSK"))
+
     def _pick_dir_into(self, edit) -> None:
         d = QFileDialog.getExistingDirectory(self, "폴더 선택", edit.text())
         if d:
@@ -322,7 +347,7 @@ class MainWindow(QMainWindow):
         a = self._extract_args()
         if a is None:
             return
-        pattern = self.ex_filter.text().strip() or "(?i)anim"
+        pattern = self.ex_filter.text().strip() or self.KIND_FILTERS[self.ex_kind.currentData() or "anim"]
 
         self._ex_logs = []
 
@@ -333,7 +358,7 @@ class MainWindow(QMainWindow):
         def job(w: Worker):
             return extractor.list_assets(*a, pattern, 5000, on_event)
 
-        self.run_async(job, self._after_search, "애니메이션 검색 중")
+        self.run_async(job, self._after_search, "에셋 검색 중")
 
     def _after_search(self, paths) -> None:
         self.ex_list.clear()
@@ -345,7 +370,7 @@ class MainWindow(QMainWindow):
     def _extract_selected(self) -> None:
         paths = [it.text() for it in self.ex_list.selectedItems()]
         if not paths:
-            QMessageBox.warning(self, "추출", "추출할 애니메이션을 목록에서 고르세요.")
+            QMessageBox.warning(self, "추출", "추출할 항목을 목록에서 고르세요.")
             return
         a = self._extract_args()
         if a is None:
@@ -361,8 +386,12 @@ class MainWindow(QMainWindow):
                 if e.get("type") in ("exported", "skip"):
                     n[0] += 1
                     w.progress.emit(n[0] - 1, len(paths), os.path.basename(e.get("path", "")))
-            return extractor.export_assets(*a, paths, out, ev)
+            return extractor.export_assets(*a, paths, out, ev, kind=kind, mesh_format=fmt, textures=tex)
 
+        key = self.ex_kind.currentData() or "anim"
+        kind = "anim" if key == "anim" else "mesh"
+        fmt = "psk" if key == "mesh_psk" else "glb"
+        tex = bool(self.ex_tex.isChecked()) and key == "mesh_glb"
         self.run_async(job, self._after_extract, "추출 중")
 
     def _after_extract(self, files) -> None:
@@ -371,7 +400,10 @@ class MainWindow(QMainWindow):
             self.ex_files.addItem(QListWidgetItem(f))
         self.statusBar().showMessage("추출 완료: %d개" % len(files))
         if len(files) == 1:
-            self._open_path(files[0])
+            if files[0].lower().endswith(".psa"):
+                self._open_path(files[0])
+            elif files[0].lower().endswith(".glb"):
+                self._open_path_as_target(files[0])
 
     def _open_extracted(self) -> None:
         sel = self.ex_files.selectedItems()
@@ -379,6 +411,19 @@ class MainWindow(QMainWindow):
             sel = [self.ex_files.item(0)]
         if sel:
             self._open_path(sel[0].text())
+
+    def _open_extracted_as_target(self) -> None:
+        sel = [it.text() for it in self.ex_files.selectedItems() if it.text().lower().endswith(".glb")]
+        if not sel:
+            sel = [self.ex_files.item(i).text() for i in range(self.ex_files.count()) if self.ex_files.item(i).text().lower().endswith(".glb")][:1]
+        if not sel:
+            QMessageBox.warning(self, "열기", "열 수 있는 GLB 가 없습니다. 종류를 '메시 (GLB)'로 추출하세요.")
+            return
+        self._open_path_as_target(sel[0])
+
+    def _open_path_as_target(self, path: str) -> None:
+        self._remember_dir(path)
+        self.run_async(lambda w: self.pr.load_target(path), lambda m: (self._after_load("target"), self.tabs.setCurrentIndex(1)), "타깃 읽는 중")
 
     def _open_path(self, path: str) -> None:
         self._remember_dir(path)

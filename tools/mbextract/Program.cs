@@ -1,5 +1,6 @@
 // MotionBridge 추출 도우미 (CUE4Parse 기반).
 //   mbextract list   --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] [--filter REGEX] [--limit N]
+//   (공통) --kind anim|mesh  --format glb|psk (mesh)  --textures (mesh, 텍스처 포함)
 //   mbextract export --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR --paths-file FILE
 // 표준 출력: 한 줄에 JSON 하나 (type = asset | exported | skip | log | done | error)
 //
@@ -14,6 +15,7 @@ using CUE4Parse.MappingsProvider;
 using CUE4Parse.MappingsProvider.Usmap;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports.Animation;
+using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion;
@@ -30,6 +32,9 @@ var game = Opt("--game") ?? "";
 var ueName = Opt("--ue") ?? "GAME_UE5_4";
 var aes = Opt("--aes");
 var usmap = Opt("--usmap");
+var kind = (Opt("--kind") ?? "anim").ToLowerInvariant();   // anim | mesh
+var meshFmt = (Opt("--format") ?? "glb").ToLowerInvariant(); // glb | psk (mesh 만)
+var withTextures = args.Contains("--textures");
 if (!Directory.Exists(game)) Fail("게임 폴더가 없습니다: " + game);
 if (!Enum.TryParse<EGame>(ueName, true, out var ue))
     Fail("알 수 없는 UE 버전: " + ueName + " (예: GAME_UE5_4)");
@@ -78,7 +83,9 @@ try
         var outDir = Opt("--out") ?? Fail2("--out 이 필요합니다");
         var listFile = Opt("--paths-file") ?? Fail2("--paths-file 이 필요합니다");
         var paths = File.ReadAllLines(listFile).Where(s => s.Trim().Length > 0).ToList();
-        var opts = new ExportOptions(meshFormat: EMeshFormat.ActorX, exportMaterials: false);
+        var opts = new ExportOptions(
+            meshFormat: kind == "mesh" && meshFmt == "glb" ? EMeshFormat.Gltf2 : EMeshFormat.ActorX,
+            exportMaterials: kind == "mesh" && withTextures);
         int ok = 0;
         foreach (var p in paths)
         {
@@ -93,13 +100,15 @@ try
                 int queued = 0;
                 foreach (var obj in pkg.GetExports())
                 {
-                    if (obj is not UAnimSequence anim) continue;
-                    session.Add(anim);
-                    queued++;
+                    if (kind == "mesh" ? obj is USkeletalMesh : obj is UAnimSequence)
+                    {
+                        session.Add(obj);
+                        queued++;
+                    }
                 }
                 if (queued == 0)
                 {
-                    Emit(new { type = "skip", path = p, reason = "AnimSequence 가 아님" });
+                    Emit(new { type = "skip", path = p, reason = kind == "mesh" ? "스켈레탈 메시가 아님" : "AnimSequence 가 아님" });
                     continue;
                 }
                 var results = session.RunAsync(outDir, opts).GetAwaiter().GetResult();

@@ -143,8 +143,9 @@ def cmd_extract(args) -> int:
         _p("%d개" % len(paths))
         return 0
     _p("대상 %d개 내보내는 중…" % len(paths))
-    files = extractor.export_assets(helper, args.game, args.ue, args.aes, args.usmap, paths, args.out, on_ev)
-    _p("완료: PSA %d개 -> %s" % (len(files), args.out))
+    files = extractor.export_assets(helper, args.game, args.ue, args.aes, args.usmap, paths, args.out, on_ev,
+                                    kind=args.kind, mesh_format=args.format, textures=args.textures)
+    _p("완료: %s %d개 -> %s" % ("PSA" if args.kind == "anim" else args.format.upper(), len(files), args.out))
     return 0
 
 
@@ -197,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_retarget)
 
-    x = sub.add_parser("extract", help="게임 폴더 검사 / 애니메이션 목록 / PSA 추출")
+    x = sub.add_parser("extract", help="게임 폴더 검사 / 에셋 목록 / 애니메이션(PSA)·메시(GLB/PSK) 추출")
     x.add_argument("action", choices=["scan", "list", "export"])
     x.add_argument("--game", required=True, help="게임 설치 폴더")
     x.add_argument("--ue", default="GAME_UE5_4", help="UE 버전 이름 (예: GAME_UE5_4)")
@@ -207,6 +208,9 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--limit", type=int, default=5000)
     x.add_argument("--out", default="extracted", help="export 출력 폴더")
     x.add_argument("--helper", help="mbextract 경로")
+    x.add_argument("--kind", choices=["anim", "mesh"], default="anim", help="anim: 애니메이션(PSA), mesh: 스켈레탈 메시")
+    x.add_argument("--format", choices=["glb", "psk"], default="glb", help="mesh 일 때 형식")
+    x.add_argument("--textures", action="store_true", help="mesh(glb) 일 때 머티리얼/텍스처 포함")
     x.set_defaults(fn=cmd_extract)
 
     b = sub.add_parser("blender", help="Blender 경로 확인/설정")
