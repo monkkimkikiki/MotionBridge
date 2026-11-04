@@ -11,11 +11,13 @@ using CUE4Parse.Compression;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
 using CUE4Parse.MappingsProvider;
+using CUE4Parse.MappingsProvider.Usmap;
+using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion;
-using CUE4Parse_Conversion.Animations;
+using CUE4Parse_Conversion.Options;
 
 static void Emit(object o) => Console.WriteLine(JsonSerializer.Serialize(o));
 static void Fail(string msg) { Emit(new { type = "error", message = msg }); Environment.Exit(1); }
@@ -37,8 +39,8 @@ try
     // Oodle 압축 해제 라이브러리 (UE5 게임 대부분이 사용). 없으면 내려받는다.
     try
     {
-        var oodle = Path.Combine(AppContext.BaseDirectory, OodleHelper.OODLE_DLL_NAME);
-        if (!File.Exists(oodle)) OodleHelper.DownloadOodleDll(oodle);
+        string? oodle = Path.Combine(AppContext.BaseDirectory, OodleHelper.OodleFileName);
+        if (!OodleHelper.DownloadOodleDll(ref oodle)) throw new Exception("oodle 라이브러리를 내려받지 못했습니다");
         OodleHelper.Initialize(oodle);
     }
     catch (Exception e) { Emit(new { type = "log", message = "Oodle 준비 실패(압축된 에셋을 못 읽을 수 있음): " + e.Message }); }
@@ -68,24 +70,42 @@ try
         var outDir = Opt("--out") ?? Fail2("--out 이 필요합니다");
         var listFile = Opt("--paths-file") ?? Fail2("--paths-file 이 필요합니다");
         var paths = File.ReadAllLines(listFile).Where(s => s.Trim().Length > 0).ToList();
-        var opts = new ExporterOptions { AnimFormat = EAnimFormat.ActorX, MeshFormat = EMeshFormat.ActorX };
+        var opts = new ExportOptions(meshFormat: EMeshFormat.ActorX, exportMaterials: false);
         int ok = 0;
         foreach (var p in paths)
         {
             try
             {
-                var found = false;
-                foreach (var obj in provider.LoadAllObjects(p))
+                if (!provider.TryLoadPackage(p, out var pkg) || pkg is null)
+                {
+                    Emit(new { type = "skip", path = p, reason = "패키지를 열지 못함" });
+                    continue;
+                }
+                var session = new ExportSession();
+                int queued = 0;
+                foreach (var obj in pkg.GetExports())
                 {
                     if (obj is not UAnimSequence anim) continue;
-                    var exporter = new AnimExporter(anim, opts);
-                    if (exporter.TryWriteToDir(new DirectoryInfo(outDir), out _, out var saved))
-                    {
-                        Emit(new { type = "exported", path = p, file = saved });
-                        ok++; found = true;
-                    }
+                    session.Add(anim);
+                    queued++;
                 }
-                if (!found) Emit(new { type = "skip", path = p, reason = "AnimSequence 가 아니거나 내보내지 못함" });
+                if (queued == 0)
+                {
+                    Emit(new { type = "skip", path = p, reason = "AnimSequence 가 아님" });
+                    continue;
+                }
+                var results = session.RunAsync(outDir, opts).GetAwaiter().GetResult();
+                bool any = false;
+                foreach (var r in results)
+                {
+                    if (r.Success && r.DiskFilePaths is { Count: > 0 })
+                    {
+                        foreach (var f in r.DiskFilePaths) Emit(new { type = "exported", path = p, file = f });
+                        ok++; any = true;
+                    }
+                    else Emit(new { type = "skip", path = p, reason = r.Error?.Message ?? "내보내지 못함" });
+                }
+                if (!any) Emit(new { type = "log", message = "내보낸 파일 없음: " + p });
             }
             catch (Exception e) { Emit(new { type = "skip", path = p, reason = e.GetType().Name + ": " + e.Message }); }
         }
