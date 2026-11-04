@@ -1,0 +1,261 @@
+"""UI 와 CLI 가 함께 쓰는 작업 단위: 소스/타깃 불러오기, 매핑, 리타깃 실행, 프로필 저장, 내보내기."""
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+import tempfile
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+
+from . import bridge, export as X
+from .loader import load_model
+from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
+from .model import Animation, Model
+from .quality import Issue, analyze
+from .retarget import IKChain, RetargetResult, RetargetSettings, default_chains, retarget
+
+
+def _safe(name: str) -> str:
+    return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name).strip("._") or "clip"
+
+
+@dataclass
+class ExportOptions:
+    out_dir: str
+    presets: Sequence[str] = ("blender",)  # maya | max | blender
+    formats: Sequence[str] = ("bvh",)  # bvh | glb | fbx
+    include_skeleton: bool = True  # False: 본 구조 없이 애니메이션 커브(JSON)만
+    what: str = "retargeted"  # retargeted | source
+    clips: Optional[Sequence[int]] = None  # None: 현재 클립만
+    include_mesh: bool = True  # GLB 에 타깃 메시를 함께 넣기
+    write_skeleton_json: bool = False  # 본 구조 JSON 을 따로 저장
+    blender: Optional[str] = None
+    fbx_options: Dict = field(default_factory=dict)
+
+
+class Project:
+    def __init__(self) -> None:
+        self.src: Optional[Model] = None
+        self.tgt: Optional[Model] = None
+        self.src_slots: Dict[str, int] = {}
+        self.tgt_slots: Dict[str, int] = {}
+        self.settings = RetargetSettings()
+        self.use_chain: Dict[str, bool] = {"L": True, "R": True}
+        self.clip = 0
+        self.result: Optional[RetargetResult] = None
+        self.issues: List[Issue] = []
+        self.blender: Optional[str] = None
+        self.log: List[str] = []
+
+    # ------------------------------------------------------------------ 불러오기
+    def load_source(self, path: str) -> Model:
+        m = load_model(path, self.blender)
+        if not m.animations:
+            raise ValueError("이 파일에는 애니메이션이 없습니다: " + path)
+        self.src = m
+        self.src_slots = auto_map(m.skeleton)
+        self.clip = 0
+        self.result = None
+        self.log += m.notes
+        return m
+
+    def load_target(self, path: str) -> Model:
+        m = load_model(path, self.blender)
+        self.tgt = m
+        self.tgt_slots = auto_map(m.skeleton)
+        self.settings.rot_offsets = {}
+        self.settings.com_joint = -1
+        self.result = None
+        self.log += m.notes
+        return m
+
+    # ------------------------------------------------------------------ 매핑
+    def automap(self) -> None:
+        if self.src:
+            self.src_slots = auto_map(self.src.skeleton)
+        if self.tgt:
+            self.tgt_slots = auto_map(self.tgt.skeleton)
+
+    def pairs(self) -> List[Tuple[int, int]]:
+        return pairs_from_slots(self.src_slots, self.tgt_slots)
+
+    def chains(self) -> List[IKChain]:
+        out = []
+        for c in default_chains(self.src_slots, self.tgt_slots):
+            side = "L" if c.label.startswith("왼") else "R"
+            if self.use_chain.get(side, True):
+                out.append(c)
+        return out
+
+    def unmapped_slots(self) -> List[str]:
+        return [s for s in SLOT_ORDER if (s in self.src_slots) != (s in self.tgt_slots)]
+
+    # ------------------------------------------------------------------ 실행
+    @property
+    def anim(self) -> Animation:
+        return self.src.animations[self.clip]
+
+    def ready(self) -> bool:
+        return bool(self.src and self.tgt and self.pairs())
+
+    def run(self, clip: Optional[int] = None, analyze_quality: bool = True) -> RetargetResult:
+        if not (self.src and self.tgt):
+            raise ValueError("소스 모션과 타깃 모델을 먼저 불러오세요.")
+        if clip is not None:
+            self.clip = clip
+        res = retarget(self.src.skeleton, self.anim, self.tgt.skeleton, self.pairs(), self.settings, self.chains(), self.src_slots, self.tgt_slots)
+        self.result = res
+        self.issues = analyze(self.tgt.skeleton, res, self.settings) if analyze_quality else []
+        return res
+
+    # ------------------------------------------------------------------ 프로필 (이름 기준이라 같은 리그에 재사용 가능)
+    def profile_dict(self) -> dict:
+        st = dataclasses.asdict(self.settings)
+        tn = self.tgt.skeleton.names if self.tgt else []
+        st["rot_offsets"] = {tn[j]: list(v) for j, v in self.settings.rot_offsets.items() if j < len(tn)}
+        st["com_joint"] = tn[self.settings.com_joint] if (self.tgt and 0 <= self.settings.com_joint < len(tn)) else None
+        st["hip_offset"] = list(self.settings.hip_offset)
+        sn = self.src.skeleton.names if self.src else []
+        return {
+            "format": "motionbridge-profile-1",
+            "source_root": sn[0] if sn else None,
+            "target_root": tn[0] if tn else None,
+            "src_slots": {k: sn[v] for k, v in self.src_slots.items() if v < len(sn)},
+            "tgt_slots": {k: tn[v] for k, v in self.tgt_slots.items() if v < len(tn)},
+            "use_chain": dict(self.use_chain),
+            "settings": st,
+        }
+
+    def save_profile(self, path: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.profile_dict(), f, ensure_ascii=False, indent=1)
+
+    def load_profile(self, path: str) -> List[str]:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return self.apply_profile(d)
+
+    def apply_profile(self, d: dict) -> List[str]:
+        """이름으로 찾아서 적용한다. 못 찾은 항목은 경고로 돌려준다."""
+        if d.get("format") != "motionbridge-profile-1":
+            raise ValueError("MotionBridge 프로필이 아닙니다.")
+        warns: List[str] = []
+
+        def by_name(model: Optional[Model]):
+            return {n: i for i, n in enumerate(model.skeleton.names)} if model else {}
+
+        sidx, tidx = by_name(self.src), by_name(self.tgt)
+        if self.src:
+            new = {}
+            for slot, nm in d.get("src_slots", {}).items():
+                if nm in sidx:
+                    new[slot] = sidx[nm]
+                else:
+                    warns.append("소스에 '%s' 본이 없어 %s 매핑을 건너뜀" % (nm, slot))
+            self.src_slots = new
+        if self.tgt:
+            new = {}
+            for slot, nm in d.get("tgt_slots", {}).items():
+                if nm in tidx:
+                    new[slot] = tidx[nm]
+                else:
+                    warns.append("타깃에 '%s' 본이 없어 %s 매핑을 건너뜀" % (nm, slot))
+            self.tgt_slots = new
+        self.use_chain.update(d.get("use_chain", {}))
+        st = dict(d.get("settings", {}))
+        ro = st.pop("rot_offsets", {})
+        com = st.pop("com_joint", None)
+        fields = {f.name for f in dataclasses.fields(RetargetSettings)}
+        base = dataclasses.asdict(RetargetSettings())
+        for k, v in st.items():
+            if k in fields and k not in ("rot_offsets", "com_joint"):
+                base[k] = tuple(v) if k == "hip_offset" else v
+        base["rot_offsets"] = {}
+        for nm, v in ro.items():
+            if nm in tidx:
+                base["rot_offsets"][tidx[nm]] = tuple(v)
+            else:
+                warns.append("회전 보정의 '%s' 본이 타깃에 없음" % nm)
+        base["com_joint"] = tidx.get(com, -1) if com else -1
+        self.settings = RetargetSettings(**base)
+        self.result = None
+        return warns
+
+    # ------------------------------------------------------------------ 내보내기
+    def export(self, opt: ExportOptions, progress=None) -> Tuple[List[str], List[str]]:
+        """(만든 파일 목록, 경고 목록)."""
+        if not self.src:
+            raise ValueError("먼저 소스 모션을 불러오세요.")
+        if opt.what == "retargeted" and not self.tgt:
+            raise ValueError("리타깃 결과를 내보내려면 타깃 모델이 필요합니다.")
+        os.makedirs(opt.out_dir, exist_ok=True)
+        clips = list(opt.clips) if opt.clips is not None else [self.clip]
+        files: List[str] = []
+        warns: List[str] = []
+        unknown = [p for p in opt.presets if p not in X.PRESETS]
+        if unknown:
+            raise ValueError("알 수 없는 프리셋: %s" % unknown)
+        used: Dict[str, int] = {}
+        for n, ci in enumerate(clips):
+            if progress:
+                progress(n, len(clips), self.src.animations[ci].name)
+            anim_src = self.src.animations[ci]
+            base = _safe(anim_src.name)
+            used[base] = used.get(base, 0) + 1
+            if used[base] > 1:
+                base = "%s_%d" % (base, used[base])
+            if opt.what == "retargeted":
+                res = self.run(ci, analyze_quality=False)
+                warns += ["[%s] %s" % (anim_src.name, w) for w in res.warnings]
+                skel, anim, F = self.tgt.skeleton, res.anim, res.frame_tgt[0]
+                meshes = self.tgt.meshes if opt.include_mesh else None
+                model_path = self.tgt.path
+            else:
+                skel, anim = self.src.skeleton, anim_src
+                det = detect_frame(skel, self.src_slots)
+                F = det[0] if det else DEFAULT_FRAME
+                meshes = self.src.meshes if opt.include_mesh else None
+                model_path = self.src.path
+            upm = X.guess_units_per_meter(skel, F)
+            files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns)
+        if opt.write_skeleton_json:
+            skel = self.tgt.skeleton if opt.what == "retargeted" else self.src.skeleton
+            p = os.path.join(opt.out_dir, _safe(skel.name) + "_skeleton.json")
+            X.write_json(p, X.skeleton_dict(skel))
+            files.append(p)
+        return files, warns
+
+    def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns) -> List[str]:
+        out: List[str] = []
+        if not opt.include_skeleton:
+            p = os.path.join(opt.out_dir, base + "_curves.json")
+            X.write_json(p, X.curves_dict(skel, anim))
+            return [p]
+        fmts = [f.lower() for f in opt.formats]
+        for preset_key in opt.presets:
+            preset = X.PRESETS[preset_key]
+            if "bvh" in fmts:
+                p = os.path.join(opt.out_dir, "%s_%s.bvh" % (base, preset_key))
+                warns += X.export_bvh(p, skel, anim, F, preset, upm)
+                out.append(p)
+            if "fbx" in fmts:
+                if opt.what != "retargeted":
+                    warns.append("FBX 는 리타깃 결과(타깃 모델 파일 기준)에서만 지원합니다. 소스는 BVH/GLB 를 쓰세요.")
+                else:
+                    p = os.path.join(opt.out_dir, "%s_%s.fbx" % (base, preset_key))
+                    with tempfile.TemporaryDirectory(prefix="mb_") as d:
+                        npz = os.path.join(d, "payload.npz")
+                        X.write_blender_payload(npz, skel, anim, base)
+                        o = {"axis_forward": preset.fbx_forward, "axis_up": preset.fbx_up}
+                        o.update(opt.fbx_options)
+                        r = bridge.apply_and_export_fbx(model_path, npz, p, o, opt.blender or self.blender)
+                    warns += r.warnings
+                    out.append(p)
+        if "glb" in fmts:
+            p = os.path.join(opt.out_dir, base + ".glb")
+            X.export_glb(p, skel, anim, F, upm, meshes)
+            out.append(p)
+        return out

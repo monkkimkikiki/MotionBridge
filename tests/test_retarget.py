@@ -1,0 +1,280 @@
+import os
+import sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+from motionbridge.core import quat as Q  # noqa: E402
+from motionbridge.core.mapping import auto_map, pairs_from_slots  # noqa: E402
+from motionbridge.core.model import fk  # noqa: E402
+from motionbridge.core.quality import analyze  # noqa: E402
+from motionbridge.core.retarget import RetargetSettings, default_chains, retarget  # noqa: E402
+import synth  # noqa: E402
+
+
+def setup(src_cfg, tgt_cfg, anim_kw=None, st=None, n_frames=60):
+    ssk, smeta = synth.build_skeleton(**src_cfg)
+    tsk, tmeta = synth.build_skeleton(**tgt_cfg)
+    an, truth = synth.walk_animation(ssk, smeta, n_frames=n_frames, **(anim_kw or {}))
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    pairs = pairs_from_slots(sm, tm)
+    chains = default_chains(sm, tm)
+    res = retarget(ssk, an, tsk, pairs, st or RetargetSettings(foot_ik=False), chains, sm, tm)
+    return ssk, an, tsk, res, sm, tm, smeta, tmeta
+
+
+def canon(skel, anim, F):
+    wr, wp = fk(skel, anim.rot, anim.pos)
+    return Q.rotate(F, wp), wr
+
+
+def unit(v):
+    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
+
+
+COMBOS = [
+    (dict(style="mixamo", frame="y_up_z", scale=1.0, pose="T", local_axes="aligned"),
+     dict(style="ue", frame="z_up_x", scale=100.0, pose="A", local_axes="bone_x", height=1.1, leg_scale=1.15)),
+    (dict(style="ue", frame="z_up_x", scale=100.0, pose="A", local_axes="bone_x"),
+     dict(style="biped", frame="z_up_negy", scale=100.0, pose="T", local_axes="bone_x", height=0.9)),
+    (dict(style="biped", frame="z_up_negy", scale=1.0, pose="T", local_axes="aligned"),
+     dict(style="mixamo", frame="y_up_z", scale=1.0, pose="A", local_axes="bone_x", height=1.3)),
+]
+
+
+def test_fk_invariants():
+    """IK 없이: 매핑된 본의 방향이 소스와 같고, 골반 궤적은 스케일된 소스 궤적과 같다."""
+    for ci, (sc, tc) in enumerate(COMBOS):
+        ssk, an, tsk, res, sm, tm, smeta, tmeta = setup(sc, tc)
+        pc, wr = canon(tsk, res.anim, res.frame_tgt[0])
+        ps = res.src_canon_pos
+        pair_of = {t: s for s, t in res.pairs}
+        assert len(res.primary) >= 15, "주 자식이 너무 적음: %d" % len(res.primary)
+        worst = 0.0
+        for t, d in res.primary.items():
+            dt = unit(pc[:, d] - pc[:, t])
+            ds = unit(ps[:, pair_of[d]] - ps[:, pair_of[t]])
+            err = np.linalg.norm(dt - ds, axis=1).max()
+            worst = max(worst, err)
+            assert err < 1e-5, ("본 방향 불일치", ci, tsk.names[t], tsk.names[d], err)
+        # 골반 위치
+        _, bwp_s = ssk.bind_world()
+        _, bwp_t = tsk.bind_world()
+        bps = Q.rotate(res.frame_src[0], bwp_s)
+        bpt = Q.rotate(res.frame_tgt[0], bwp_t)
+        com = res.com
+        assert tsk.names[com] == tsk.names[tm["Hips"]]
+        exp = bpt[com] + res.k * (ps[:, pair_of[com]] - bps[pair_of[com]])
+        assert np.allclose(pc[:, com], exp, atol=1e-6), "COM 위치 %g" % np.abs(pc[:, com] - exp).max()
+        # 진행 방향: 표준 프레임 +Z
+        travel = pc[-1, com] - pc[0, com]
+        assert travel[2] > 0.3 * res.k and abs(travel[0]) < 1e-6, ("진행 방향", travel)
+        q = np.linalg.norm(res.anim.rot, axis=-1)
+        assert np.allclose(q, 1.0, atol=1e-9)
+        print("  조합 %d: 본 방향 최대 오차 %.2e, k=%.3f, %s | %s" % (ci, worst, res.k, res.frame_src[1], res.frame_tgt[1]))
+    print("FK invariants OK")
+
+
+IK_TGT = dict(style="ue", frame="z_up_x", scale=100.0, pose="A", local_axes="bone_x", height=1.1, knee_frac=0.3)
+
+
+def slide_metric(tsk, res, ch_i, anim=None):
+    """접지 중 연속 프레임 사이 수평 이동 최대값, 다리 길이, 접지쌍 수, 전체 프레임 최대 이동."""
+    pc, _ = canon(tsk, anim or res.anim, res.frame_tgt[0])
+    ch, pl = res.chains[ch_i], res.plans[ch_i]
+    foot = pc[:, ch.foot]
+    both = pl.contact[1:] & pl.contact[:-1]
+    d = np.linalg.norm(np.diff(foot[:, [0, 2]], axis=0), axis=1)
+    return (d[both].max() if both.any() else 0.0), pl.leg_length, int(both.sum()), d.max()
+
+
+def test_ik():
+    """허벅지/종아리 비율이 다른 대상: FK 만으로는 접지 중 발이 미끄러지고, IK 는 정확히 고정한다."""
+    sc = COMBOS[0][0]
+    base = setup(sc, IK_TGT, st=RetargetSettings(foot_ik=False))
+    ik = setup(sc, IK_TGT, st=RetargetSettings(foot_ik=True))
+    ssk, an, tsk, res_fk = base[0], base[1], base[2], base[3]
+    res_ik = ik[3]
+    assert not res_fk.ik_applied and res_ik.ik_applied and len(res_ik.chains) == 2
+    for i in range(2):
+        m_fk, L, n_fk, all_fk = slide_metric(tsk, res_fk, i)
+        m_ik, L2, n_ik, all_ik = slide_metric(tsk, res_ik, i)
+        assert n_ik >= 10, "접지 구간이 너무 짧음 %d" % n_ik
+        print("  체인 %d: 접지쌍 %d, 접지 중 미끄러짐 FK %.3f%% -> IK %.4f%% | 전체 프레임 최대 이동 FK %.2f%% IK %.2f%% (다리 길이 대비)" % (i, n_ik, 100 * m_fk / L, 100 * m_ik / L2, 100 * all_fk / L, 100 * all_ik / L2))
+        assert m_fk > 0.01 * L, "테스트 조건이 약함: FK 도 거의 안 미끄러짐"
+        assert m_ik < 0.0005 * L2, "IK 후에도 미끄러짐 %.5f" % (m_ik / L2)
+        assert all_ik <= all_fk * 1.05, "IK 가 전환 구간에 점프를 만듦 (%.3f vs %.3f)" % (all_ik / L2, all_fk / L)
+    # 접지 위치 = 스케일된 소스 위치
+    pc, _ = canon(tsk, res_ik.anim, res_ik.frame_tgt[0])
+    ps = res_ik.src_canon_pos
+    _, bwp_s = ssk.bind_world()
+    _, bwp_t = tsk.bind_world()
+    bps = Q.rotate(res_ik.frame_src[0], bwp_s)
+    bpt = Q.rotate(res_ik.frame_tgt[0], bwp_t)
+    for ch, pl in zip(res_ik.chains, res_ik.plans):
+        D = bpt[ch.foot] + res_ik.k * (ps[:, ch.src_foot] - bps[ch.src_foot])
+        err = np.linalg.norm(pc[:, ch.foot] - D, axis=1).max()
+        assert err < 0.01 * pl.leg_length, "발 위치가 스케일된 소스 위치와 다름 %.4f" % err
+        assert pc[:, ch.foot, 1].min() >= bpt[ch.foot, 1] - 1e-6, "지면 관통"
+        A, B, C = pc[:, ch.upper], pc[:, ch.lower], pc[:, ch.foot]
+        d = unit(C - A)
+        perp = (B - A) - d * np.sum((B - A) * d, axis=1, keepdims=True)
+        assert perp[:, 2].min() > -1e-6, "무릎이 뒤집힘"
+        assert not pl.fail.any(), "다리가 닿지 않는 프레임 %d" % pl.fail.sum()
+    # 본 길이 보존, 회전 연속성
+    _, wp = fk(tsk, res_ik.anim.rot, res_ik.anim.pos)
+    for ch in res_ik.chains:
+        l1 = np.linalg.norm(wp[:, ch.lower] - wp[:, ch.upper], axis=1)
+        l2 = np.linalg.norm(wp[:, ch.foot] - wp[:, ch.lower], axis=1)
+        assert np.ptp(l1) < 1e-6 and np.ptp(l2) < 1e-6, "본 길이 변함"
+    jump = np.degrees(Q.angle_between(res_ik.anim.rot[1:], res_ik.anim.rot[:-1])).max()
+    assert jump < 60.0, "회전 점프 %.1f" % jump
+    issues = analyze(tsk, res_ik, RetargetSettings())
+    bad = [i for i in issues if i.kind in ("slide", "penetration", "overreach", "pop", "nan")]
+    assert not bad, [i.message for i in bad]
+    iss_fk = analyze(tsk, res_fk, RetargetSettings(foot_ik=False))
+    assert any(i.kind == "slide" for i in iss_fk), "FK 결과의 미끄러짐을 검출하지 못함"
+    # 접지 구간에서만 IK (ik_follow=0) 모드도 동작은 해야 한다
+    r0 = setup(sc, IK_TGT, st=RetargetSettings(foot_ik=True, ik_follow=0.0))[3]
+    assert np.isfinite(r0.anim.rot).all()
+    print("IK OK (hip drop max %.4f)" % res_ik.drop.max())
+
+
+def test_overreach():
+    """골반을 너무 높이면 다리가 닿지 않는다: 골반을 낮추고, 그래도 안 되면 경고한다."""
+    sc = COMBOS[0][0]
+    st_hi = RetargetSettings(foot_ik=True, hip_offset=(0.0, 12.0, 0.0), hip_drop=False)
+    r_nodrop = setup(sc, IK_TGT, st=st_hi)
+    fails_nodrop = sum(int(p.fail.sum()) for p in r_nodrop[3].plans)
+    assert fails_nodrop > 0, "테스트 조건: 골반을 올리면 다리가 닿지 않아야 함"
+    assert any(i.kind == "overreach" for i in analyze(r_nodrop[2], r_nodrop[3], st_hi)), "과신장 경고 없음"
+    st_drop = RetargetSettings(foot_ik=True, hip_offset=(0.0, 12.0, 0.0), hip_drop=True)
+    r_drop = setup(sc, IK_TGT, st=st_drop)
+    fails_drop = sum(int(p.fail.sum()) for p in r_drop[3].plans)
+    assert r_drop[3].drop.max() > 1.0, "골반이 낮춰지지 않음"
+    assert fails_drop < fails_nodrop, "골반 낮추기가 과신장을 줄이지 못함 (%d -> %d)" % (fails_nodrop, fails_drop)
+    # 닿지 않는 프레임에서도 결과가 유한하고 본 길이가 유지
+    tsk = r_drop[2]
+    _, wp = fk(tsk, r_drop[3].anim.rot, r_drop[3].anim.pos)
+    ch = r_drop[3].chains[0]
+    assert np.isfinite(wp).all()
+    assert np.ptp(np.linalg.norm(wp[:, ch.lower] - wp[:, ch.upper], axis=1)) < 1e-6
+    print("overreach OK (닿지 않는 프레임 %d -> %d, 골반 낮춤 최대 %.1f)" % (fails_nodrop, fails_drop, r_drop[3].drop.max()))
+
+
+def test_in_place_not_locked():
+    sc, tc = COMBOS[0]
+    r = setup(sc, tc, anim_kw=dict(in_place=True), st=RetargetSettings(foot_ik=True))[3]
+    for pl in r.plans:
+        frac = pl.contact.mean()
+        assert frac < 0.2, "제자리 모션인데 접지로 판정됨 %.2f" % frac
+    print("in-place OK")
+
+
+def test_offsets():
+    sc, tc = COMBOS[0]
+    base = setup(sc, tc)
+    r0 = base[3]
+    tsk, tm = base[2], base[5]
+    pc0, wr0 = canon(tsk, r0.anim, r0.frame_tgt[0])
+    com = r0.com
+    # 골반 오프셋
+    st = RetargetSettings(foot_ik=False, hip_offset=(0.02, 0.05, 0.10))
+    r1 = setup(sc, tc, st=st)[3]
+    pc1, _ = canon(tsk, r1.anim, r1.frame_tgt[0])
+    assert np.allclose(pc1[:, com] - pc0[:, com], [0.02, 0.05, 0.10], atol=1e-6), "골반 오프셋"
+    # 제자리
+    st = RetargetSettings(foot_ik=False, transfer_root_motion=False)
+    r2 = setup(sc, tc, st=st)[3]
+    pc2, _ = canon(tsk, r2.anim, r2.frame_tgt[0])
+    assert np.ptp(pc2[:, com, 2]) < 1e-6 and np.ptp(pc2[:, com, 0]) < 1e-6, "제자리 모드에서 수평 이동 남음"
+    # 루트 yaw 90도: 진행 방향이 +Z 에서 +X 쪽으로 (Y 축 +90도: z -> x)
+    st = RetargetSettings(foot_ik=False, root_yaw_deg=90.0)
+    r3 = setup(sc, tc, st=st)[3]
+    pc3, _ = canon(tsk, r3.anim, r3.frame_tgt[0])
+    tr = pc3[-1, com] - pc3[0, com]
+    assert tr[0] > 0.3 * r3.k and abs(tr[2]) < 1e-6, ("루트 yaw", tr)
+    # 서브트리 회전 보정: 척추를 X 축으로 10도 숙이면 척추~머리 모두 같은 각도 변함
+    sp = tm["Spine1"]
+    st = RetargetSettings(foot_ik=False, rot_offsets={sp: (10.0, 0.0, 0.0)})
+    r4 = setup(sc, tc, st=st)[3]
+    _, wr4 = canon(tsk, r4.anim, r4.frame_tgt[0])
+    for slot in ("Spine1", "Spine2", "Neck", "Head"):
+        j = tm[slot]
+        ang = np.degrees(Q.angle_between(wr4[:, j], wr0[:, j]))
+        assert np.allclose(ang, 10.0, atol=1e-6), (slot, ang[:3])
+    j = tm["Hips"]
+    assert np.degrees(Q.angle_between(wr4[:, j], wr0[:, j])).max() < 1e-6, "보정이 상위 본으로 번짐"
+    # 수동 스케일
+    st = RetargetSettings(foot_ik=False, auto_scale=False, manual_scale=2.0)
+    r5 = setup(sc, tc, st=st)[3]
+    assert abs(r5.k - 2.0) < 1e-12
+    print("offsets OK")
+
+
+def test_partial_mapping():
+    """일부 본만 매핑돼도(발가락/손가락 없음) 동작하고, 매핑 안 된 본은 부모를 따라간다."""
+    sc, tc = COMBOS[0]
+    ssk, smeta = synth.build_skeleton(**sc)
+    tsk, tmeta = synth.build_skeleton(**tc)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=30)
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    for k in [k for k in list(sm) if "Toe" in k or "Middle" in k]:
+        sm.pop(k)
+        tm.pop(k, None)
+    for k in [k for k in list(tm) if "Toe" in k or "Middle" in k]:
+        tm.pop(k)
+    pairs = pairs_from_slots(sm, tm)
+    res = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=True), default_chains(sm, tm), sm, tm)
+    assert np.isfinite(res.anim.rot).all() and np.isfinite(res.anim.pos).all()
+    # 매핑 안 된 발가락은 발(부모)의 월드 회전을 그대로 따라간다
+    toe = tsk.index("ball_l")
+    foot = tsk.index("foot_l")
+    wr, _ = fk(tsk, res.anim.rot, res.anim.pos)
+    rel = Q.mul(Q.conj(wr[:, foot]), wr[:, toe])
+    assert np.allclose(np.abs(np.sum(rel * tsk.rest_rot[toe][None], -1)), 1.0, atol=1e-9)
+    print("partial mapping OK")
+
+
+def test_bvh_source_pipeline():
+    """BVH(루트 OFFSET=0, 절대 위치 채널)로 저장했다가 읽은 소스로 리타깃해도 원본 소스와 거의 같은 결과."""
+    import tempfile
+    from motionbridge.core.io_bvh import read_bvh, write_bvh
+
+    sc = dict(style="mixamo", frame="y_up_z", scale=1.0, pose="T", local_axes="aligned")
+    ssk, smeta = synth.build_skeleton(**sc)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=60)
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "s.bvh")
+        write_bvh(p, ssk, an, order="ZXY")
+        m = read_bvh(p)
+    ssk2, an2 = m.skeleton, m.animations[0]
+    tsk, tmeta = synth.build_skeleton(**IK_TGT)
+    sm1, sm2, tm = auto_map(ssk), auto_map(ssk2), auto_map(tsk)
+    st = RetargetSettings(foot_ik=True)
+    r1 = retarget(ssk, an, tsk, pairs_from_slots(sm1, tm), st, default_chains(sm1, tm), sm1, tm)
+    r2 = retarget(ssk2, an2, tsk, pairs_from_slots(sm2, tm), st, default_chains(sm2, tm), sm2, tm)
+    assert abs(r2.k - r1.k) / r1.k < 0.05, ("스케일 차이", r1.k, r2.k)
+    F = r1.frame_tgt[0]
+    p1, _ = canon(tsk, r1.anim, F)
+    p2, _ = canon(tsk, r2.anim, F)
+    height = np.ptp(p1[0, :, 1])
+    err = np.linalg.norm(p1 - p2, axis=-1).max()
+    assert err < 0.06 * height, "BVH 경유 결과가 원본과 다름 %.3f (키 %.1f)" % (err, height)
+    # 바인드 포즈가 바닥에 서 있어야 한다 (가장 낮은 관절 ~ 0)
+    _, bwp = ssk2.bind_world()
+    pc = Q.rotate(r2.frame_src[0], bwp)
+    assert abs(pc[:, 1].min()) < 0.03 * np.ptp(pc[:, 1]), "BVH 바인드가 바닥에 서 있지 않음"
+    print("bvh source pipeline OK (최대 오차 %.2f%% of height)" % (100 * err / height))
+
+
+if __name__ == "__main__":
+    test_fk_invariants()
+    test_ik()
+    test_overreach()
+    test_in_place_not_locked()
+    test_offsets()
+    test_partial_mapping()
+    test_bvh_source_pipeline()
+    print("test_retarget ALL OK")

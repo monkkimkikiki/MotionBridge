@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motionbridge"
+version = "0.1.0"
+description = "게임 모션을 내 모델에 리타깃하고 Max/Maya/Blender 로 내보내는 도구"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5"]
+
+[project.scripts]
+motionbridge = "motionbridge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["motionbridge*"]
