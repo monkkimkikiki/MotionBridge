@@ -159,19 +159,18 @@ fn mbRun =
 
 	-- ---------------------------------------------------------------- 데이터 읽기
 	local f = openFile dataFile mode:"r"
-	local hdr = #()
 	local pSlot = #(), pArr = #(), pLink = #(), pAim = #(), pDir = #()
 	local lines = #()
 	local fps = 30.0, nFrames = 0, heightM = 1.7, hipM = 0.9, spineN = 3, fingN = 0, toesN = 0, clipName = "clip"
-	local line = readLine f   -- 형식 이름
+	local ln = readLine f   -- 형식 이름
 	local inData = false
 	while not (eof f) do
 	(
-		line = readLine f
-		if inData then ( append lines line )
+		ln = readLine f
+		if inData then ( append lines ln )
 		else
 		(
-			local tk = filterString line " "
+			local tk = filterString ln " "
 			if tk.count > 0 do
 			(
 				case tk[1] of
@@ -198,15 +197,15 @@ fn mbRun =
 	if outBip == undefined do return undefined
 
 	local U = units.decodeValue "1.0m"      -- 3ds Max 시스템 단위로 1 미터
-	local log = #()
+	local msgs = #()
 	fn tryGetNode b arr link = ( local n = undefined ; try ( n = biped.getNode b arr link:link ) catch () ; if n == undefined do ( try ( n = biped.getNode b.transform.controller arr link:link ) catch () ) ; n )
 
 	-- ---------------------------------------------------------------- Biped 만들기
-	fn makeBiped h ang sN fN tN =
+	fn makeBiped h ang spN fgN toN =
 	(
 		local b = undefined
-		try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:sN legLinks:3 fingers:fN fingerLinks:3 toes:tN toeLinks:1 ankleAttach:0.2 ) catch ()
-		if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:sN legLinks:3 fingers:fN fingerLinks:3 ) catch () )
+		try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:spN legLinks:3 fingers:fgN fingerLinks:3 toes:toN toeLinks:1 ankleAttach:0.2 ) catch ()
+		if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:spN legLinks:3 fingers:fgN fingerLinks:3 ) catch () )
 		if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] ) catch () )
 		b
 	)
@@ -243,7 +242,7 @@ fn mbRun =
 	(
 		local n = tryGetNode bip pArr[i] pLink[i]
 		append nodes n
-		if n == undefined do append log ("Biped 에서 찾지 못한 부위: " + pSlot[i])
+		if n == undefined do append msgs ("Biped 에서 찾지 못한 부위: " + pSlot[i])
 	)
 
 	-- ---------------------------------------------------------------- Figure 모드에서 내 모델의 바인드 포즈 방향에 맞추기
@@ -263,7 +262,7 @@ fn mbRun =
 				(
 					local rm = (angleaxis (atan2 s cs) (normalize axs)) as matrix3
 					local cur = (nodes[i].transform.rotationpart) as matrix3
-					try ( biped.setTransform nodes[i] #rotation ((cur * rm) as quat) false ) catch ( append log ("자세 맞추기 실패: " + pSlot[i]) )
+					try ( biped.setTransform nodes[i] #rotation ((cur * rm) as quat) false ) catch ( append msgs ("자세 맞추기 실패: " + pSlot[i]) )
 				)
 			)
 		)
@@ -310,11 +309,12 @@ fn mbRun =
 
 	-- ---------------------------------------------------------------- 저장
 	local saved = false
-	try ( biped.saveBipFile ctrl outBip ; saved = true ) catch ( append log ("저장 실패: " + (getCurrentException())) )
-	local msg = "MotionBridge: Biped 모션 " + nFrames as string + "프레임 적용 (" + ((timeStamp() - t0) / 1000.0) as string + "초)\n"
+	try ( biped.saveBipFile ctrl outBip ; saved = true ) catch ( append msgs ("저장 실패: " + (getCurrentException())) )
+	local secs = (timeStamp() - t0) / 1000.0
+	local msg = "MotionBridge: Biped 모션 " + (nFrames as string) + "프레임 적용 (" + (secs as string) + "초)\n"
 	if saved do msg += "저장: " + outBip + "\n"
 	if failed.count > 0 do msg += "키를 넣지 못한 부위: " + (failed as string) + "\n"
-	for l in log do msg += l + "\n"
+	for l in msgs do msg += l + "\n"
 	format "%\n" msg
 	messageBox msg title:"MotionBridge"
 )

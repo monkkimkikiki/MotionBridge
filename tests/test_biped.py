@@ -88,6 +88,20 @@ def test_compute_and_files():
         dat = [f for f in files if f.endswith(".mbbip")][0]
         assert os.path.basename(dat) in ms and "__DATA__" not in ms
         assert ms.count("(") == ms.count(")"), "괄호 짝이 맞아야 함"
+        # MaxScript 는 대소문자를 구분하지 않고, 'as' 는 '+' 보다 우선순위가 낮다: 실제 3ds Max 에서 났던 문법 오류들을 정적으로 점검
+        import re
+        kw = set("about and animate as at by case catch collect continue coordsys do else exit fn for from function global if in local macroscript mapped max not of off on or parameters persistent plugin rcmenu return rollout set struct then throw to tool try undo utility when where while with".split())
+        declared = set()
+        for m_ in re.finditer(r"local\s+([^\n]+)", ms):
+            for part in m_.group(1).split(","):
+                mm = re.match(r"\s*([A-Za-z_]\w*)", part)
+                if mm:
+                    declared.add(mm.group(1))
+        for m_ in re.finditer(r"\bfn\s+(\w+)((?:\s+\w+)*)\s*=", ms):
+            declared.add(m_.group(1))
+            declared.update(m_.group(2).split())
+        assert not [n for n in declared if n.lower() in kw], [n for n in declared if n.lower() in kw]
+        assert not re.search(r"\+\s*[\w\.\[\]]+\s+as\s+\w+\s*\+", ms), "a + b as string + ... 는 (a+b) as string 으로 해석됨"
         assert "biped.createNew" in ms and "biped.setTransform" in ms and "biped.saveBipFile" in ms
         lines = open(dat, encoding="utf-8").read().split("\n")
         assert lines[0] == biped.FORMAT
