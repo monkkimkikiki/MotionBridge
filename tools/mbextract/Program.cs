@@ -45,13 +45,21 @@ try
     }
     catch (Exception e) { Emit(new { type = "log", message = "Oodle 준비 실패(압축된 에셋을 못 읽을 수 있음): " + e.Message }); }
 
-    var provider = new DefaultFileProvider(game, SearchOption.AllDirectories, new VersionContainer(ue), StringComparer.OrdinalIgnoreCase);
-    provider.Initialize();
-    if (!string.IsNullOrEmpty(aes)) provider.SubmitKey(new FGuid(), new FAesKey(aes));
+    // Paks 폴더가 있으면 그 폴더만 읽는다(게임 루트 전체를 뒤지지 않음).
+    var root = game;
+    try { root = Directory.EnumerateDirectories(game, "Paks", SearchOption.AllDirectories).FirstOrDefault() ?? game; } catch { }
+    Emit(new { type = "log", message = "읽는 폴더: " + root });
+    var provider = new DefaultFileProvider(root, SearchOption.TopDirectoryOnly, new VersionContainer(ue), StringComparer.OrdinalIgnoreCase);
     if (!string.IsNullOrEmpty(usmap)) provider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmap);
+    provider.Initialize();
+    Emit(new { type = "log", message = "컨테이너 " + provider.UnloadedVfs.Count + "개 발견" });
+    // 암호화 안 된 컨테이너는 Mount() 로, 키가 있으면 SubmitKey 로 연다.
+    int mounted = provider.Mount();
+    if (!string.IsNullOrEmpty(aes)) mounted += provider.SubmitKey(new FGuid(), new FAesKey(aes));
     provider.PostMount();
-    Emit(new { type = "log", message = "마운트된 파일 " + provider.Files.Count + "개" });
-    if (provider.Files.Count == 0) Fail("읽을 수 있는 파일이 없습니다. AES 키가 필요하거나 UE 버전이 맞지 않을 수 있습니다.");
+    int pkgCount = provider.Files.Keys.Count(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase));
+    Emit(new { type = "log", message = "마운트 " + mounted + "개, 전체 파일 " + provider.Files.Count + "개, 패키지(.uasset) " + pkgCount + "개" });
+    if (pkgCount == 0) Fail("읽을 수 있는 에셋이 없습니다(마운트 " + mounted + "개). AES 키가 필요하거나 UE 버전/usmap 이 맞지 않을 수 있습니다.");
 
     if (cmd == "list")
     {

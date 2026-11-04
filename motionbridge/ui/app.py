@@ -324,8 +324,14 @@ class MainWindow(QMainWindow):
             return
         pattern = self.ex_filter.text().strip() or "(?i)anim"
 
+        self._ex_logs = []
+
+        def on_event(e, w=None):
+            if e.get("type") == "log":
+                self._ex_logs.append(e.get("message", ""))
+
         def job(w: Worker):
-            return extractor.list_assets(*a, pattern, 5000, lambda e: w.progress.emit(0, 1, e.get("message", "")) if e.get("type") == "log" else None)
+            return extractor.list_assets(*a, pattern, 5000, on_event)
 
         self.run_async(job, self._after_search, "애니메이션 검색 중")
 
@@ -333,7 +339,8 @@ class MainWindow(QMainWindow):
         self.ex_list.clear()
         for p in paths:
             self.ex_list.addItem(QListWidgetItem(p))
-        self.ex_count.setText("%d개" % len(paths) + ("" if paths else " — UE 버전, mappings(.usmap), 검색식을 확인해 보세요."))
+        logs = getattr(self, "_ex_logs", [])
+        self.ex_count.setText("%d개" % len(paths) + ("" if paths else " — UE 버전, mappings(.usmap), 검색식을 확인해 보세요.\n도우미 로그: " + " / ".join(logs[-4:])))
 
     def _extract_selected(self) -> None:
         paths = [it.text() for it in self.ex_list.selectedItems()]
