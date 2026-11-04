@@ -180,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--what", choices=["retargeted", "source"], default="retargeted", help="source: 리타깃 없이 원본 모션만 변환")
     r.add_argument("--clip", default="0", help="클립 번호 또는 all")
     r.add_argument("--presets", nargs="+", default=["blender"], choices=list(PRESETS))
-    r.add_argument("--formats", nargs="+", default=["bvh"], choices=["bvh", "glb", "fbx"])
+    r.add_argument("--formats", nargs="+", default=["bvh"], choices=["bvh", "glb", "fbx", "bip"])
     r.add_argument("--no-skeleton", action="store_true", help="본 구조 없이 애니메이션 커브(JSON)만")
     r.add_argument("--no-mesh", action="store_true")
     r.add_argument("--skeleton-json", action="store_true", help="본 구조를 JSON 으로도 저장")

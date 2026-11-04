@@ -795,6 +795,7 @@ class MainWindow(QMainWindow):
         self.cb_fmt = {}
         for key, text, tip in (("bvh", "BVH", "Max/Maya/Blender 모두 읽는 모션 파일 (대상 프로그램별 축·단위 적용)"),
                                ("glb", "GLB (glTF)", "메시·스킨·애니메이션 포함 가능"),
+                               ("bip", "3ds Max Biped (.ms)", "FBX 를 거치지 않고 Biped 에 바로 넣는 MaxScript + 데이터. 3ds Max 에서 스크립트를 실행하면 Biped 를 만들고 .bip 로 저장합니다 (대상 프로그램 선택과 무관, 3ds Max 전용)"),
                                ("fbx", "FBX (Blender 필요)", "내 모델 파일을 Blender 로 열어 모션을 입힌 뒤 FBX 로 저장 — 리타깃 결과 전용")):
             cb = QCheckBox(text)
             cb.setToolTip(tip)
@@ -1246,7 +1247,8 @@ class MainWindow(QMainWindow):
         presets = [k for k, cb in self.cb_preset.items() if cb.isChecked()]
         fmts = [k for k, cb in self.cb_fmt.items() if cb.isChecked()]
         skel = self.cb_skeleton.isChecked()
-        if skel and (not presets or not fmts):
+        needs_preset = any(k in ("bvh", "fbx") for k in fmts)
+        if skel and (not fmts or (needs_preset and not presets)):
             QMessageBox.warning(self, "내보내기", "대상 프로그램과 파일 형식을 하나 이상 고르세요.")
             return
         if "fbx" in fmts and skel and not bridge.find_blender(self.pr.blender):

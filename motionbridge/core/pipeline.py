@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import bridge, export as X
+from . import bridge, biped, export as X
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -26,7 +26,7 @@ def _safe(name: str) -> str:
 class ExportOptions:
     out_dir: str
     presets: Sequence[str] = ("blender",)  # maya | max | blender
-    formats: Sequence[str] = ("bvh",)  # bvh | glb | fbx
+    formats: Sequence[str] = ("bvh",)  # bvh | glb | fbx | bip (3ds Max Biped 스크립트)
     include_skeleton: bool = True  # False: 본 구조 없이 애니메이션 커브(JSON)만
     what: str = "retargeted"  # retargeted | source
     clips: Optional[Sequence[int]] = None  # None: 현재 클립만
@@ -235,6 +235,14 @@ class Project:
             X.write_json(p, X.curves_dict(skel, anim))
             return [p]
         fmts = [f.lower() for f in opt.formats]
+        if "bip" in fmts:  # 3ds Max Biped: 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
+            slots = self.tgt_slots if opt.what == "retargeted" else self.src_slots
+            try:
+                files, w = biped.export_biped(opt.out_dir, base, skel, anim, slots, F, upm)
+                out += files
+                warns += w
+            except ValueError as e:
+                warns.append(str(e))
         for preset_key in opt.presets:
             preset = X.PRESETS[preset_key]
             if "bvh" in fmts:
