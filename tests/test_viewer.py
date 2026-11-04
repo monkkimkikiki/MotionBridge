@@ -113,6 +113,13 @@ def test_reduced_parents():
         j = i * 30
         assert r[j] == (j - 30 if i > 0 else -1)
     assert (r >= 0).sum() == 11 and r[1] == -1 and r[31] == -1
+    # 본이 적어도(98개짜리 보스 리그처럼) 매핑 안 된 보조 본(카메라/IK)은 기본으로 숨기고, 켜면 전부 그린다
+    n = 40
+    par = np.arange(-1, n - 1)
+    slots = {"s%d" % i: i for i in range(12)}
+    r = reduced_parents(par, slots)
+    assert (r >= 0).sum() == 11 and r[20] == -1, "보조 본은 그리지 않음"
+    assert np.array_equal(reduced_parents(par, slots, 10 ** 9), par), "보조 본 표시를 켜면 전부"
     print("reduced parents OK")
 
 

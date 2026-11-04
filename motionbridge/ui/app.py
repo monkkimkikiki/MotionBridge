@@ -250,6 +250,12 @@ class MainWindow(QMainWindow):
             cb.toggled.connect(lambda v, a=attr: (setattr(self.viewport, a, bool(v)), self.viewport.update()))
             opts.addWidget(cb)
             self._view_checks[key] = cb
+        cb = QCheckBox("보조 본")
+        cb.setToolTip("IK·카메라·워프·얼굴·천 등 매핑되지 않은 본도 그립니다. 끄면 몸(매핑된 본)만 보입니다")
+        cb.setChecked(False)
+        cb.toggled.connect(self._helpers_toggled)
+        opts.addWidget(cb)
+        self._view_checks["helpers"] = cb
         opts.addWidget(QLabel("메시"))
         self.mesh_combo = QComboBox()
         for k, n in MESH_MODES:
@@ -1144,7 +1150,7 @@ class MainWindow(QMainWindow):
                 self.pr.result, self.pr.issues, err = None, [], str(e)
         else:
             self.pr.result, self.pr.issues = None, []
-        self.vd = ViewData.build(self.pr) if (self.pr.src or self.pr.tgt) else None
+        self.vd = ViewData.build(self.pr, show_helpers=bool(getattr(self, "_show_helpers", False))) if (self.pr.src or self.pr.tgt) else None
         n = self.vd.n_frames if self.vd else 1
         self.frame_slider.blockSignals(True)
         self.frame_slider.setRange(0, max(n - 1, 0))
@@ -1218,6 +1224,10 @@ class MainWindow(QMainWindow):
     def _tick(self) -> None:
         n = self.vd.n_frames if self.vd else 1
         self.frame_slider.setValue((self.frame_slider.value() + 1) % max(n, 1))
+
+    def _helpers_toggled(self, v) -> None:
+        self._show_helpers = bool(v)
+        self.recompute()
 
     def _mesh_mode_changed(self, *_a) -> None:
         self.viewport.mesh_mode = self.mesh_combo.currentData() or "solid"

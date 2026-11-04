@@ -116,8 +116,10 @@ def nice_step(size: float) -> float:
     return float(10 * e)
 
 
-def reduced_parents(parents: np.ndarray, slots: Optional[dict], max_full: int = 200) -> np.ndarray:
-    """본이 아주 많은 스켈레톤(얼굴/천/보조 본 포함)은 사람 슬롯에 매핑된 본만 이어서 그린다.
+def reduced_parents(parents: np.ndarray, slots: Optional[dict], max_full: int = 0) -> np.ndarray:
+    """사람 슬롯에 매핑된 본만 이어서 그린다(IK·카메라·워프·얼굴·천 같은 보조 본은 숨김). max_full 이하 본 수의 스켈레톤은 그대로 그린다.
+
+    게임 리그에는 카메라/IK/워프 보조 본이 몸에서 멀리 떨어져 있어서 그대로 그리면 '팔이 날아간 것'처럼 보인다.
 
     각 매핑된 본의 부모를 '가장 가까운 매핑된 조상'으로 바꾸고, 나머지 본은 부모 -1(그리지 않음)로 둔다.
     """
@@ -155,7 +157,8 @@ class ViewData:
     ground_y: float = 0.0
 
     @staticmethod
-    def build(pr) -> "ViewData":
+    def build(pr, show_helpers: bool = False) -> "ViewData":
+        mf = 10 ** 9 if show_helpers else 0  # show_helpers: 매핑 안 된 보조 본도 그린다
         vd = ViewData()
         res = pr.result
         if pr.tgt is not None:
@@ -165,7 +168,7 @@ class ViewData:
                 Ft = res.frame_tgt[0]
                 vd.n_frames, vd.fps = res.anim.n_frames, res.anim.fps
                 vd.ghost_pos = res.src_canon_pos * res.k
-                vd.ghost_parents = reduced_parents(pr.src.skeleton.parents, pr.src_slots)
+                vd.ghost_parents = reduced_parents(pr.src.skeleton.parents, pr.src_slots, mf)
                 for p in res.plans:
                     vd.contact[p.label] = p.contact
                     vd.ik_target[p.label] = p.target
@@ -182,7 +185,7 @@ class ViewData:
             vd.Ft = Ft
             vd.tgt_wr, vd.tgt_wp = wr, wp
             vd.tgt_pos = Q.rotate(Ft, wp)
-            vd.tgt_parents = reduced_parents(tk.parents, pr.tgt_slots)
+            vd.tgt_parents = reduced_parents(tk.parents, pr.tgt_slots, mf)
         elif pr.src is not None:
             sk = pr.src.skeleton
             from ..core.mapping import DEFAULT_FRAME, detect_frame
@@ -192,10 +195,15 @@ class ViewData:
             a = pr.anim
             wr, wp = fk(sk, a.rot, a.pos)
             vd.ghost_pos = Q.rotate(Fs, wp)
-            vd.ghost_parents = reduced_parents(sk.parents, pr.src_slots)
+            vd.ghost_parents = reduced_parents(sk.parents, pr.src_slots, mf)
             vd.n_frames, vd.fps = a.n_frames, a.fps
         main = vd.tgt_pos if vd.tgt_pos is not None else vd.ghost_pos
         if main is not None:
+            mp = vd.tgt_parents if vd.tgt_pos is not None else vd.ghost_parents
+            if mp is not None and len(mp) == main.shape[1]:  # 화면 맞추기/높이는 그려지는 본만으로 계산 (카메라 본 등 제외)
+                vis = (mp >= 0) | np.isin(np.arange(len(mp)), mp[mp >= 0])
+                if vis.sum() >= 2:
+                    main = main[:, vis]
             b = main[0]
             vd.ground_y = float(main[..., 1].min())
             vd.height = float(max(np.ptp(b[:, 1]), np.ptp(b, axis=0).max(), 1e-6))
