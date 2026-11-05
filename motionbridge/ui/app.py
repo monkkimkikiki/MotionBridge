@@ -1036,9 +1036,15 @@ class MainWindow(QMainWindow):
 
     def _tab_help(self) -> QWidget:
         tb = QTextBrowser()
-        tb.setOpenExternalLinks(True)
+        tb.setOpenLinks(False)  # 링크는 직접 처리: 웹 링크는 Chrome 으로 연다
+        tb.anchorClicked.connect(self._open_link)
         tb.setHtml(EXTRACT_HELP)
         return tb
+
+    def _open_link(self, url) -> None:
+        text = url.toString() if hasattr(url, "toString") else str(url)
+        if not osopen.open_url(text):  # Chrome 이 없거나 웹 링크가 아니면 기본 프로그램으로
+            QDesktopServices.openUrl(url if hasattr(url, "toString") else QUrl(text))
 
     # ================================================================== 비동기 작업
     def run_async(self, fn, on_done, label: str) -> None:

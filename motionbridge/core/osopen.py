@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from typing import List, Optional
@@ -42,6 +43,41 @@ def open_in_explorer(path: str) -> bool:
             os.startfile(p)  # type: ignore[attr-defined]
         else:
             return False
+        return True
+    except OSError:
+        return False
+
+
+def chrome_command(url: str, platform: Optional[str] = None, env: Optional[dict] = None, exists=os.path.isfile) -> Optional[List[str]]:
+    """Chrome 으로 url 을 여는 명령. Chrome 을 못 찾으면 None."""
+    pf = platform or sys.platform
+    e = env if env is not None else os.environ
+    if pf.startswith("win"):
+        for k in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            base = e.get(k)
+            if base:
+                c = os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")
+                if exists(c):
+                    return [c, url]
+        return None
+    if pf == "darwin":
+        return ["open", "-a", "Google Chrome", url]
+    for n in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        w = shutil.which(n)
+        if w:
+            return [w, url]
+    return None
+
+
+def open_url(url: str) -> bool:
+    """웹 링크(http/https)를 Chrome 으로 연다. Chrome 이 없으면 False (호출한 쪽이 기본 브라우저로 넘긴다)."""
+    if not url.lower().startswith(("http://", "https://")):
+        return False
+    cmd = chrome_command(url)
+    if not cmd:
+        return False
+    try:
+        subprocess.Popen(cmd)
         return True
     except OSError:
         return False

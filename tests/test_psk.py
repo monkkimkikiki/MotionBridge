@@ -272,7 +272,19 @@ def test_osopen():
     print("osopen OK")
 
 
+def test_chrome():
+    u = "https://example.com/a"
+    env = {"ProgramFiles": "C:\\PF", "LOCALAPPDATA": "C:\\L"}
+    cmd = osopen.chrome_command(u, "win32", env, exists=lambda p: p.startswith("C:\\L"))
+    assert cmd and cmd[1] == u and "Chrome" in cmd[0] and cmd[0].startswith("C:\\L"), cmd
+    assert osopen.chrome_command(u, "win32", env, exists=lambda p: False) is None
+    assert osopen.chrome_command(u, "darwin") == ["open", "-a", "Google Chrome", u]
+    assert osopen.open_url("file:///etc/passwd") is False and osopen.open_url("javascript:alert(1)") is False
+    print("chrome OK")
+
+
 if __name__ == "__main__":
+    test_chrome()
     test_read_variants()
     test_wedge_index_32bit()
     test_winding_and_axes()
