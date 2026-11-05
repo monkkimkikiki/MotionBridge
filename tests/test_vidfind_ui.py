@@ -171,6 +171,34 @@ def main():
         finally:
             A.bridge.find_blender = real_find
 
+
+        # ---------------- 모델이 없으면 긴 작업 전에 바로 안내 + [모델 받기]
+        state = {"have": False, "pulled": 0}
+
+        class P2(vision.OllamaProvider):
+            def check(self):
+                return (True, "ok", []) if state["have"] else (False, "모델 '%s' 이(가) 아직 내려받아지지 않았습니다. [모델 받기] 버튼" % self.model, ["llava"])
+
+            def pull(self, on_progress=None):
+                state["pulled"] += 1
+                state["have"] = True
+                on_progress and on_progress(50, "pulling x")
+
+        V.vision.make_provider = lambda kind, cfg, post=None: P2(cfg.get("vf_ollama_model") or "qwen2.5vl:7b")
+        vt.engine.setCurrentIndex(vt.engine.findData("ollama"))
+        check(vt.btn_pull._visible, "Ollama 선택 시 모델 받기 버튼")
+        listed.clear()
+        QMessageBox.calls.clear()
+        vt.start_guess()
+        check(not listed, "모델이 없으면 에셋 목록 읽기 전에 멈춤")
+        check(QMessageBox.calls and QMessageBox.calls[-1][0] == "critical" and "모델 받기" in QMessageBox.calls[-1][2] and not QMessageBox.calls[-1][2].startswith("RuntimeError"), "친절한 오류창: %s" % QMessageBox.calls[-1:])
+        vt.pull_model()
+        check(state["pulled"] == 1 and "받았습니다" in vt.engine_note.text(), "모델 받기 실행: %s" % vt.engine_note.text())
+        vt.pull_model()
+        check(state["pulled"] == 1 and "이미 받아져" in vt.engine_note.text(), "이미 있으면 다시 받지 않음")
+        vt.engine.setCurrentIndex(vt.engine.findData("claude"))
+        check(not vt.btn_pull._visible, "Claude 선택 시 받기 버튼 숨김")
+
         # Claude: 키 없으면 호출 전에 안내
         vt.engine.setCurrentIndex(vt.engine.findData("claude"))
         check(vt.model.text() == "claude-sonnet-5-5", "Claude 기본 모델: %s" % vt.model.text())

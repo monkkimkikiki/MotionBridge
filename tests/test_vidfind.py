@@ -73,6 +73,48 @@ ok, msg, _ = vision.OllamaProvider("other-model", post=fake_post).check()
 check(not ok and "ollama pull other-model" in msg, "없는 모델 안내: %s" % msg)
 
 
+check("qwen2.5vl:7b" in msg and "모델 받기" in msg, "받기 안내")
+ok, msg, _ = vision.OllamaProvider("other-model", post=lambda u, p, h, t: {"models": [{"name": "llava:7b"}]}).check()
+check("이미 설치된 모델: llava:7b" in msg, "설치된 모델 목록 안내: %s" % msg)
+
+# 모델 내려받기 (줄 단위 진행 상황)
+prog = []
+
+
+def fake_stream(url, payload, timeout):
+    check(url.endswith("/api/pull") and payload["name"] == "m1", "pull 요청")
+    yield {"status": "pulling manifest"}
+    yield {"status": "pulling abc", "total": 200, "completed": 50}
+    yield {"status": "pulling abc", "total": 200, "completed": 200}
+    yield {"status": "success"}
+
+
+vision.OllamaProvider("m1", stream=fake_stream).pull(lambda p, s_: prog.append((p, s_)))
+check(prog[0] == (0, "pulling manifest") and prog[1][0] == 25 and prog[-1] == (100, "success"), "진행률: %s" % prog)
+
+
+def bad_stream(url, payload, timeout):
+    yield {"error": "pull model manifest: file does not exist"}
+
+
+try:
+    vision.OllamaProvider("zz", stream=bad_stream).pull()
+    check(False, "없는 모델 오류")
+except vision.VisionError as e:
+    check("file does not exist" in str(e), "없는 모델 오류 문구")
+
+
+def cut_stream(url, payload, timeout):
+    yield {"status": "pulling abc", "total": 10, "completed": 5}
+
+
+try:
+    vision.OllamaProvider("zz", stream=cut_stream).pull()
+    check(False, "중간에 끊기면 오류")
+except vision.VisionError:
+    pass
+
+
 def down(url, payload, headers, timeout):
     raise vision.VisionError("연결할 수 없습니다: refused")
 

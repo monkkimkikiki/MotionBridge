@@ -18,10 +18,11 @@ from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..core import animlink, animref, assetidx, bridge, extractor, frames, vision
+from .widgets import fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
 MEMORY_FILE = os.path.join(bridge.CONFIG_DIR, "matches.json")
@@ -145,6 +146,10 @@ class VidFindTab(QWidget):
         b = QPushButton("연결 확인")
         b.clicked.connect(self.check_engine)
         h.addWidget(b)
+        self.btn_pull = QPushButton("모델 받기")
+        self.btn_pull.setToolTip("Ollama 에 위 모델을 내려받습니다 (약 6GB, 한 번만). Ollama 가 켜져 있어야 합니다.")
+        self.btn_pull.clicked.connect(self.pull_model)
+        h.addWidget(self.btn_pull)
         v.addLayout(h)
         self.key_row = QWidget()
         kh = QHBoxLayout(self.key_row)
@@ -203,6 +208,10 @@ class VidFindTab(QWidget):
         self.table.setIconSize(QSize(168, 96))
         self.table.setMinimumHeight(260)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        for c, wd in ((0, 176), (1, 150), (3, 60)):
+            self.table.setColumnWidth(c, wd)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setStretchLastSection(False)
         v.addWidget(self.table)
         h = QHBoxLayout()
         b = QPushButton("몬스터 줄 직접 추가")
@@ -278,6 +287,7 @@ class VidFindTab(QWidget):
         self.link_box.setVisible(False)
         lay.addWidget(g)
         lay.addStretch(1)
+        fit_widths(inner)
 
     # ================================================================== 입력
     def _add_source(self, path: str, label: str = "") -> None:
@@ -338,6 +348,7 @@ class VidFindTab(QWidget):
         else:
             self.model.setText(self.cfg.get("vf_ollama_model") or vision.OLLAMA_MODELS[0])
         self.key_row.setVisible(kind == "claude")
+        self.btn_pull.setVisible(kind != "claude")
         self.engine_note.setText("영상 이미지가 인터넷으로 Anthropic 에 전송되고 호출한 만큼 요금이 듭니다." if kind == "claude"
                                  else "내 PC에서만 처리됩니다. Ollama 설치 후 'ollama pull %s' 로 모델을 받으세요. 그래픽카드가 약하면 느리고 덜 정확합니다." % vision.OLLAMA_MODELS[0])
 
@@ -373,6 +384,22 @@ class VidFindTab(QWidget):
     def _after_check(self, res) -> None:
         ok, msg, _names = res
         self.engine_note.setText(("✔ " if ok else "✖ ") + msg)
+
+    def pull_model(self) -> None:
+        prov = self.provider()
+        if prov.key != "ollama":
+            return
+
+        def job(w):
+            ok, msg, _n = prov.check()
+            if ok:
+                return "이미 받아져 있습니다: " + prov.model
+            if "연결하지 못했습니다" in msg:
+                raise RuntimeError(msg)
+            prov.pull(lambda pct, st: w.progress.emit(pct, 100, "모델 받는 중 %s" % st[:40]))
+            return "모델을 받았습니다: " + prov.model
+
+        self.win.run_async(job, lambda m: self.engine_note.setText("✔ " + m), "모델 내려받는 중 (%s)" % prov.model)
 
     # ================================================================== 추측
     def _ensure_index(self, a, w, force: bool) -> assetidx.AssetIndex:
@@ -429,16 +456,16 @@ class VidFindTab(QWidget):
         w_cap = 24
 
         def job(w):
+            if prov.key == "ollama":  # 모델이 없으면 긴 작업(목록 읽기, 장면 뽑기) 전에 바로 알린다
+                ok2, msg2, _n = prov.check()
+                if not ok2:
+                    raise RuntimeError(msg2)
             idx = self._ensure_index(a, w, force_index)
             try:
                 shutil.rmtree(FRAME_DIR, ignore_errors=True)
             except OSError:
                 pass
             fr = frames.sample_sources(ff, srcs, FRAME_DIR, per, w_cap, lambda i, n, name: w.progress.emit(i, n, "장면 뽑는 중 " + name))
-            if prov.key == "ollama":  # 연결/모델 확인은 첫 호출 전에 한 번
-                ok2, msg2, _n = prov.check()
-                if not ok2:
-                    raise RuntimeError(msg2)
             vocab, notes = self._vocab(idx, prov.vocab_limit(), pat)
             dets: List[vision.Detection] = []
             errors: List[str] = []
@@ -690,5 +717,5 @@ class VidFindTab(QWidget):
             return
         self.link_query = None
         self.link_box.setVisible(False)
-        self.link_banner.setText("결과를 보냈습니다: %s — %s" % (out["file"], "AnimRef 에 알렸습니다." if out["notified"] else "AnimRef 가 꺼져 있어 result.json 만 저장했습니다."))
+        self.link_banner.setText("결과를 보냈습니다: %s — %s" % (wrappable(str(out["file"])), "AnimRef 에 알렸습니다." if out["notified"] else "AnimRef 가 꺼져 있어 result.json 만 저장했습니다."))
         self.win.statusBar().showMessage("AnimRef 결과 저장: " + str(out["file"]))

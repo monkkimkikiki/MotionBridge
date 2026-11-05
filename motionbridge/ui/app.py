@@ -26,7 +26,7 @@ from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
-from .widgets import NumField, PathTree, Worker
+from .widgets import NumField, PathTree, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -276,6 +276,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.vidfind, "영상으로 찾기")
         self.tabs.addTab(self._tab_help(), "추출 도우미")
         self.tabs.setMinimumWidth(470)
+        fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         split.addWidget(self.tabs)
 
         right = QWidget()
@@ -339,7 +340,7 @@ class MainWindow(QMainWindow):
         split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([500, 860])
+        split.setSizes([640, 740])
 
     # ------------------------------------------------------------------ 탭 0 (게임에서 추출)
     def _tab_extract(self) -> QWidget:
@@ -460,6 +461,7 @@ class MainWindow(QMainWindow):
         self.ex_list.itemSelectionChanged.connect(self._update_ex_count)
         v.addWidget(self.ex_list)
         self.ex_count = QLabel("")
+        self.ex_count.setWordWrap(True)
         v.addWidget(self.ex_count)
         h = QHBoxLayout()
         b = QPushButton("전체 선택")
@@ -490,6 +492,7 @@ class MainWindow(QMainWindow):
         g = QGroupBox("4) 추출된 파일 열기")
         v = QVBoxLayout(g)
         self.ex_dir_label = QLabel("")
+        self.ex_dir_label.setWordWrap(True)
         self.ex_dir_label.setTextFormat(Qt.TextFormat.RichText)
         self.ex_dir_label.setToolTip("클릭하면 탐색기에서 이 폴더가 열립니다")
         self.ex_dir_label.linkActivated.connect(lambda *_a: self._open_out_folder())
@@ -539,7 +542,7 @@ class MainWindow(QMainWindow):
     # ---- 폴더 열기
     def _update_dir_label(self, *_a) -> None:
         d = self.ex_out.text().strip()
-        self.ex_dir_label.setText('출력 폴더: <a href="open">%s</a> (클릭하면 탐색기로 열림)' % d.replace("&", "&amp;").replace("<", "&lt;") if d else "")
+        self.ex_dir_label.setText('출력 폴더: <a href="open">%s</a> (클릭하면 탐색기로 열림)' % wrappable(d).replace("&", "&amp;").replace("<", "&lt;") if d else "")
 
     def _open_out_folder(self) -> None:
         d = self.ex_out.text().strip()
@@ -667,7 +670,7 @@ class MainWindow(QMainWindow):
     def _update_helper_label(self) -> None:
         p = extractor.find_helper(self.cfg.get("helper"))
         if p:
-            self.ex_helper_label.setText(p)
+            self.ex_helper_label.setText(wrappable(p))
             self.ex_helper_label.setStyleSheet("")
         else:
             self.ex_helper_label.setText("찾지 못했습니다. tools/mbextract 를 빌드하거나 경로를 지정하세요 (README 참고).")
@@ -1122,7 +1125,8 @@ class MainWindow(QMainWindow):
     def _worker_failed(self, msg: str) -> None:
         self._worker = None
         self._set_busy(False)
-        QMessageBox.critical(self, "오류", msg.split("\n\n")[0])
+        first = msg.split("\n\n")[0]
+        QMessageBox.critical(self, "오류", first[len("RuntimeError: "):] if first.startswith("RuntimeError: ") else first)
         self.export_log.appendPlainText(msg)
 
     def _worker_progress(self, i: int, n: int, name: str) -> None:

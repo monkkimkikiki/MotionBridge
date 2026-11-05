@@ -150,6 +150,27 @@ def _http(url: str, payload: Optional[dict], headers: Dict[str, str], timeout: f
         raise VisionError("응답이 없습니다: %s" % e)
 
 
+def _http_stream(url: str, payload: dict, timeout: float):
+    """줄 단위 JSON 을 흘려주는 응답을 하나씩 돌려준다 (Ollama 모델 내려받기 진행 상황)."""
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for raw in r:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    yield json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    continue
+    except urllib.error.HTTPError as e:
+        raise VisionError("HTTP %d" % e.code)
+    except urllib.error.URLError as e:
+        raise VisionError("연결할 수 없습니다: %s" % getattr(e, "reason", e))
+    except (TimeoutError, OSError) as e:
+        raise VisionError("응답이 없습니다: %s" % e)
+
+
 def _b64(path: str) -> Tuple[str, str]:
     ext = os.path.splitext(path)[1].lower()
     mt = {".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}.get(ext, "image/jpeg")
@@ -179,9 +200,26 @@ class OllamaProvider(Provider):
     key = "ollama"
     label = "Ollama (내 PC, 무료)"
 
-    def __init__(self, model: str = OLLAMA_MODELS[0], host: str = DEFAULT_OLLAMA_HOST, post: Callable = _http, timeout: float = 300.0) -> None:
+    def __init__(self, model: str = OLLAMA_MODELS[0], host: str = DEFAULT_OLLAMA_HOST, post: Callable = _http, timeout: float = 300.0,
+                 stream: Callable = _http_stream) -> None:
         super().__init__(post)
-        self.model, self.host, self.timeout = model, host.rstrip("/"), timeout
+        self.model, self.host, self.timeout, self.stream = model, host.rstrip("/"), timeout, stream
+
+    def pull(self, on_progress: Optional[Callable[[int, str], None]] = None) -> None:
+        """모델을 내려받는다 (Ollama 가 실행 중이어야 함). on_progress(퍼센트, 상태 글)."""
+        pct, ok = 0, False
+        for ev in self.stream(self.host + "/api/pull", {"name": self.model, "stream": True}, 3600.0):
+            if ev.get("error"):
+                raise VisionError("모델을 받지 못했습니다: %s" % ev["error"])
+            total, done = ev.get("total"), ev.get("completed")
+            if total and done is not None:
+                pct = max(0, min(100, int(done * 100 / total)))
+            status = str(ev.get("status") or "")
+            ok = ok or status == "success"
+            if on_progress:
+                on_progress(100 if status == "success" else pct, status)
+        if not ok:
+            raise VisionError("모델 내려받기가 끝나지 않았습니다. 인터넷 연결을 확인하고 다시 시도하세요.")
 
     def check(self) -> Tuple[bool, str, List[str]]:
         """(사용 가능, 안내, 설치된 모델 이름들)"""
@@ -192,7 +230,9 @@ class OllamaProvider(Provider):
         names = [m.get("name", "") for m in d.get("models", []) if isinstance(m, dict)]
         base = self.model.split(":")[0]
         if not any(n == self.model or n.split(":")[0] == base for n in names):
-            return False, "모델 '%s' 이(가) 설치돼 있지 않습니다. 명령 창에서 'ollama pull %s' 를 실행하세요." % (self.model, self.model), names
+            have = ("\n이미 설치된 모델: %s (모델 칸에 이 중 하나를 적어도 됩니다)" % ", ".join(names)) if names else ""
+            return False, ("모델 '%s' 이(가) 아직 내려받아지지 않았습니다 (Ollama 는 켜져 있습니다).\n"
+                           "아래 [모델 받기] 버튼을 누르세요 (약 6GB, 한 번만 받으면 됩니다). 직접 받으려면 명령 창에서 'ollama pull %s'.%s") % (self.model, self.model, have), names
         return True, "Ollama 준비 완료 (%s)" % self.model, names
 
     def ask(self, image_path: str, prompt: str) -> str:

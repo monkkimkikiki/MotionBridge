@@ -10,6 +10,28 @@ from ..core.pathtree import Node, build_tree
 from ..core import filekind
 
 
+def wrappable(text: str) -> str:
+    """긴 경로가 좁은 칸에서 줄바꿈되도록 역슬래시와 슬래시 뒤에 보이지 않는 공백을 넣는다 (넣지 않으면 경로 전체가 한 덩어리라 패널이 넓어진다)."""
+    return (text or "").replace("\\", "\\\u200b").replace("/", "/\u200b")
+
+
+def fit_widths(root) -> None:
+    """콤보 상자가 가장 긴 항목 길이만큼 넓어져 패널을 밀어내지 않게 하고, 긴 설명 글은 줄바꿈되게 한다."""
+    from PySide6.QtWidgets import QComboBox, QLabel
+
+    try:
+        combos = list(root.findChildren(QComboBox))
+        labels = list(root.findChildren(QLabel))
+    except TypeError:  # 시험용 가짜 Qt
+        return
+    for cb in combos:
+        cb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        cb.setMinimumContentsLength(8)
+    for lb in labels:
+        if len(lb.text()) > 24:
+            lb.setWordWrap(True)
+
+
 class Worker(QThread):
     """무거운 작업(파일 읽기, Blender 호출, 내보내기)을 UI 밖에서 실행."""
 

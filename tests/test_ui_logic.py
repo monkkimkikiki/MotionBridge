@@ -303,7 +303,7 @@ def test_extract_tab():
         GS.build(game_ok, False)
         GS.build(game_enc, True)
         mw = A.MainWindow()
-        assert mw.tabs is not None and mw.ex_helper_label.text() == fb
+        assert mw.tabs is not None and mw.ex_helper_label.text().replace("\u200b", "") == fb
         # 검사 전에는 추출 불가
         QMessageBox.calls.clear()
         mw._search_anims()
@@ -388,7 +388,7 @@ def test_extract_tab():
             A.extractor.export_meshes, A.meshconv.convert_mesh, A.osopen.open_in_explorer = fake_em, fake_cm, lambda p: opened.append(p) or True
             mw.ex_kind.setCurrentIndex(1)
             mw.ex_out.setText(outd)
-            assert outd in mw.ex_dir_label._text and "href" in mw.ex_dir_label._text
+            assert outd in mw.ex_dir_label._text.replace("\u200b", "") and "href" in mw.ex_dir_label._text
             mw.ex_list.set_paths(["Game/Content/Chars/SK_Hero.uasset"])
             mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
             A.bridge.find_blender = lambda *a, **k: None
