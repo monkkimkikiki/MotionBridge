@@ -1,6 +1,8 @@
 """3D 뷰포트 위젯 (QPainter 소프트웨어 렌더링). 계산은 viewer_math 에 있다."""
 from __future__ import annotations
 
+import time
+
 from typing import Optional
 
 import numpy as np
@@ -9,7 +11,7 @@ from PySide6.QtCore import QLineF
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
-from .viewer_math import (COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, render_surface,
+from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, render_surface,
                           skin_display, wire_segments)
 
 _POINT_RADIUS = {"pt_mesh": 0.0, "pt_target_joints": 2.0, "pt_plant": 6.0, "pt_bad": 6.0}
@@ -48,6 +50,10 @@ class Viewport(QWidget):
         self.paused = False  # 백그라운드 작업 중에는 데이터를 건드리지 않는다
         self.show_ghost = True
         self.mesh_mode = "solid"
+        self.mesh_quality = "auto"  # auto | low | mid | high — 무거운 메시를 뷰포트에서만 가볍게 그린다 (원본 데이터는 그대로)
+        self.lod = False  # 재생 중이면 True: 표면 샘플을 솎아서 그린다
+        self._mesh_ms = 0.0  # 최근 메시 그리기 시간(이동평균, ms). 느리면 자동으로 더 솎는다
+        self.quality_note = ""
         self.show_bones = True
         self.show_ik = True
         self._dm = {}  # (메시 id, 종류) -> DisplayMesh
@@ -70,22 +76,36 @@ class Viewport(QWidget):
 
     # --------------------------------------------------------------- 메시
     def _display_meshes(self, kind: str):
-        """kind: 'full'(솔리드/머티리얼) 또는 'wire'. 타깃이 바뀌면 캐시를 비운다."""
+        """kind: 'full'(솔리드/머티리얼) 또는 'wire'. 타깃이 바뀌거나 품질이 바뀌면 캐시를 다시 만든다."""
         tgt = self.pr.tgt
         if tgt is not self._dm_owner:
             self._dm.clear()
             self._dm_owner = tgt
+        q = pick_quality(sum(len(m.faces) for m in tgt.meshes), self.mesh_quality)
+        self.quality_note = ("무거운 메시라 자동으로 낮은 품질로 표시 중 (보기 → 메시 품질에서 변경, 데이터는 그대로)" if (self.mesh_quality == "auto" and q != "high") else "")
+        tris, samples, wire_tris = QUALITY[q]
         out = []
         for m in tgt.meshes:
-            key = (id(m), kind)
+            key = (id(m), kind, q)
             if key not in self._dm:
+                for k in [k for k in self._dm if k[0] == id(m) and k[1] == kind]:
+                    del self._dm[k]  # 같은 메시의 다른 품질 캐시는 버린다
                 if kind == "wire":
-                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=7000, n_samples=8, want_edges=True)
+                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=wire_tris, n_samples=8, want_edges=True)
                 else:
-                    self._dm[key] = build_display_mesh(m, decode_texture)
+                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=tris, n_samples=samples)
             if self._dm[key] is not None:
                 out.append(self._dm[key])
         return out
+
+    def _sample_step(self) -> int:
+        """움직이는 동안(재생/드래그)에는 표면 샘플을 솎고, 그리기가 느리면 더 솎는다."""
+        step = 2 if (self.lod or self._last is not None) else 1
+        if self._mesh_ms > 90.0:
+            step = max(step, 4)
+        elif self._mesh_ms > 55.0:
+            step = max(step, 3)
+        return step
 
     def _draw_mesh(self, p: QPainter, w: float, h: float) -> str:
         """표면/와이어 메시를 그린다. 상태 문구(없으면 빈 문자열)를 돌려준다."""
@@ -102,7 +122,10 @@ class Viewport(QWidget):
             p.setPen(QPen(QColor(150, 162, 188, 150), 1.0))
             p.drawLines([QLineF(float(a), float(b), float(c), float(d)) for a, b, c, d in self.cam.project_segments(segs, w, h) if np.isfinite(a + b + c + d)])
             return ""
-        img = render_surface(items, self.cam, int(w), int(h), material=(mode == "material"))
+        t0 = time.perf_counter()
+        img = render_surface(items, self.cam, int(w), int(h), material=(mode == "material"), sample_step=self._sample_step())
+        ms = (time.perf_counter() - t0) * 1000.0
+        self._mesh_ms = ms if self._mesh_ms == 0.0 else 0.7 * self._mesh_ms + 0.3 * ms
         if img is not None:
             self._qimg_ref = img
             qimg = QImage(img.data, img.shape[1], img.shape[0], img.shape[1] * 4, QImage.Format.Format_RGBA8888)
@@ -111,7 +134,7 @@ class Viewport(QWidget):
             p.setOpacity(1.0)
         if mode == "material" and not any(dm.has_material for dm in dms):
             return "머티리얼 정보가 없는 메시라 솔리드로 표시 중 (GLB 추출 시 '머티리얼/텍스처 포함' 체크)"
-        return ""
+        return self.quality_note
 
     # --------------------------------------------------------------- 그리기
     def paintEvent(self, ev):
@@ -200,6 +223,8 @@ class Viewport(QWidget):
 
     def mouseReleaseEvent(self, ev):
         self._last = None
+        self._mesh_ms = 0.0
+        self.update()  # 드래그가 끝나면 전체 품질로 다시 그린다
 
     def mouseMoveEvent(self, ev):
         if self._last is None:

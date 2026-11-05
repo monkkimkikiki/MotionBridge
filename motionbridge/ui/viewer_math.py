@@ -155,6 +155,7 @@ class ViewData:
     height: float = 1.0
     center: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ground_y: float = 0.0
+    _pt_cache: Dict[Tuple[int, int], Mesh] = field(default_factory=dict, repr=False)  # (메시 id, 최대 점 수) -> 간추린 정점 부분집합
 
     @staticmethod
     def build(pr, show_helpers: bool = False) -> "ViewData":
@@ -218,15 +219,23 @@ class ViewData:
         p = main[min(frame, main.shape[0] - 1)]
         return np.array([p[:, 0].mean(), self.center[1], p[:, 2].mean()])
 
+    def _point_subset(self, m: Mesh, total: int, max_points: int) -> Mesh:
+        """점 표시용으로 정점을 미리 간추려 둔다. 무거운 메시(수십만 정점)를 매 프레임 통째로 스키닝하지 않기 위함."""
+        key = (id(m), max_points)
+        sub = self._pt_cache.get(key)
+        if sub is None:
+            step = max(1, int(np.ceil(total / max_points)))
+            idx = np.arange(0, len(m.vertices), step)
+            sub = Mesh(m.name, m.vertices[idx], m.faces[:0], m.joints[idx], m.weights[idx])
+            self._pt_cache[key] = sub
+        return sub
+
     def mesh_points(self, pr, frame: int, max_points: int = 8000) -> Optional[np.ndarray]:
         if not (pr.tgt and pr.tgt.meshes and self.tgt_wr is not None):
             return None
         f = min(frame, self.tgt_wr.shape[0] - 1)
-        pts = []
-        for m in pr.tgt.meshes:
-            v = m.skin(pr.tgt.skeleton, self.tgt_wr[f], self.tgt_wp[f])
-            step = max(1, int(np.ceil(len(v) * len(pr.tgt.meshes) / max_points)))
-            pts.append(v[::step])
+        total = int(sum(len(m.vertices) for m in pr.tgt.meshes))
+        pts = [self._point_subset(m, total, max_points).skin(pr.tgt.skeleton, self.tgt_wr[f], self.tgt_wp[f]) for m in pr.tgt.meshes]
         return Q.rotate(self.Ft, np.concatenate(pts))
 
 
@@ -350,6 +359,18 @@ def _cluster(verts: np.ndarray, faces: np.ndarray, lo: np.ndarray, cell: float):
     return cid, t[np.sort(idx)]
 
 
+# 메시 품질 -> (솔리드 삼각형 수, 표면 샘플 수, 와이어 삼각형 수)
+QUALITY = {"low": (4000, 15000, 3000), "mid": (12000, 40000, 5000), "high": (40000, 90000, 7000)}
+QUALITY_NAMES = [("auto", "자동"), ("low", "낮음"), ("mid", "보통"), ("high", "높음")]
+
+
+def pick_quality(n_faces: int, setting: str = "auto") -> str:
+    """'auto' 면 삼각형 수로 고른다: 15만 초과 low, 5만 초과 mid, 그 이하 high."""
+    if setting in QUALITY:
+        return setting
+    return "low" if n_faces > 150000 else ("mid" if n_faces > 50000 else "high")
+
+
 def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples: int = 90000, seed: int = 1, want_edges: bool = False) -> Optional[DisplayMesh]:
     """decode(bytes) -> (H,W,3|4) uint8 또는 None. 텍스처 해독은 Qt 쪽에서 넣어 준다."""
     if len(mesh.faces) == 0 or len(mesh.vertices) == 0:
@@ -404,19 +425,23 @@ def skin_display(dm: DisplayMesh, skel, wr: np.ndarray, wp: np.ndarray, Ft: np.n
     return Q.rotate(Ft, dm.sub.skin(skel, wr, wp))
 
 
-def render_surface(items, cam: "OrbitCamera", w: int, h: int, material: bool) -> Optional[np.ndarray]:
-    """items = [(DisplayMesh, 정점(R,3))]. 깊이 순서대로 점을 찍은 (h,w,4) uint8 RGBA 이미지. 덮이지 않은 곳은 알파 0."""
+def render_surface(items, cam: "OrbitCamera", w: int, h: int, material: bool, sample_step: int = 1) -> Optional[np.ndarray]:
+    """items = [(DisplayMesh, 정점(R,3))]. 깊이 순서대로 점을 찍은 (h,w,4) uint8 RGBA 이미지. 덮이지 않은 곳은 알파 0.
+
+    sample_step > 1 이면 표면 샘플을 그 간격으로 솎아서 그린다(회전/재생 중 가벼운 표시). 점 크기는 밀도에 맞춰 자동으로 커진다."""
     if w < 2 or h < 2 or not items:
         return None
     Ps, Ns, Cs, Os = [], [], [], []
+    sl = slice(None, None, max(1, int(sample_step)))
     for dm, v in items:
         tv = v[dm.tris]
         n = np.cross(tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0])
         n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
-        Ps.append(np.einsum("nk,nkc->nc", dm.samp_bary, tv[dm.samp_tri]))
-        Ns.append(n[dm.samp_tri])
-        Cs.append(dm.samp_rgb if material and dm.has_material else np.tile(DEFAULT_SURFACE_RGB, (len(dm.samp_tri), 1)))
-        Os.append(np.full(len(dm.samp_tri), dm.orient))
+        st = dm.samp_tri[sl]
+        Ps.append(np.einsum("nk,nkc->nc", dm.samp_bary[sl], tv[st]))
+        Ns.append(n[st])
+        Cs.append(dm.samp_rgb[sl] if material and dm.has_material else np.tile(DEFAULT_SURFACE_RGB, (len(st), 1)))
+        Os.append(np.full(len(st), dm.orient))
     P, N, C, O = np.concatenate(Ps), np.concatenate(Ns), np.concatenate(Cs), np.concatenate(Os)
     xy, z = cam.project(P, float(w), float(h))
     ix, iy = np.floor(xy[:, 0]), np.floor(xy[:, 1])

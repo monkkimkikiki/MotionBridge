@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import types
 
 import numpy as np
 
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from motionbridge.core.pipeline import Project  # noqa: E402
 from motionbridge.ui.viewer_math import COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_scene  # noqa: E402
 import test_pipeline as TP  # noqa: E402
+import synth  # noqa: E402
 
 
 def test_camera():
@@ -240,7 +242,49 @@ def test_gltf_material_roundtrip():
     print("gltf material roundtrip OK")
 
 
+def test_heavy_mesh_performance():
+    """무거운 메시: 점 표시는 간추린 정점만 스키닝하고, 품질은 삼각형 수로 자동 선택, 솎아 그리기는 점 수를 줄인다."""
+    from motionbridge.core.model import Mesh as M
+    from motionbridge.ui.viewer_math import QUALITY, build_display_mesh, pick_quality, render_surface
+
+    assert pick_quality(10000) == "high" and pick_quality(80000) == "mid" and pick_quality(428066) == "low"
+    assert pick_quality(428066, "high") == "high" and pick_quality(10, "low") == "low"
+    assert QUALITY["low"][0] < QUALITY["mid"][0] < QUALITY["high"][0] and QUALITY["low"][1] < QUALITY["high"][1]
+
+    # 점 표시: 정점 20만 개 메시를 매 프레임 통째로 스키닝하지 않는다
+    sk, meta = synth.build_skeleton("mixamo", "y_up_z", 1.0, "T", "aligned")
+    big = _sphere(400, 500)  # 약 20만 정점
+    big.joints = np.zeros((len(big.vertices), 1), int)
+    pr = Project()
+    pr.tgt = types.SimpleNamespace(meshes=[big], skeleton=sk)
+    vd = ViewData()
+    bwr, bwp = sk.bind_world()
+    vd.tgt_wr, vd.tgt_wp, vd.Ft = bwr[None], bwp[None], np.array([1.0, 0, 0, 0])
+    sizes = []
+    real = M.skin
+    M.skin = lambda self, *a, **k: (sizes.append(len(self.vertices)), real(self, *a, **k))[1]
+    try:
+        pts = vd.mesh_points(pr, 0, max_points=8000)
+        pts2 = vd.mesh_points(pr, 0, max_points=8000)
+    finally:
+        M.skin = real
+    assert len(big.vertices) > 100000 and sizes and max(sizes) <= 8000 and len(pts) == sizes[0] and np.allclose(pts, pts2), (sizes, len(big.vertices))
+    assert len(vd._pt_cache) == 1, "간추린 정점은 한 번만 만든다"
+
+    # 솎아 그리기
+    cam = OrbitCamera()
+    cam.frame(np.array([0.0, 1.0, 0.0]), 1.2)
+    m = _sphere(60, 80)
+    dm = build_display_mesh(m, max_tris=1500)
+    full = render_surface([(dm, dm.sub.vertices)], cam, 200, 200, False)
+    thin = render_surface([(dm, dm.sub.vertices)], cam, 200, 200, False, sample_step=3)
+    assert thin is not None and thin[100, 100, 3] == 255
+    assert abs(float((thin[..., 3] > 0).mean()) - float((full[..., 3] > 0).mean())) < 0.05, "솎아도 모양(면적)은 비슷해야 함"
+    print("heavy mesh performance OK")
+
+
 if __name__ == "__main__":
+    test_heavy_mesh_performance()
     test_camera()
     test_reduced_parents()
     test_display_mesh_render()

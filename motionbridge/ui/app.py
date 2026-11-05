@@ -24,7 +24,7 @@ from ..core.mapping import FINGERS, SLOT_ORDER, slot_label
 from ..core.pipeline import ExportOptions, Project
 from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
-from .viewer_math import ViewData
+from .viewer_math import QUALITY_NAMES, ViewData
 from .widgets import NumField, PathTree, Worker
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
@@ -265,6 +265,15 @@ class MainWindow(QMainWindow):
         self.viewport.mesh_mode = self.mesh_combo.currentData() or "solid"
         self.mesh_combo.currentIndexChanged.connect(self._mesh_mode_changed)
         opts.addWidget(self.mesh_combo)
+        opts.addWidget(QLabel("품질"))
+        self.quality_combo = QComboBox()
+        for k, n in QUALITY_NAMES:
+            self.quality_combo.addItem(n, k)
+        self.quality_combo.setToolTip("무거운 메시가 버벅이면 낮추세요. 화면에서만 단순화하고 내보내기 데이터는 그대로입니다. 자동 = 삼각형 수로 선택")
+        self.quality_combo.setCurrentIndex(max(self.quality_combo.findData(self.cfg.get("mesh_quality", "auto")), 0))
+        self.viewport.mesh_quality = self.quality_combo.currentData() or "auto"
+        self.quality_combo.currentIndexChanged.connect(self._quality_changed)
+        opts.addWidget(self.quality_combo)
         b = QPushButton("화면 맞추기")
         b.clicked.connect(self._reframe)
         opts.addWidget(b)
@@ -1415,6 +1424,9 @@ class MainWindow(QMainWindow):
 
     def _toggle_play(self, on: bool) -> None:
         self.btn_play.setText("⏸ 정지" if on else "▶ 재생")
+        self.viewport.lod = bool(on)  # 재생 중에는 메시를 더 가볍게 그리고, 멈추면 전체 품질로 다시 그린다
+        self.viewport._mesh_ms = 0.0
+        self.viewport.update()
         if on:
             fps = self.vd.fps if self.vd else 30.0
             self.play_timer.start(max(5, int(1000.0 / max(fps, 1.0))))
@@ -1432,6 +1444,12 @@ class MainWindow(QMainWindow):
     def _mesh_mode_changed(self, *_a) -> None:
         self.viewport.mesh_mode = self.mesh_combo.currentData() or "solid"
         self.cfg["mesh_mode"] = self.viewport.mesh_mode
+        bridge.save_config(self.cfg)
+        self.viewport.update()
+
+    def _quality_changed(self, *_a) -> None:
+        self.viewport.mesh_quality = self.quality_combo.currentData() or "auto"
+        self.cfg["mesh_quality"] = self.viewport.mesh_quality
         bridge.save_config(self.cfg)
         self.viewport.update()
 

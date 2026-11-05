@@ -6,7 +6,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 from motionbridge.core import quat as Q  # noqa: E402
-from motionbridge.core.mapping import auto_map, classify_name, detect_frame, frame_from_axes, SLOT_ORDER  # noqa: E402
+from motionbridge.core.mapping import auto_map, classify_name, detect_frame, frame_from_axes, refine_frame_with_anim, SLOT_ORDER  # noqa: E402
+from motionbridge.core.model import Animation, Skeleton, fk, world_to_local  # noqa: E402
 import synth  # noqa: E402
 
 EXPECT = {
@@ -67,7 +68,72 @@ def test_frames():
     print("frames OK")
 
 
+def test_prefers_standard_names():
+    """소품 본(Dwarf_l_sheepArmR)이 진짜 팔(upperarm_l)보다 얕아도 표준 이름이 이긴다."""
+    names = ["root", "pelvis", "Dwarf_l_sheepArmR", "Dwarf_l_sheepArmL", "spine_01", "upperarm_l", "upperarm_r", "head", "neck_01", "thigh_l", "thigh_r"]
+    par = [-1, 0, 0, 0, 1, 4, 4, 4, 4, 1, 1]
+    sk = Skeleton(names, par, np.zeros((len(names), 3)))
+    m = auto_map(sk)
+    assert names[m["L_UpperArm"]] == "upperarm_l" and names[m["R_UpperArm"]] == "upperarm_r", {k: names[v] for k, v in m.items()}
+    # 표준 이름이 없으면 그래도 소품 본이라도 쓴다 (매핑을 비우지 않음)
+    sk2 = Skeleton(["root", "Dwarf_l_sheepArmR"], [-1, 0], np.zeros((2, 3)))
+    assert "L_UpperArm" in auto_map(sk2)
+    print("standard names preferred OK")
+
+
+def test_hunched_character_frame():
+    """구부정한 캐릭터(드워프 실측: 골반→머리가 앞으로 19° 기욺)도 상방이 정확히 축이어야 한다. 아니면 모션이 대각선으로 솟는다."""
+    def build(head_dz, spine_dz):
+        spec = [("root", -1, (0, 0, 0)), ("pelvis", 0, (0, 1.0, 0)), ("spine_01", 1, (0, 1.2, spine_dz)), ("head", 2, (0, 1.65, head_dz)),
+                ("thigh_l", 1, (0.1, 0.95, 0)), ("calf_l", 4, (0.1, 0.5, 0)), ("foot_l", 5, (0.1, 0.05, 0)),
+                ("thigh_r", 1, (-0.1, 0.95, 0)), ("calf_r", 7, (-0.1, 0.5, 0)), ("foot_r", 8, (-0.1, 0.05, 0))]
+        names = [n for n, _, _ in spec]
+        par = [p for _, p, _ in spec]
+        pos = np.array([q for _, _, q in spec], float)
+        off = pos.copy()
+        for i, p in enumerate(par):
+            if p >= 0:
+                off[i] = pos[i] - pos[p]
+        return Skeleton(names, par, off)
+
+    for head_dz in (0.0, -0.25, -0.35, 0.35):  # 0.35/0.65 ≈ 28° (몸통 기준 15° 한계를 훌쩍 넘음)
+        sk = build(head_dz, head_dz * 0.4)
+        F, desc = detect_frame(sk, auto_map(sk))
+        up = Q.rotate(F, np.array([0.0, 1.0, 0.0]))
+        # 표준 프레임에서 월드 +Y 는 정확히 표준 상방(+Y)이어야 한다 (기울지 않음)
+        assert np.allclose(Q.rotate(F, np.array([0.0, 1.0, 0.0])), [0, 1, 0], atol=1e-6), (head_dz, up, desc)
+        assert "+Y" in desc, desc
+    # 다리를 못 쓰면 몸통 기준 35° 까지 축으로 맞춘다 (발이 없는 리그)
+    print("hunched frame OK")
+
+
+def test_refine_frame():
+    sk, meta = synth.build_skeleton("mixamo", "y_up_z", 1.0, "T", "aligned")
+    slots = auto_map(sk)
+    anim, _ = synth.walk_animation(sk, meta, n_frames=30)
+    F0, d0 = detect_frame(sk, slots)
+    F, d, note = refine_frame_with_anim(sk, anim, slots, F0, d0)
+    assert note is None and F is F0, "멀쩡한 클립을 건드림"
+    # 클립 전체를 X 축으로 90도 눕힌다 (축이 나간 클립)
+    wr, wp = fk(sk, anim.rot, anim.pos)
+    R = Q.from_axis_angle([1, 0, 0], np.radians(90.0))
+    wr2, wp2 = Q.mul(R, wr), Q.rotate(R, wp)
+    lr, lp = world_to_local(sk, wr2, wp2)
+    bad = Animation("lying", anim.fps, lr, lp)
+    F2, d2, note = refine_frame_with_anim(sk, bad, slots, F0, d0)
+    assert note and "클립" in d2, (d2, note)
+    # 고친 좌표계로 보면 몸통이 서 있다
+    wr3, wp3 = fk(sk, bad.rot, bad.pos)
+    up = Q.rotate(np.broadcast_to(F2, (len(wp3), 4)), wp3[:, slots["Head"]] - wp3[:, slots["Hips"]])
+    up = up / np.linalg.norm(up, axis=1)[:, None]
+    assert float(up[:, 1].min()) > 0.9, up[:, 1].min()
+    print("refine frame OK")
+
+
 if __name__ == "__main__":
+    test_prefers_standard_names()
+    test_hunched_character_frame()
+    test_refine_frame()
     test_names()
     test_frames()
     print("test_mapping ALL OK")

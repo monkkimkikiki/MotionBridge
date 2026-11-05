@@ -73,6 +73,23 @@ def _split_side(toks: List[str]) -> Tuple[Optional[str], List[str]]:
     return side, rest
 
 
+_VOCAB = {
+    "hips", "pelvis", "hip", "spine", "chest", "abdomen", "torso", "neck", "head", "shoulder", "clavicle", "collar", "lowerarm", "forearm",
+    "elbow", "fore", "arm", "lower", "upperarm", "upper", "hand", "wrist", "toe", "toes", "ball", "foot", "ankle", "calf", "shin", "lowleg",
+    "lowerleg", "knee", "low", "leg", "thigh", "upleg", "upperleg", "up", "l", "r", "left", "right",
+} | set(_FINGER_WORDS)
+
+
+def _extra_tokens(name: str) -> int:
+    """이름에서 표준 부위 단어/좌우/숫자가 아닌 토큰 수. 0 에 가까울수록 '표준 이름'이다 (예: upperarm_l 0, Dwarf_l_sheepArmR 3)."""
+    n = 0
+    for t in _tokens(name):
+        if t.isdigit() or t in _VOCAB:
+            continue
+        n += 1
+    return n
+
+
 def classify_name(name: str):
     """이름 -> (side, part, finger_digit). part: Hips/Spine/Neck/Head/Shoulder/UpperArm/LowerArm/Hand/UpLeg/LowLeg/Foot/Toe/PlainLeg/Finger:<이름>."""
     toks = _tokens(name)
@@ -129,13 +146,19 @@ def auto_map(skel: Skeleton) -> Dict[str, int]:
         side, part, dg = c
         cands.setdefault((side, part), []).append((j, dg))
 
+    extra = [_extra_tokens(nm) for nm in skel.names]
+
+    def rank(j):
+        # 표준 이름(낯선 단어가 적은 것)을 먼저, 그다음 얕은 것. 'Dwarf_l_sheepArmR' 같은 소품 본이 진짜 팔을 가리지 않게 한다.
+        return (extra[j], skel.depth(j), j)
+
     def shallowest(lst):
-        return min(lst, key=lambda x: (skel.depth(x[0]), x[0]))[0]
+        return min(lst, key=lambda x: rank(x[0]))[0]
 
     out: Dict[str, int] = {}
     if (None, "Hips") in cands:
         out["Hips"] = shallowest(cands[(None, "Hips")])
-    sp = sorted(cands.get((None, "Spine"), []), key=lambda x: (skel.depth(x[0]), x[0]))
+    sp = sorted(cands.get((None, "Spine"), []), key=lambda x: (skel.depth(x[0]), x[0]))  # 척추는 깊이순이 중요(표준 이름 우선은 shallowest 에서)
     if sp:
         idxs = [x[0] for x in sp]
         if len(idxs) == 1:
@@ -170,7 +193,7 @@ def auto_map(skel: Skeleton) -> Dict[str, int]:
                     di = d + shift
                     if 1 <= di <= 3:
                         key = "%s_%s%d" % (side, f, di)
-                        if key not in out or skel.depth(j) < skel.depth(out[key]):
+                        if key not in out or rank(j) < rank(out[key]):
                             out[key] = j
             else:
                 chain = sorted(lst, key=lambda x: skel.depth(x[0]))[:3]
@@ -221,6 +244,46 @@ def frame_from_axes(up: str, fwd: str) -> np.ndarray:
     return frame_from_vectors(left, u, f)
 
 
+def _snap_axis(v: np.ndarray, tol_deg: float) -> Optional[np.ndarray]:
+    """v 가 좌표축에서 tol_deg 이내면 그 축, 아니면 None."""
+    n = float(np.linalg.norm(v))
+    if n < 1e-12:
+        return None
+    v = v / n
+    best, bd = None, -2.0
+    for a in AXES.values():
+        d = float(np.dot(v, a))
+        if d > bd:
+            best, bd = a, d
+    return best.copy() if np.degrees(np.arccos(np.clip(bd, -1, 1))) <= tol_deg else None
+
+
+def estimate_up(bwp: np.ndarray, slots: Dict[str, int]) -> Optional[np.ndarray]:
+    """바인드 포즈 월드 위치로 상방 추정. 구부정한 캐릭터(드워프, 괴물)는 골반→머리 벡터가 앞으로 기울어 있어서(실제 19°),
+    그것만 믿으면 좌표계가 기울어 '공격하면서 대각선으로 솟는' 모션이 된다. 서 있는 다리는 거의 수직이므로 다리(발→골반)를 먼저 보고,
+    좌표축에 가까우면(25° 이내) 그 축으로 맞춘다. 다리를 못 쓰면 몸통(35° 이내), 그래도 안 되면 몸통 벡터 그대로."""
+    hips = slots.get("Hips")
+    top = slots.get("Head", slots.get("Neck", slots.get("Spine2")))
+    if hips is None:
+        return None
+    if "L_Foot" in slots and "R_Foot" in slots:
+        leg = bwp[hips] - (bwp[slots["L_Foot"]] + bwp[slots["R_Foot"]]) / 2.0
+        a = _snap_axis(leg, 25.0)
+        if a is not None:
+            return a
+    if top is None:
+        return None
+    torso = bwp[top] - bwp[hips]
+    a = _snap_axis(torso, 35.0)
+    if a is not None:
+        return a
+    a = _snap_axis(torso, 60.0)  # 게임 리그는 거의 항상 축 정렬이다. 사람이 아닌 몸(육각 괴물 등)의 심하게 기운 몸통도 가장 가까운 축으로
+    if a is not None:
+        return a
+    n = float(np.linalg.norm(torso))
+    return torso / n if n > 1e-9 else None
+
+
 def detect_frame(skel: Skeleton, slots: Dict[str, int]) -> Optional[Tuple[np.ndarray, str]]:
     """(월드->표준 쿼터니언, 설명) 또는 None. 골반/머리/양쪽 허벅지가 필요하다."""
     need_up = "Hips" in slots and any(k in slots for k in ("Head", "Neck", "Spine2"))
@@ -228,19 +291,30 @@ def detect_frame(skel: Skeleton, slots: Dict[str, int]) -> Optional[Tuple[np.nda
     if not (need_up and need_lr):
         return None
     _, bwp = skel.bind_world()
-    top = slots.get("Head", slots.get("Neck", slots.get("Spine2")))
-    up = bwp[top] - bwp[slots["Hips"]]
-    if np.linalg.norm(up) < 1e-9:
+    up = estimate_up(bwp, slots)
+    if up is None:
         return None
-    up = _snap(up)
     if "L_UpLeg" in slots and "R_UpLeg" in slots:
         left = bwp[slots["L_UpLeg"]] - bwp[slots["R_UpLeg"]]
     else:
         left = bwp[slots["L_UpperArm"]] - bwp[slots["R_UpperArm"]]
+    return _frame_from_up_left(up, left, snap_up=False, left_tol=35.0)
+
+
+DEFAULT_FRAME = frame_from_axes("+Y", "+Z")
+
+
+def _frame_from_up_left(up: np.ndarray, left: np.ndarray, snap_up: bool = True, left_tol: float = 15.0) -> Optional[Tuple[np.ndarray, str]]:
+    if np.linalg.norm(up) < 1e-9:
+        return None
+    up = _snap(up) if snap_up else up / np.linalg.norm(up)
     left = left - up * float(np.dot(left, up))
     if np.linalg.norm(left) < 1e-9:
         return None
-    left = _snap(left / np.linalg.norm(left))
+    left = left / np.linalg.norm(left)
+    a = _snap_axis(left, left_tol)
+    if a is not None:
+        left = a - up * float(np.dot(a, up))  # up 이 축이 아닐 때를 대비해 다시 수직화
     left = left - up * float(np.dot(left, up))
     left /= np.linalg.norm(left)
     fwd = np.cross(left, up)
@@ -248,9 +322,43 @@ def detect_frame(skel: Skeleton, slots: Dict[str, int]) -> Optional[Tuple[np.nda
 
     def nm(v):
         key = tuple(np.round(v).astype(int))
-        return names.get(key, "(%.2f,%.2f,%.2f)" % tuple(v))
+        ok = np.allclose(v, np.array(key, float), atol=1e-3)
+        return names[key] if ok and key in names else "(%.2f,%.2f,%.2f)" % tuple(v)
 
     return frame_from_vectors(left, up, fwd), "상방 %s / 전방 %s" % (nm(up), nm(fwd))
 
 
-DEFAULT_FRAME = frame_from_axes("+Y", "+Z")
+def refine_frame_with_anim(skel: Skeleton, anim, slots: Dict[str, int], F: np.ndarray, desc: str,
+                           tol_deg: float = 60.0, min_fraction: float = 0.8) -> Tuple[np.ndarray, str, Optional[str]]:
+    """바인드 포즈로 잡은 좌표계가 클립의 실제 자세와 어긋나면(몸통이 거의 내내 옆/뒤집혀 있음) 클립의 평균 자세로 다시 잡는다.
+
+    돌려주는 값: (프레임, 설명, 알림 문장 또는 None). 어긋남이 없으면 입력을 그대로 돌려준다.
+    """
+    from .model import fk
+
+    top = slots.get("Head", slots.get("Neck", slots.get("Spine2")))
+    hips = slots.get("Hips")
+    if top is None or hips is None or anim.n_frames < 2:
+        return F, desc, None
+    pair = (("L_UpLeg", "R_UpLeg"), ("L_UpperArm", "R_UpperArm"))
+    lr = next(((slots[a], slots[b]) for a, b in pair if a in slots and b in slots), None)
+    if lr is None:
+        return F, desc, None
+    wr, wp = fk(skel, anim.rot, anim.pos)
+    up_w = wp[:, top] - wp[:, hips]
+    ln = np.linalg.norm(up_w, axis=1)
+    ok = ln > 1e-9
+    if ok.sum() < 2:
+        return F, desc, None
+    up_w = up_w[ok] / ln[ok][:, None]
+    std_up = Q.rotate(np.broadcast_to(F, (len(up_w), 4)), up_w)  # 표준 프레임에서 본 몸통 방향 (표준 상방 = +Y)
+    ang = np.degrees(np.arccos(np.clip(std_up[:, 1], -1, 1)))
+    if float(np.mean(ang > tol_deg)) < min_fraction:
+        return F, desc, None
+    left_w = wp[:, lr[0]] - wp[:, lr[1]]
+    ll = np.linalg.norm(left_w, axis=1)
+    left_w = (left_w[ok] / np.maximum(ll[ok], 1e-9)[:, None])
+    det = _frame_from_up_left(up_w.mean(0), left_w.mean(0))
+    if det is None:
+        return F, desc, None
+    return det[0], det[1] + " (클립 자세 기준)", "바인드 포즈로 잡은 좌표계(%s)가 클립의 실제 자세와 맞지 않아 클립 기준으로 다시 잡았습니다: %s" % (desc, det[1])

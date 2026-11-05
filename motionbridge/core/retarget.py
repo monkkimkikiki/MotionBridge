@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import quat as Q
-from .mapping import DEFAULT_FRAME, detect_frame, frame_from_axes
+from .mapping import DEFAULT_FRAME, detect_frame, frame_from_axes, refine_frame_with_anim
 from .model import Animation, Skeleton, fk
 
 
@@ -188,6 +188,10 @@ def retarget(
     bwr_s, bwp_s = src.bind_world()
     bwr_t, bwp_t = tgt.bind_world()
     Fs, desc_s = _resolve_frame(src, st.src_up, st.src_fwd, src_slots)
+    if st.src_up == "auto" and st.src_fwd == "auto" and src_slots:
+        Fs, desc_s, note = refine_frame_with_anim(src, sanim, src_slots, Fs, desc_s)
+        if note:
+            warnings.append(note)
     Ft, desc_t = _resolve_frame(tgt, st.tgt_up, st.tgt_fwd, tgt_slots)
     FtI = Q.conj(Ft)
 
