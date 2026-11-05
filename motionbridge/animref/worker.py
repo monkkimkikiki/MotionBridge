@@ -19,6 +19,10 @@ def main():
         out.flush()
 
     os.environ["ANIMREF_WORKER"] = "1"
+    if os.environ.get("ANIMREF_WORKER_TRACE"):  # 진단용: 멈추면 N초 뒤 어디서 멈췄는지 표준오류에 남기고 끝낸다
+        import faulthandler
+
+        faulthandler.dump_traceback_later(int(os.environ["ANIMREF_WORKER_TRACE"]), exit=True)
     os.environ.setdefault("YOLO_VERBOSE", "False")
     os.environ.setdefault("YOLO_AUTOINSTALL", "False")
     root = Path(__file__).resolve().parent.parent       # 이 폴더의 부모 = 'animref' 패키지가 있는 곳

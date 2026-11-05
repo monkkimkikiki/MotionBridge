@@ -8,8 +8,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install numpy opencv-python-headless Pillow imageio-ffmpeg PySide6
-      - name: remote test
+      - run: pip install numpy opencv-python-headless Pillow imageio-ffmpeg
+      - name: worker direct
         env:
           PYTHONUTF8: "1"
-        run: python -u tests/test_animref_remote.py
+          ANIMREF_WORKER_TRACE: "40"
+          APPDATA: ${{ runner.temp }}
+        run: |
+          python -c "
+          import subprocess, sys, json, time
+          p = subprocess.Popen([sys.executable, '-X', 'utf8', 'motionbridge/animref/worker.py'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          p.stdin.write((json.dumps({'fn': 'nothing', 'params': {}, 'settings': {}}) + '\n').encode()); p.stdin.flush()
+          t=time.time()
+          try:
+              out, err = p.communicate(timeout=90)
+          except subprocess.TimeoutExpired:
+              p.kill(); out, err = p.communicate()
+              print('TIMEOUT')
+          print('elapsed', time.time()-t, 'rc', p.returncode)
+          print('STDOUT', out.decode('utf-8','replace'))
+          print('STDERR', err.decode('utf-8','replace'))
+          "
