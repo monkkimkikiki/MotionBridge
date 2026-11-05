@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from ..core import animref, assetidx, bridge, extractor, frames, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, vision
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
 MEMORY_FILE = os.path.join(bridge.CONFIG_DIR, "matches.json")
@@ -74,6 +74,7 @@ class VidFindTab(QWidget):
         self.rows: List[_Row] = []
         self.confirmed: List[str] = []
         self.clip_labels: Dict[str, str] = {}
+        self.link_query: Optional[dict] = None  # AnimRef 가 보낸 요청 (답을 보내기 전까지)
         self._build()
 
     # ================================================================== 화면
@@ -91,6 +92,10 @@ class VidFindTab(QWidget):
                        "먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사해 두세요.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
+        self.link_banner = QLabel("")
+        self.link_banner.setWordWrap(True)
+        self.link_banner.setStyleSheet("color:#5ab0ff")
+        lay.addWidget(self.link_banner)
 
         # 1) 입력
         g = QGroupBox("1) 영상 / 이미지 / AnimRef 클립")
@@ -258,6 +263,19 @@ class VidFindTab(QWidget):
         self.btn_extract.setToolTip("0번 탭의 형식/리깅/대상 프로그램/출력 폴더 설정을 그대로 씁니다.")
         self.btn_extract.clicked.connect(self.extract)
         v.addWidget(self.btn_extract)
+        self.link_box = QWidget()
+        lh = QHBoxLayout(self.link_box)
+        lh.setContentsMargins(0, 0, 0, 0)
+        self.btn_link_ok = QPushButton("AnimRef 에 결과 보내기 (고른 메시·애니메이션)")
+        self.btn_link_ok.setMinimumHeight(34)
+        self.btn_link_ok.clicked.connect(lambda *_a: self.send_result(False))
+        lh.addWidget(self.btn_link_ok, 1)
+        self.btn_link_none = QPushButton("맞는 게 없음")
+        self.btn_link_none.setMinimumHeight(34)
+        self.btn_link_none.clicked.connect(lambda *_a: self.send_result(True))
+        lh.addWidget(self.btn_link_none)
+        v.addWidget(self.link_box)
+        self.link_box.setVisible(False)
         lay.addWidget(g)
         lay.addStretch(1)
 
@@ -629,3 +647,48 @@ class VidFindTab(QWidget):
             return
         win.statusBar().showMessage("추출 완료: %d개 — '0. 게임에서 추출' 탭 4) 에서 폴더를 열 수 있습니다" % len(files))
         win.tabs.setCurrentIndex(0)
+
+    # ================================================================== AnimRef 연결
+    def load_query(self, q: dict) -> None:
+        """AnimRef 가 보낸 요청으로 화면을 채운다 (UI 스레드에서 불린다)."""
+        self.link_query = q
+        self.clear_sources()
+        for p in q.get("paths", []):
+            self._add_source(p, q.get("label", ""))
+        if q.get("label") in LABEL_CHOICES:
+            self.label.setCurrentIndex(max(self.label.findData(q["label"]), 0))
+        if q.get("hits"):
+            self.hits.setValue(int(q["hits"]))
+        self.rows, self.confirmed = [], []
+        self.table.setRowCount(0)
+        self.mesh_list.clear()
+        self.anim_list.clear()
+        self._update_src_note()
+        self.link_box.setVisible(True)
+        n = len(q.get("paths", []))
+        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개. 몬스터를 추측·검수하고 메시/애니메이션을 고른 뒤 '결과 보내기', 없으면 '맞는 게 없음'을 누르세요."
+                                 % (" #%s" % q["id"] if q.get("id") else "", n))
+        sc = self.win.scan
+        if n and sc is not None and sc.found and sc.root == self.win.ex_game.text().strip():
+            self.start_guess()  # 게임 폴더를 이미 검사해 뒀으면 바로 추측 시작
+        elif n:
+            self.link_banner.setText(self.link_banner.text() + "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '몬스터 추측 시작'을 누르세요.)")
+
+    def send_result(self, none: bool) -> None:
+        q = self.link_query
+        if q is None:
+            return
+        meshes = [it.data(Qt.ItemDataRole.UserRole) for it in self.mesh_list.selectedItems()]
+        anims = [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems()]
+        if not none and not meshes and not anims:
+            QMessageBox.warning(self, "결과 보내기", "보낼 메시나 애니메이션을 목록에서 고르세요. 맞는 게 없으면 '맞는 게 없음'을 누르세요.")
+            return
+        try:
+            out = animlink.deliver(q, meshes, anims, none)
+        except OSError as e:
+            QMessageBox.warning(self, "결과 보내기", "result.json 을 쓰지 못했습니다: %s" % e)
+            return
+        self.link_query = None
+        self.link_box.setVisible(False)
+        self.link_banner.setText("결과를 보냈습니다: %s — %s" % (out["file"], "AnimRef 에 알렸습니다." if out["notified"] else "AnimRef 가 꺼져 있어 result.json 만 저장했습니다."))
+        self.win.statusBar().showMessage("AnimRef 결과 저장: " + str(out["file"]))

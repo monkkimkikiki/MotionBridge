@@ -107,6 +107,12 @@ class QWidget(Stub):
     def isEnabled(self):
         return self._enabled
 
+    def setVisible(self, v):
+        self._visible = bool(v)
+
+    def isVisible(self):
+        return self._visible
+
     def width(self):
         return 800
 

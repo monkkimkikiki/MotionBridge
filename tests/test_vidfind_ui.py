@@ -196,6 +196,50 @@ def main():
         vt.rows[-1].search.setText("hexa")
         check(vt.rows[-1].chosen() == MESHES[1], "빈 줄에서 검색: %s" % vt.rows[-1].chosen())
 
+        # ---------------- AnimRef 연결: 요청 -> 화면 -> 결과
+        from motionbridge.core import animlink
+        ldir = os.path.join(d, "link")
+        check(mw.start_link(ldir) and mw.link is not None and os.path.isfile(os.path.join(ldir, "animtool.json")), "연결 서버 시작")
+        qf = os.path.join(d, "r", "query.json")
+        os.makedirs(os.path.dirname(qf))
+        json.dump({"id": "q7", "clips": ["/v/hit1.mp4"], "label": "타격", "hits": 3}, open(qf, "w"))
+        # 서버 스레드가 받은 요청이 UI 쪽 처리기로 전달된다 (가짜 Qt 는 즉시 호출)
+        import urllib.request
+        tok = mw.link.token
+        rq = urllib.request.Request("http://127.0.0.1:%d/v1/open" % mw.link.port, data=json.dumps({"query": qf}).encode(), headers={"X-Token": tok}, method="POST")
+        urllib.request.urlopen(rq, timeout=5).read()
+        check(vt.link_query and vt.link_query["id"] == "q7" and vt.source_paths(False) == ["/v/hit1.mp4"], "요청이 화면에 반영: %s" % vt.source_paths(False))
+        check(vt.link_box._visible and "q7" in vt.link_banner.text() and vt.label.currentData() == "타격" and vt.hits.value() == 3, "배너/분류/타수")
+        # 아무것도 안 고르고 보내기 -> 안내, 요청은 유지
+        QMessageBox.calls.clear()
+        vt.send_result(False)
+        check(QMessageBox.calls and vt.link_query is not None, "선택 없이 보내기 안내")
+        # 후보 만들고 고른 뒤 보내기
+        vt.rows = []
+        vt.index = assetidx.AssetIndex(MESHES, ANIMS)
+        vt.confirmed = [MESHES[0]]
+        vt.mesh_list.clear()
+        it = A.QListWidgetItem("Dwarf") if hasattr(A, "QListWidgetItem") else None
+        vt._refill_anims()
+        vt.mesh_list.addItem(V.QListWidgetItem("Dwarf"))
+        vt.mesh_list.item(0).setData(A.Qt.ItemDataRole.UserRole, MESHES[0])
+        vt.mesh_list.selectAll()
+        vt.anim_list.selectItems([0])
+        pick = vt.anim_list.item(0).data(A.Qt.ItemDataRole.UserRole)
+        vt.send_result(False)
+        rf = os.path.join(d, "r", "result.json")
+        res = json.load(open(rf, encoding="utf-8"))
+        check(res["status"] == "confirmed" and res["id"] == "q7" and res["meshes"] == [MESHES[0]] and res["animations"] == [pick], "result.json: %s" % res)
+        check(vt.link_query is None and not vt.link_box._visible and "꺼져 있어" in vt.link_banner.text(), "AnimRef 꺼짐 안내: %s" % vt.link_banner.text())
+        # '맞는 게 없음'
+        json.dump({"id": "q8", "path": "/v/x.mp4"}, open(qf, "w"))
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/v1/open" % mw.link.port, data=json.dumps({"query": qf}).encode(), headers={"X-Token": tok}, method="POST"), timeout=5).read()
+        vt.send_result(True)
+        res = json.load(open(rf, encoding="utf-8"))
+        check(res["status"] == "none" and res["id"] == "q8" and not res["meshes"], "맞는 게 없음 결과: %s" % res)
+        mw.stop_link()
+        check(mw.link is None and not os.path.exists(os.path.join(ldir, "animtool.json")), "종료 시 접속 정보 삭제")
+
     print("모두 통과" if not fails else "실패 %d개" % len(fails))
     sys.exit(1 if fails else 0)
 

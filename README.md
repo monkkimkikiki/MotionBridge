@@ -71,6 +71,16 @@ dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:Publish
 
 한계: 애니메이션 후보는 **이름과 분류 단어**로만 고릅니다(영상 속 동작과 PSA 의 실제 움직임을 비교하는 것은 아직 없음). AnimRef 의 내부 저장 형식을 몰라 위 단서 방식으로 읽으므로, 분류가 안 읽히면 폴더 구조나 파일을 알려 주세요.
 
+### AnimRef 연결
+
+프로그램이 켜져 있는 동안 `127.0.0.1` 의 임의 포트에 작은 서버를 열고 `%APPDATA%\AnimRefLink\animtool.json` 에 `port` / `token` / `pid` 를 씁니다(끝낼 때 지움, 다른 프로그램이 쓴 파일은 건드리지 않음).
+
+- `GET /v1/ping` — 살아 있는지 확인(토큰 불필요)
+- `POST /v1/open {"query": …}` — 토큰 필요(`X-Token` 또는 `Authorization: Bearer`). query 가 `query.json` 경로면 파일을 읽고, 객체면 그대로 씁니다. 받으면 UI 스레드로 넘겨 '영상으로 찾기' 탭에 후보 화면을 띄우고, 게임 폴더를 이미 검사해 뒀으면 바로 몬스터 추측을 시작합니다.
+- 화면 아래 **'AnimRef 에 결과 보내기'**(고른 메시/애니메이션) 또는 **'맞는 게 없음'** 을 누르면 `result.json`(query.json 옆)을 쓰고 AnimRef 의 `POST /v1/result` 로 알립니다. AnimRef 가 꺼져 있으면 `result.json` 만 남깁니다.
+
+※ query.json / result.json 의 항목 이름, AnimRef 접속 정보 파일 위치, 토큰 헤더 이름은 연동규격서 8절을 받기 전의 **가정**입니다. `core/animlink.py` 의 `parse_query` / `build_result` / `SPEC_*` 상수에 모여 있어 규격에 맞게 한 곳만 고치면 됩니다.
+
 ## 3ds Max Biped 로 바로 내보내기
 
 FBX 는 Biped 에 직접 들어가지 않고(.bip 는 비공개 바이너리라 이 프로그램이 직접 쓸 수 없음) FBX → Biped 변환에 손이 한 번 더 갑니다. 내보내기 탭에서 **"3ds Max Biped (.ms)"** 를 체크하면 다음 두 파일이 만들어집니다.

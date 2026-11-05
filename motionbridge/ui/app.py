@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import bridge, extractor, gamescan, meshconv, osopen
+from ..core import animlink, bridge, extractor, gamescan, meshconv, osopen
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -36,6 +36,12 @@ def _is_finger(slot: str) -> bool:
     return any(f in slot for f in FINGERS)
 
 
+class _LinkSignals(QObject):
+    """서버 스레드에서 받은 AnimRef 요청을 UI 스레드로 안전하게 넘기는 통로 (Qt 가 큐로 전달한다)."""
+
+    opened = Signal(object)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -49,6 +55,9 @@ class MainWindow(QMainWindow):
         self._syncing = False
         self._playing = False
         self.scan: Optional[gamescan.GameScan] = None
+        self.link: Optional[animlink.LinkServer] = None
+        self._link_sig = _LinkSignals()
+        self._link_sig.opened.connect(self._on_link_open)
 
         self.recompute_timer = QTimer(self)
         self.recompute_timer.setSingleShot(True)
@@ -66,6 +75,37 @@ class MainWindow(QMainWindow):
         self.status_progress.setMaximumWidth(220)
         self.status_progress.setVisible(False)
         self.statusBar().addPermanentWidget(self.status_progress)
+
+    # ================================================================== AnimRef 연결
+    def start_link(self, directory: Optional[str] = None) -> bool:
+        """AnimRef 가 요청을 보낼 로컬 서버를 연다 (실행 중에만). 실패해도 프로그램은 계속 동작한다."""
+        if self.link is not None:
+            return True
+        try:
+            srv = animlink.LinkServer(self._link_sig.opened.emit, __version__, directory)
+            srv.start()
+        except OSError as e:
+            self.statusBar().showMessage("AnimRef 연결을 열지 못했습니다: %s" % e)
+            return False
+        self.link = srv
+        return True
+
+    def stop_link(self) -> None:
+        if self.link is not None:
+            self.link.stop()
+            self.link = None
+
+    def closeEvent(self, ev) -> None:  # noqa: N802
+        self.stop_link()
+        super().closeEvent(ev)
+
+    def _on_link_open(self, query) -> None:
+        """UI 스레드: AnimRef 요청을 받으면 '영상으로 찾기' 탭에 후보 화면을 띄운다."""
+        self.vidfind.load_query(query)
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self.vidfind))
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     # ================================================================== 메뉴
     # 단축키 표: (메뉴, 키, 이름, 동작 메서드, 단축키들). 메뉴 항목이 곧 단축키 등록이다.
@@ -1541,6 +1581,8 @@ def run_gui() -> int:
     w = MainWindow()
     w.resize(1380, 880)
     w.show()
+    w.start_link()
+    app.aboutToQuit.connect(w.stop_link)
     return app.exec()
 
 
