@@ -1,6 +1,6 @@
 import subprocess, sys, json, time, threading, os
 env = dict(os.environ, ANIMREF_WORKER_TRACE="25", PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1")
-p = subprocess.Popen([sys.executable, '-X', 'utf8', 'motionbridge/animref/worker.py'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd='motionbridge')
+p = subprocess.Popen([sys.executable, '-X', 'utf8', os.path.abspath('motionbridge/animref/worker.py')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd='motionbridge')
 p.stdin.write((json.dumps({'fn': '없는작업', 'params': {}, 'settings': {}}, ensure_ascii=False) + '\n').encode('utf-8')); p.stdin.flush()
 err = []
 threading.Thread(target=lambda: [err.append(l) for l in iter(p.stderr.readline, b'')], daemon=True).start()
