@@ -14,9 +14,11 @@ using CUE4Parse.FileProvider;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.MappingsProvider.Usmap;
 using CUE4Parse.UE4.Assets;
+using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Objects.Core.Misc;
+using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.Options;
@@ -98,17 +100,29 @@ try
                 }
                 var session = new ExportSession();
                 int queued = 0;
+                var queuedObjs = new HashSet<UObject>();
+                bool montage = false;
                 foreach (var obj in pkg.GetExports())
                 {
-                    if (kind == "mesh" ? obj is USkeletalMesh : obj is UAnimSequence)
+                    if (kind == "mesh")
                     {
-                        session.Add(obj);
-                        queued++;
+                        if (obj is USkeletalMesh && queuedObjs.Add(obj)) { session.Add(obj); queued++; }
+                    }
+                    else if (obj is UAnimSequence)
+                    {
+                        if (queuedObjs.Add(obj)) { session.Add(obj); queued++; }
+                    }
+                    else if (obj is UAnimMontage || obj is UAnimComposite)
+                    {
+                        // 몽타주/컴포지트는 애니메이션 자체가 아니라 AnimSequence 를 이어 붙인 것이라, 참조된 AnimSequence 를 꺼낸다
+                        foreach (var seq in SequencesOf(obj))
+                            if (queuedObjs.Add(seq)) { session.Add(seq); queued++; montage = true; }
                     }
                 }
+                if (montage) Emit(new { type = "log", message = "몽타주에서 AnimSequence " + queued + "개를 찾음: " + p });
                 if (queued == 0)
                 {
-                    Emit(new { type = "skip", path = p, reason = kind == "mesh" ? "스켈레탈 메시가 아님" : "AnimSequence 가 아님" });
+                    Emit(new { type = "skip", path = p, reason = kind == "mesh" ? "스켈레탈 메시가 아님" : "AnimSequence 도, 그것을 참조하는 몽타주도 아님" });
                     continue;
                 }
                 var results = session.RunAsync(outDir, opts).GetAwaiter().GetResult();
@@ -131,5 +145,22 @@ try
     else Fail("알 수 없는 명령: " + cmd);
 }
 catch (Exception e) { Fail(e.GetType().Name + ": " + e.Message); }
+
+static IEnumerable<UAnimSequence> SequencesOf(UObject obj)
+{
+    var tracks = new List<FAnimTrack>();
+    if (obj is UAnimMontage m && m.SlotAnimTracks != null)
+        foreach (var st in m.SlotAnimTracks)
+            if (st?.AnimTrack != null) tracks.Add(st.AnimTrack);
+    if (obj is UAnimComposite c && c.AnimationTrack != null) tracks.Add(c.AnimationTrack);
+    foreach (var t in tracks)
+    {
+        if (t.AnimSegments == null) continue;
+        foreach (var seg in t.AnimSegments)
+        {
+            if (seg?.AnimReference != null && seg.AnimReference.TryLoad(out UAnimSequence seq) && seq != null) yield return seq;
+        }
+    }
+}
 
 static string Fail2(string msg) { Fail(msg); return ""; }

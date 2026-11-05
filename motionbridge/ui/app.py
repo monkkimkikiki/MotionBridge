@@ -538,10 +538,16 @@ class MainWindow(QMainWindow):
         if not out:
             return
 
+        self._ex_skips = []
+
         def job(w: Worker):
             n = [0]
 
             def ev(e):
+                if e.get("type") == "skip":
+                    self._ex_skips.append("%s — %s" % (os.path.basename(e.get("path", "")), e.get("reason", "")))
+                elif e.get("type") == "log":
+                    self._ex_skips.append(e.get("message", ""))
                 if e.get("type") in ("exported", "skip"):
                     n[0] += 1
                     w.progress.emit(n[0] - 1, len(paths), os.path.basename(e.get("path", "")))
@@ -555,12 +561,22 @@ class MainWindow(QMainWindow):
 
     def _after_extract(self, files) -> None:
         self.ex_files.set_paths(files)
-        self.statusBar().showMessage("추출 완료: %d개" % len(files))
-        if len(files) == 1:
-            if files[0].lower().endswith(".psa"):
-                self._open_path(files[0])
-            elif files[0].lower().endswith(".glb"):
-                self._open_path_as_target(files[0])
+        if not files:
+            why = [x for x in getattr(self, "_ex_skips", []) if x][:6]
+            self.statusBar().showMessage("추출된 파일이 없습니다")
+            QMessageBox.warning(self, "추출", "추출된 파일이 없습니다. 화면의 모션은 바뀌지 않습니다.\n\n" + ("\n".join(why) if why else "도우미가 이유를 알려주지 않았습니다. 종류(애니메이션/메시)와 선택한 에셋을 확인하세요."))
+            return
+        # 방금 추출한 것을 바로 화면에 보여준다 (여러 개면 첫 번째. 나머지는 아래 목록에서 더블클릭)
+        first = files[0]
+        msg = "추출 완료: %d개" % len(files)
+        if len(files) > 1:
+            msg += " — 첫 번째 파일을 열었습니다. 다른 것은 '4) 추출된 파일 열기' 목록에서 더블클릭"
+        self.statusBar().showMessage(msg)
+        low = first.lower()
+        if low.endswith(".psa"):
+            self._open_path(first)
+        elif low.endswith(".glb"):
+            self._open_path_as_target(first)
 
     def _open_extracted(self) -> None:
         sel = self.ex_files.selected_paths() or ([self.ex_files.first_path()] if self.ex_files.count() else [])

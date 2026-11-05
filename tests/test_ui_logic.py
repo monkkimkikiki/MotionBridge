@@ -336,6 +336,19 @@ def test_extract_tab():
         mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
         mw._extract_selected()
         assert mw.ex_files.count() == 2 and sorted(os.listdir(os.path.join(d, "ex"))) == ["AS_Run.psa", "AS_Walk.psa"]
+        # 추출하면 바로 화면에 바뀐 모션이 열린다 (여러 개면 첫 번째)
+        assert mw.pr.src is not None and mw.pr.src.path.endswith(os.path.basename(mw.ex_files.first_path())), mw.pr.src and mw.pr.src.path
+        before = mw.pr.src.path
+        # 아무것도 추출되지 않으면 이유를 알려주고 화면은 그대로
+        mw.ex_list.set_paths(["Game/Content/Anim/AM_Skip.uasset"])
+        mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
+        QMessageBox.calls.clear()
+        mw._extract_selected()
+        assert QMessageBox.calls and "추출된 파일이 없습니다" in QMessageBox.calls[-1][2] and "AnimSequence" in QMessageBox.calls[-1][2], QMessageBox.calls
+        assert mw.pr.src.path == before and mw.ex_files.count() == 0
+        mw.ex_list.set_paths(["Game/Content/Anim/AS_Walk.uasset", "Game/Content/Anim/AS_Run.uasset"])
+        mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
+        mw._extract_selected()
         # 추출 결과를 소스 모션으로
         mw.ex_files.selectAll()
         mw._open_extracted()
