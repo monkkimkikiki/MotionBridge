@@ -222,6 +222,39 @@ def main():
         check(vt.cfg.get("vf_known", "").startswith("The Nameless"), "입력은 설정에 기억")
         vt.known.setPlainText("")
 
+        # ---------------- 검수 표에서 줄 지우기
+        n0 = len(vt.rows)
+        check(n0 >= 2, "지울 줄이 여러 개 있음: %d" % n0)
+        last_name = vt.rows[-1].group.name
+        vt.table.selectRow(0)
+        first = vt.rows[0]
+        vt.delete_selected_row()
+        check(len(vt.rows) == n0 - 1 and first not in vt.rows and vt.table.rowCount() == n0 - 1, "선택한 줄 삭제: %d" % len(vt.rows))
+        check(vt.rows[-1].group.name == last_name and vt.table.cellWidget(len(vt.rows) - 1, 3) is vt.rows[-1].exclude, "남은 줄과 표 칸이 어긋나지 않음")
+        QMessageBox.calls.clear()
+        vt.table.selectRow(-1)
+        vt.delete_selected_row()
+        check(QMessageBox.calls and len(vt.rows) == n0 - 1, "줄을 안 골랐으면 안내")
+        QMessageBox.question_yes = False
+        vt.clear_rows()
+        check(len(vt.rows) == n0 - 1, "모두 지우기를 취소하면 그대로")
+        QMessageBox.question_yes = True
+        vt.clear_rows()
+        check(vt.rows == [] and vt.table.rowCount() == 0, "모두 지우기")
+        vt.add_blank_row()
+        check(len(vt.rows) == 1, "지운 뒤에도 줄 추가 가능")
+
+        # ---------------- 몬스터 둘을 함께 뽑으면 애니메이션이 각자 몬스터 폴더로
+        vt.index = assetidx.AssetIndex(MESHES, ANIMS)
+        vt.mesh_list.clear()
+        for m in (MESHES[0], MESHES[2]):
+            it = V.QListWidgetItem(m)
+            it.setData(A.Qt.ItemDataRole.UserRole, m)
+            vt.mesh_list.addItem(it)
+        vt.mesh_list.selectAll()
+        cm = vt._char_map([a for a in ANIMS if "Dwarf_Idle" in a or "StoneGolem" in a])
+        check(set(cm.values()) == {"Dwarf", "StoneGolem"}, "애니메이션마다 어울리는 몬스터 폴더: %s" % cm)
+
         # 글자 사전 만들기: 도우미가 꺼낸 .locres 를 읽어 저장
         if os.path.exists(V.NAMES_CACHE):
             os.remove(V.NAMES_CACHE)

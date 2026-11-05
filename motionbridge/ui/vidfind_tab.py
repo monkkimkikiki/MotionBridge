@@ -255,6 +255,13 @@ class VidFindTab(QWidget):
         b.setToolTip("AI가 놓친 몬스터를 직접 넣습니다. 줄의 검색 칸에서 메시를 찾으세요.")
         b.clicked.connect(self.add_blank_row)
         h.addWidget(b)
+        b = QPushButton("선택한 줄 삭제")
+        b.setToolTip("표에서 줄을 하나 고른 뒤 누르면 그 줄을 지웁니다. 직접 추가했거나 잘못 인식된 줄을 치울 때 쓰세요.")
+        b.clicked.connect(lambda *_a: self.delete_selected_row())
+        h.addWidget(b)
+        b = QPushButton("모두 지우기")
+        b.clicked.connect(lambda *_a: self.clear_rows())
+        h.addWidget(b)
         h.addStretch(1)
         self.btn_confirm = QPushButton("검수 확정 → 애니메이션 후보 보기")
         self.btn_confirm.setMinimumHeight(30)
@@ -686,6 +693,27 @@ class VidFindTab(QWidget):
 
         self.win.run_async(job, done, "게임 속 이름으로 찾는 중")
 
+    def delete_selected_row(self) -> None:
+        cur = self.table.currentRow()
+        if not (0 <= cur < len(self.rows)):
+            QMessageBox.warning(self, "줄 삭제", "지울 줄을 표에서 먼저 클릭하세요.")
+            return
+        self.table.removeRow(cur)
+        self.rows.pop(cur)
+        if self.rows:  # 다음 줄을 이어서 지울 수 있게 선택을 옮긴다
+            self.table.selectRow(min(cur, len(self.rows) - 1))
+        self.status.setText("줄 삭제: 남은 몬스터 %d종" % len(self.rows))
+
+    def clear_rows(self) -> None:
+        if not self.rows:
+            return
+        if QMessageBox.question(self, "모두 지우기", "검수 표의 %d줄을 모두 지울까요? (직접 고친 내용도 사라집니다)" % len(self.rows),
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self.rows = []
+        self.table.setRowCount(0)
+        self.status.setText("검수 표를 비웠습니다.")
+
     def add_blank_row(self) -> None:
         if self.index is None:
             idx = assetidx.load_index(INDEX_CACHE, self.cfg.get("game_dir", ""))
@@ -757,6 +785,20 @@ class VidFindTab(QWidget):
             msg += " 이름이 맞는 애니메이션을 못 찾은 몬스터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
         self.anim_note.setText(msg)
 
+    def _char_map(self, anims: List[str]) -> Dict[str, str]:
+        """고른 메시가 둘 이상일 때, 애니메이션마다 이름이 가장 어울리는 몬스터 폴더를 정한다 (못 정하면 경로로)."""
+        meshes = [it.data(Qt.ItemDataRole.UserRole) for it in self.mesh_list.selectedItems()]
+        idx = self.index
+        if len(meshes) < 2 or idx is None:
+            return {}
+        ents = [m for m in (idx.mesh(p) for p in meshes) if m is not None]
+        out: Dict[str, str] = {}
+        for a in anims:
+            best = max(((idx.char_score(m, a)[0], m) for m in ents), key=lambda t: t[0], default=(0.0, None))
+            if best[1] is not None and best[0] > 0.2:
+                out[a] = layout.character_of(best[1].path)
+        return out
+
     def _single_char(self) -> Optional[str]:
         """고른 메시가 한 캐릭터뿐이면 애니메이션도 그 캐릭터 폴더에 모은다 (애니 경로가 달라도)."""
         names = {layout.character_of(it.data(Qt.ItemDataRole.UserRole)) for it in self.mesh_list.selectedItems()}
@@ -780,6 +822,7 @@ class VidFindTab(QWidget):
         if not out:
             return
         lay = win.make_layout(self._single_char())
+        lay.chars.update(self._char_map(anims))
         bridge.save_config(self.cfg)
         win._ex_skips = []
 
@@ -833,6 +876,7 @@ class VidFindTab(QWidget):
             if not win._mesh_blender_ok(fmts):
                 return
         lay = win.make_layout(self._single_char())
+        lay.chars.update(self._char_map(anims))
         bridge.save_config(self.cfg)
         win._ex_skips = []
         total = len(meshes) + len(anims)

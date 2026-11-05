@@ -325,6 +325,19 @@ class QTableWidget(QWidget):
     def currentRow(self):
         return getattr(self, "_cur", -1)
 
+    def removeRow(self, r):
+        n = self._rows
+        new_i, new_w = {}, {}
+        for (i, c), v in self._items.items():
+            if i != r:
+                new_i[(i - (1 if i > r else 0), c)] = v
+        for (i, c), v in self._widgets.items():
+            if i != r:
+                new_w[(i - (1 if i > r else 0), c)] = v
+        self._items, self._widgets, self._rows = new_i, new_w, n - 1
+        if getattr(self, "_cur", -1) >= self._rows:
+            self._cur = self._rows - 1
+
     def selectRow(self, r):
         self._cur = r
 
@@ -498,6 +511,10 @@ class QFileDialog(Stub):
 
 class QMessageBox(Stub):
     calls = []
+    class _B(str):
+        def __or__(self, o):
+            return QMessageBox._B(str(self) + "|" + str(o))
+    StandardButton = type("StandardButton", (), {"Yes": _B("Yes"), "No": _B("No"), "Cancel": _B("Cancel")})
 
     @staticmethod
     def warning(parent, title, text, *a):
@@ -510,6 +527,13 @@ class QMessageBox(Stub):
     @staticmethod
     def information(parent, title, text, *a):
         QMessageBox.calls.append(("information", title, text))
+
+    question_yes = True
+
+    @staticmethod
+    def question(parent, title, text, *a):
+        QMessageBox.calls.append(("question", title, text))
+        return QMessageBox.StandardButton.Yes if QMessageBox.question_yes else QMessageBox.StandardButton.No
 
 
 class QAction(QObject):
