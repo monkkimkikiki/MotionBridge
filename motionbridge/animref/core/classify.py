@@ -148,13 +148,19 @@ def run(s, log=noop, progress=noop, cancel=None, f0=0.0, f1=1.0, force=None, dis
     3) 비전투 분류 자동 삭제  4) 비슷한 모션 묶기
     force: 다시 판정할 클립 json 경로 집합
     discard_ok: 자동 삭제를 허용할 클립 json 경로 집합 (방금 만든 클립만). None이면 아무것도 지우지 않는다."""
-    from . import vlm
+    from . import remote, vlm
     from .library import UNLABELED, delete_clip
     from .settings import discard_names
 
     st = Stats()
     force = set(force or ())
     discard_ok = set(discard_ok or ())
+    if remote.should_offload():  # torch 가 없으면 AnimRef 용 파이썬 환경에서 판정
+        d = remote.process("classify_run", {"f0": f0, "f1": f1, "force": sorted(force), "discard_ok": sorted(discard_ok)}, s, log, progress, cancel)
+        for k, v in d.items():
+            if v is not None:
+                setattr(st, k, v)
+        return st
     span = f1 - f0
     clips = load_clips(game_dir(s))
     if not clips:

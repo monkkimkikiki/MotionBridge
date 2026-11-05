@@ -2,7 +2,7 @@
 -> AI 판정(영상 이해 AI 또는 CLIP) + 비전투 자동 삭제 -> 원본 정리."""
 from pathlib import Path
 
-from . import Cancelled, bookmarks, classify, cleanup, media, noop
+from . import Cancelled, bookmarks, classify, cleanup, media, noop, remote
 from .segment import cinematic_segments, merge_padded, segment_series, track_video, write_clips
 from .signals import (audio_onsets, energy_peaks, hit_windows, is_combat_candidate, merge_for_full,
                       merge_hits, segment_hints)
@@ -107,6 +107,12 @@ def find_segments(p, s, log=noop, progress=noop, cancel=None, f0=0.0, f1=1.0, wa
 def process_videos(paths, s, log=noop, progress=noop, cancel=None, origins=None):
     paths = [str(p) for p in paths]
     origins = origins or {}
+    if remote.should_offload():  # 이 프로그램에 torch 가 없으면 AnimRef 용 파이썬 환경에서 분석 (core/remote.py)
+        d = remote.process("process_videos", {"paths": paths, "origins": {str(k): v for k, v in origins.items()}}, s, log, progress, cancel)
+        new = Result(d.get("paths") or [])
+        new.cleaned = tuple(tuple(x) for x in d.get("cleaned") or ())
+        new.discarded = int(d.get("discarded") or 0)
+        return new
     share = 0.7 if s.get("auto_classify", True) else 1.0
     new = Result()
     per_source = []

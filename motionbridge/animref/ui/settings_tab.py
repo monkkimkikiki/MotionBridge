@@ -1,13 +1,15 @@
 """③ 설정 탭."""
 import copy
 
-from PySide6.QtCore import Qt, QUrl
+import threading
+
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
                                QSlider, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from ..core import cleanup, vlm
+from ..core import cleanup, remote, vlm
 from ..core import settings as S
 from ..core.obs import ObsRecorder, friendly_error
 
@@ -15,6 +17,8 @@ from .widgets import env_info, muted, open_path, restyle
 
 
 class SettingsTab(QWidget):
+    env_checked = Signal(str)   # 분석 환경 확인 결과(다른 스레드에서 옴)
+
     def __init__(self, main):
         super().__init__()
         self.main = main
@@ -225,6 +229,28 @@ class SettingsTab(QWidget):
         f.addRow("묶음 최소 클립 수", self.min_group)
         root.addWidget(g)
 
+        # --- 분석 환경 (무거운 AI)
+        g, f = self._group("🧠 분석 환경 (자동 분석용)")
+        f.addRow(muted("캐릭터 탐지 · AI 분류에 쓰는 torch/ultralytics 는 이 프로그램에 들어 있지 않아요. "
+                       "AnimRef 를 설치해 둔 폴더의 .venv 가 있으면 자동으로 찾아서, 분석할 때만 그 파이썬을 따로 실행해요."))
+        arow = QHBoxLayout()
+        self.ed_py = QLineEdit()
+        self.ed_py.setPlaceholderText("비워 두면 자동으로 찾기  (예: ...\\AnimRef\\.venv\\Scripts\\python.exe)")
+        self.ed_py.editingFinished.connect(self._save_py)
+        arow.addWidget(self.ed_py, 1)
+        pb = QPushButton("찾아보기…")
+        pb.clicked.connect(self._pick_py)
+        arow.addWidget(pb)
+        cb = QPushButton("다시 확인")
+        cb.clicked.connect(lambda: self._check_env(True))
+        arow.addWidget(cb)
+        f.addRow("python.exe", arow)
+        self.env_state = muted("")
+        self.env_state.setWordWrap(True)
+        f.addRow("상태", self.env_state)
+        self.env_checked.connect(self.env_state.setText)
+        root.addWidget(g)
+
         # --- 정보
         g, f = self._group("ℹ 정보")
         self.env = muted("")
@@ -299,6 +325,7 @@ class SettingsTab(QWidget):
         self.frames.setValue(int(s.get("vlm_frames", 8)))
         self.auto_discard.setChecked(bool(s.get("auto_discard", True)))
         self.discard_conf.setValue(float(s.get("discard_min_conf", 0.6)))
+        self.ed_py.setText(s.get("analysis_python", ""))
         self.table.setRowCount(0)
         for l in s["labels"]:
             self._append_row(l["name"], " | ".join(l.get("prompts", [])), l.get("discard", False))
@@ -306,6 +333,8 @@ class SettingsTab(QWidget):
         self.refresh_vlm_status()
         if not self.env.text():
             self.env.setText(env_info() or "-")
+        if not self.env_state.text():
+            self._check_env()
 
     def _append_row(self, name, prompts, discard=False):
         r = self.table.rowCount()
@@ -368,6 +397,40 @@ class SettingsTab(QWidget):
             self.main.s["library_dir"] = d
             self.main.save_settings()
             self.main.reload_all()
+
+    # ---------------------------------------------------------------- 분석 환경
+    def _save_py(self):
+        if self._loading:
+            return
+        self.main.s["analysis_python"] = self.ed_py.text().strip().strip('"')
+        self.main.save_settings()
+        self._check_env(True)
+
+    def _pick_py(self):
+        p, _ = QFileDialog.getOpenFileName(self, "AI 분석용 python.exe (AnimRef 의 .venv\\Scripts)", self.ed_py.text() or "",
+                                           "python (python.exe python);;모든 파일 (*)")
+        if p:
+            self.ed_py.setText(p)
+            self._save_py()
+
+    def _check_env(self, force=False):
+        """분석 환경을 백그라운드에서 확인한다 (torch 를 불러오느라 몇 초 걸린다)."""
+        if remote.local_has_torch():
+            self.env_state.setText("✅ 이 프로그램 안에서 바로 분석해요 (torch 있음)")
+            return
+        self.env_state.setText("확인하는 중...")
+        s = dict(self.main.s)
+
+        def work():
+            if force:
+                remote._CHECKED.clear()
+            py, msg = remote.find_env(s)
+            if py:
+                self.env_checked.emit("✅ 분석 환경: %s  (%s)" % (py, msg))
+            else:
+                self.env_checked.emit("⚠ 쓸 수 있는 분석 환경이 없어요. %s\n자동 분석을 하려면 AnimRef 의 .venv 의 python.exe 를 위에서 골라 주세요. "
+                                      "(영상 보기·직접 자르기·타격 나누기·라이브러리는 이것 없이도 돼요)" % (msg or ""))
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------------------------------------------------------------- 영상 이해 AI
     def _fill_models(self):

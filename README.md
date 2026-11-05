@@ -266,4 +266,4 @@ AnimRef(게임 영상 → 공격/피격/스킬 클립 수집·분류·자르기�
 - 처음 탭을 열 때만 만들어져서 평소 시작이 느려지지 않습니다. 탭을 끌어내 별도 창으로 띄울 수도 있습니다.
 - AnimRef 안의 **"추출 툴로 보내기"** 는 같은 프로그램이므로 별도 연결 없이 바로 **영상찾기** 탭으로 넘어갑니다(자체 연결 창구는 열지 않음).
 - AnimRef 설정/라이브러리는 기존 위치(`%APPDATA%\AnimRef`, `Documents\AnimRef`)를 그대로 씁니다. 따로 설치된 AnimRef 와 같은 데이터를 공유합니다.
-- 설치 파일에는 opencv(headless)·Pillow·obsws-python·pynput 만 추가로 들어갑니다. **무거운 AI(torch · ultralytics · CLIP)는 포함하지 않으므로**, 자동 분석(YOLO 인물 탐지/CLIP 분류)은 설치형에서는 아직 쓸 수 없습니다. 영상 보기·직접 자르기·타격 나누기·라이브러리·Ollama 판정·OBS 녹화는 됩니다. 자동 분석은 AnimRef 의 `.venv` 를 별도 프로세스로 쓰는 방식으로 이어서 붙일 예정입니다.
+- 설치 파일에는 opencv(headless)·Pillow·obsws-python·pynput 만 추가로 들어갑니다. **무거운 AI(torch · ultralytics · CLIP)는 포함하지 않습니다.** 자동 분석(캐릭터 탐지 · AI 분류)은 분석할 때만 **별도 프로세스**로 돌립니다: `Downloads\AnimRef\AnimRef\.venv` 같은 AnimRef 용 파이썬 환경을 자동으로 찾고(못 찾으면 AnimRef 탭 ⚙ 설정 → '분석 환경'에서 `python.exe` 지정), 그 파이썬이 `worker.py` 를 실행해 진행 상황·로그·취소를 주고받습니다. 결과 클립은 평소처럼 라이브러리 폴더에 저장됩니다. 그 환경이 없어도 영상 보기·직접 자르기·타격 나누기·라이브러리·Ollama 판정·OBS 녹화는 됩니다.

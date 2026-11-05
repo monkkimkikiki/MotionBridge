@@ -121,6 +121,7 @@ DEFAULTS = {
     "link_dir": "",             # 연결 정보 폴더 (비우면 %APPDATA%\\AnimRefLink)
     "tool_link_file": "",       # 추출 툴의 연결 정보 파일 (비우면 연결 폴더의 animtool.json)
     "tool_process": "",         # 추출 툴이 켜져 있는지 확인할 이름 (프로그램 이름 또는 창 제목 일부)
+    "analysis_python": "",      # 자동 분석(torch)을 돌릴 파이썬. 비우면 AnimRef 설치 폴더의 .venv 를 자동으로 찾음
     "tool_cmd": "",             # 추출 툴 연동: 실행 명령 ({query}, {folder} 자리표시자)
     "tool_copy_video": False,   # 추출 툴 연동: 영상을 연동 폴더에 복사
     "tool_open_video": True,    # 추출 툴 연동: 보낸 뒤 영상 열기

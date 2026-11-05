@@ -12,7 +12,11 @@ _helper_datas = [(_helper_out, "tools")] if os.path.isdir(_helper_out) else []
 _ar = os.path.join(ROOT, "motionbridge", "animref")
 _animref_datas = [(os.path.join(_ar, "assets"), "motionbridge/animref/assets"),
                   (os.path.join(_ar, "motion_ai"), "motionbridge/animref/motion_ai"),
-                  (os.path.join(_ar, "install_motion_ai.bat"), "motionbridge/animref")]
+                  (os.path.join(_ar, "install_motion_ai.bat"), "motionbridge/animref"),
+                  # 분석 작업자: AnimRef 용 별도 파이썬(.venv)이 소스로 읽어야 하므로 .py 파일도 그대로 둔다 (core/remote.py)
+                  (os.path.join(_ar, "worker.py"), "motionbridge/animref"),
+                  (os.path.join(_ar, "__init__.py"), "motionbridge/animref"),
+                  (os.path.join(_ar, "core"), "motionbridge/animref/core")]
 
 a = Analysis(
     [os.path.join(ROOT, "MotionBridge.py")],
