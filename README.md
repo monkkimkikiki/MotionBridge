@@ -107,7 +107,7 @@ AnimRef 의 `연동규격_추출툴.md` 를 따릅니다. 프로그램이 켜져
 - `POST /v1/open {"query": "…\\handoff\\<클립>\\query.json"}` — query.json 을 읽어 `clip.video` 영상을 목록에 넣고, `clip.label`(분류)·`hits`(타격 시각, 개수는 타수에 반영)·`character.name`(→ '아는 정보' 칸)을 같이 보여 줍니다. 게임 폴더를 이미 검사해 뒀으면 바로 몬스터 추측을 시작합니다.
 - 실시간 연결이 안 될 때는 메뉴 **파일 > AnimRef에서 가져오기…**(Ctrl+Shift+A) 로 query.json 을 직접 고르면 같은 동작을 합니다.
 - AnimRef 가 `MotionBridge.exe --handoff "<query.json>"` 으로 실행해도 처리합니다(이미 켜져 있으면 그 창에 넘기고 끝납니다).
-- '영상으로 찾기' 탭에서 애니메이션을 고르고 **'AnimRef 에 결과 보내기'** 를 누르면 query.json 의 `result_path` 에 `result.json`(6절 형식: `status`/`animation`/`model_files`/`export_dir`/`candidates`)을 쓰고 AnimRef 의 `POST /v1/result {result_path, result}` 로 알립니다 → AnimRef 클립 옆에 🔗 표시. **'맞는 게 없음'** 은 `status: rejected`. 먼저 추출했다면 그 파일 경로가 `animation.file` / `model_files` 에 들어갑니다. AnimRef 가 꺼져 있거나 거절하면 이유를 보여 주고 `result.json` 은 남깁니다(AnimRef 의 [결과 가져오기]로 읽음).
+- AnimRef 로 결과를 되돌려 보내는 기능은 없습니다(AnimRef 쪽에서 쓰는 곳이 없어 뺐음). AnimRef → MotionBridge 방향의 요청 받기만 합니다.
 - 'AnimRef 클립 폴더…' 대화상자는 AnimRef 설정(`%APPDATA%\AnimRef\settings.json`)의 라이브러리/게임/clips 에서 시작합니다. 클립 옆 `*.json` 의 `label_manual`(손으로 고친 분류)을 `ai_label` 보다 먼저 읽습니다.
 
 ## 애니메이션 가공: 늘리기 · fps · 구간 · 루프 · 키 압축

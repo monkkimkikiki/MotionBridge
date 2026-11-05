@@ -496,40 +496,11 @@ def main():
         write_query("포로_내려찍기", "타격", [0.28, 0.8, 3.3], {"name": "The Nameless Captive", "kind": "creature"})
         check(send_open() == 200, "AnimRef 의 /v1/open 은 200")
         check(vt.link_query and vt.link_query["id"] == "포로_내려찍기" and vt.source_paths(False) == ["/v/hit1.mp4"], "clip.video 가 목록에 들어감: %s" % vt.source_paths(False))
-        check(vt.link_box._visible and "포로_내려찍기" in vt.link_banner.text() and vt.label.currentData() == "타격" and vt.hits.value() == 3, "배너/분류/타수")
+        check("포로_내려찍기" in vt.link_banner.text() and vt.label.currentData() == "타격" and vt.hits.value() == 3, "배너/분류/타수")
         check("0.28" in vt.link_banner.text() and "3.3" in vt.link_banner.text() and "분류 타격" in vt.src_note.text(), "타격 시각과 분류를 같이 표시: %s" % vt.src_note.text())
         check("The Nameless Captive" in vt.known.toPlainText(), "AnimRef 캐릭터가 '아는 정보'에 들어감: %r" % vt.known.toPlainText())
         check("영상 파일이 없습니다" in vt.link_banner.text(), "영상 파일이 없으면 경고")
         vt.known.setPlainText("")
-        # 아무것도 안 고르고 보내기 -> 안내, 요청은 유지
-        QMessageBox.calls.clear()
-        vt.send_result(False)
-        check(QMessageBox.calls and vt.link_query is not None, "선택 없이 보내기 안내")
-        # 후보 만들고 고른 뒤 보내기
-        vt.rows = []
-        vt.index = assetidx.AssetIndex(MESHES, ANIMS)
-        vt.confirmed = [MESHES[0]]
-        vt.mesh_list.clear()
-        vt.mesh_list.addItem(V.QListWidgetItem("Dwarf"))
-        vt.mesh_list.item(0).setData(A.Qt.ItemDataRole.UserRole, MESHES[0])
-        vt.mesh_list.selectAll()
-        vt._refill_anims()
-        vt.anim_list.selectItems([0, 1])
-        pick = vt.anim_list.item(0).data(A.Qt.ItemDataRole.UserRole)
-        stem = os.path.basename(pick).split(".")[0]
-        vt.last_files = ["/out/G/Dwarf/Animations/%s.psa" % stem, "/out/G/Dwarf/Models/SK_Dwarf_rigged.fbx"]
-        vt.send_result(False)
-        res = json.load(open(rf, encoding="utf-8"))
-        check(res["animref_result"] == 1 and res["status"] == "confirmed" and res["clip_id"] == "포로_내려찍기", "result.json 6절 형식: %s" % res)
-        check(res["animation"]["id"] == pick and res["animation"]["name"] == stem and res["animation"]["file"].endswith(stem + ".psa"), "고른 애니메이션: %s" % res["animation"])
-        check(res["model_files"] == ["/out/G/Dwarf/Models/SK_Dwarf_rigged.fbx"] and res["export_dir"] == "/out/G/Dwarf" and "함께 고른" in res["note"], "모델 파일/폴더/메모: %s" % res)
-        check(vt.link_query is None and not vt.link_box._visible and "알리지 못했습니다" in vt.link_banner.text() and "결과 가져오기" in vt.link_banner.text(), "AnimRef 꺼짐 안내: %s" % vt.link_banner.text())
-        # '맞는 게 없음' -> rejected
-        write_query("포로_내려찍기", "타격", [])
-        send_open()
-        vt.send_result(True)
-        res = json.load(open(rf, encoding="utf-8"))
-        check(res["status"] == "rejected" and res["clip_id"] == "포로_내려찍기" and "animation" not in res, "맞는 게 없음 결과: %s" % res)
         mw.stop_link()
         check(mw.link is None and not os.path.exists(os.path.join(ldir, "animtool.json")), "종료 시 접속 정보 삭제")
 

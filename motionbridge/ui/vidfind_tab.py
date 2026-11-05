@@ -378,19 +378,6 @@ class VidFindTab(QWidget):
         self.btn_extract.clicked.connect(lambda *_a: self.extract("both"))
         h.addWidget(self.btn_extract)
         v.addLayout(h)
-        self.link_box = QWidget()
-        lh = QHBoxLayout(self.link_box)
-        lh.setContentsMargins(0, 0, 0, 0)
-        self.btn_link_ok = QPushButton("AnimRef 에 결과 보내기 (고른 메시·애니메이션)")
-        self.btn_link_ok.setMinimumHeight(34)
-        self.btn_link_ok.clicked.connect(lambda *_a: self.send_result(False))
-        lh.addWidget(self.btn_link_ok, 1)
-        self.btn_link_none = QPushButton("맞는 게 없음")
-        self.btn_link_none.setMinimumHeight(34)
-        self.btn_link_none.clicked.connect(lambda *_a: self.send_result(True))
-        lh.addWidget(self.btn_link_none)
-        v.addWidget(self.link_box)
-        self.link_box.setVisible(False)
         lay.addWidget(g)
         lay.addStretch(1)
         fit_widths(inner)
@@ -1116,10 +1103,9 @@ class VidFindTab(QWidget):
         if ch.get("name"):
             facts.append("캐릭터 %s" % ch["name"])
         self._update_src_note(prefix=" · ".join(facts))
-        self.link_box.setVisible(True)
         n = len(q.get("paths", []))
         missing = [p for p in q.get("paths", []) if not os.path.isfile(p)]
-        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개%s. 몬스터를 추측·검수하고 메시/애니메이션을 고른 뒤 '결과 보내기', 없으면 '맞는 게 없음'을 누르세요."
+        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개%s. 몬스터를 추측·검수하고 메시/애니메이션을 골라 추출하세요."
                                  % (" #%s" % q["id"] if q.get("id") else "", n, " · " + " · ".join(facts) if facts else ""))
         if missing:
             self.link_banner.setText(self.link_banner.text() + "\n⚠ 영상 파일이 없습니다: " + wrappable(missing[0]))
@@ -1128,41 +1114,3 @@ class VidFindTab(QWidget):
             self.start_guess()  # 게임 폴더를 이미 검사해 뒀으면 바로 추측 시작
         elif n:
             self.link_banner.setText(self.link_banner.text() + "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '몬스터 추측 시작'을 누르세요.)")
-
-    def _extracted_for(self, asset: str) -> str:
-        """방금 추출한 파일 중 이 에셋의 결과(이름이 같은 파일)."""
-        stem = os.path.basename(asset).split(".")[0].lower()
-        for f in self.last_files:
-            if os.path.splitext(os.path.basename(f))[0].lower() == stem and not f.lower().endswith((".png", ".jpg")):
-                return f
-        return ""
-
-    def send_result(self, none: bool) -> None:
-        q = self.link_query
-        if q is None:
-            return
-        anims = [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems()]
-        listed = [self.anim_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(min(self.anim_list.count(), 50))]
-        if not none and not anims:
-            QMessageBox.warning(self, "결과 보내기", "AnimRef 에 알릴 애니메이션을 목록에서 고르세요 (AnimRef 는 고른 애니메이션 이름을 클립 옆에 표시합니다). 맞는 게 없으면 '맞는 게 없음'을 누르세요.")
-            return
-        ver = "MotionBridge " + __version__
-        if none:
-            res = animlink.build_result(q, "rejected", candidates=listed, tool=ver, note="후보 중 맞는 게 없음" if listed else "")
-        else:
-            first = anims[0]
-            anim = {"id": first, "name": os.path.basename(first).split(".")[0], "file": self._extracted_for(first)}
-            files = [f for f in self.last_files if not f.lower().endswith(".psa")]
-            exp = os.path.dirname(os.path.dirname(self.last_files[0])) if self.last_files else ""
-            note = ("함께 고른 애니메이션: " + ", ".join(os.path.basename(a).split(".")[0] for a in anims[1:])) if len(anims) > 1 else ""
-            res = animlink.build_result(q, "confirmed", anim, files, exp, listed, note, ver)
-        try:
-            out = animlink.deliver(q, res)
-        except OSError as e:
-            QMessageBox.warning(self, "결과 보내기", "result.json 을 쓰지 못했습니다: %s" % e)
-            return
-        self.link_query = None
-        self.link_box.setVisible(False)
-        tail = "AnimRef 에 알렸습니다 (클립 옆에 🔗 표시)." if out["notified"] else "AnimRef 에 알리지 못했습니다 (%s) — result.json 은 저장했으니 AnimRef 의 [결과 가져오기]를 누르세요." % out["error"]
-        self.link_banner.setText("결과를 보냈습니다: %s — %s" % (wrappable(str(out["file"])), tail))
-        self.win.statusBar().showMessage("AnimRef 결과 저장: " + str(out["file"]))
