@@ -253,3 +253,10 @@ blender_scripts/     Blender 안에서 실행되는 스크립트 (convert, apply
 packaging/           PyInstaller spec, Inno Setup, build_windows.bat
 tests/               run_all.py 로 전체 실행
 ```
+
+
+## 크롬식 탭
+화면 위쪽 탭 줄은 크롬처럼 동작합니다.
+- 탭을 누르면 바로 전환, 탭을 끌면 순서 변경.
+- 탭을 탭 줄 밖으로 끌어내면 별도 창으로 분리(오른쪽 클릭 → "별도 창으로 분리"도 가능).
+- 분리된 창의 탭을 메인 창 탭 줄에 놓거나, 오른쪽 클릭 → "메인 창으로 합치기", 또는 분리된 창을 닫으면 원래 순서 자리로 돌아옵니다.

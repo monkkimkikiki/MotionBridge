@@ -552,12 +552,27 @@ def main():
         vt.add_animref()
         check(seen_start == [clips], "클립 폴더 대화상자 시작 위치: %s" % seen_start)
 
-        # 탭: 화살표 없이 전부 보이는 격자, 클릭 한 번으로 이동
-        check(mw.tabs.count() == 7 and mw.tabs.tabText(5) == "영상으로 찾기" and mw.tabs.indexOf(vt) == 5, "탭 7개")
+        # 탭: 크롬식 탭 줄 (번호 = 처음 추가된 순서)
+        check(mw.tabs.count() == 7 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5, "탭 7개")
         mw.tabs.setCurrentIndex(5)
-        check(mw.tabs.currentIndex() == 5 and mw.tabs._btns[5].isChecked() and not mw.tabs._btns[0].isChecked(), "탭 이동/표시")
-        mw.tabs._btns[2].clicked.emit()
-        check(mw.tabs.currentIndex() == 2, "버튼 클릭으로 이동")
+        check(mw.tabs.currentIndex() == 5 and mw.tabs.current_page() is vt, "탭 이동/표시")
+        mw.tabs._bar_changed(2)  # 탭 줄을 눌렀을 때
+        check(mw.tabs.currentIndex() == 2, "탭 클릭으로 이동")
+
+        # 분리 / 합치기: 분리해도 번호로 이동하면 그 창이 앞으로 나오고, 닫으면 제자리로 돌아온다
+        hub = mw.tabs.hub
+        win = hub.detach(vt, None)
+        check(win is not None and hub.is_detached(vt) and vt not in mw.tabs.pages and len(win.view.pages) == 1, "탭 분리")
+        mw.tabs.setCurrentIndex(5)
+        check(hub.view_of(vt) is win.view and win.view.current_page() is vt, "분리된 탭도 번호로 접근")
+        hub.dock(vt)
+        check(not hub.is_detached(vt) and mw.tabs.pages.index(vt) == 5 and win not in hub.floats, "합치기: 원래 순서 자리로")
+        w2 = hub.detach(mw.tabs.widget(1), None)
+        hub.redock_window(w2)
+        check(mw.tabs.pages.index(mw.tabs.widget(1)) == 1 and not hub.floats, "창 닫으면 메인으로 복귀")
+        a, b = mw.tabs.pages[0], mw.tabs.pages[1]
+        hub.move(a, mw.tabs, len(mw.tabs.pages))
+        check(mw.tabs.pages[-1] is a and mw.tabs.pages[0] is b and mw.tabs.indexOf(a) == 0, "순서 바꿔도 번호는 그대로")
 
     print("모두 통과" if not fails else "실패 %d개" % len(fails))
     sys.exit(1 if fails else 0)

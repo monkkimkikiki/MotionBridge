@@ -27,7 +27,8 @@ from .viewer import MESH_MODES, Viewport
 from .retimebar import RetimeBar
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
-from .widgets import EditPanel, NumField, PathTree, TabGrid, Worker, fit_widths, wrappable
+from .chrometabs import ChromeTabs
+from .widgets import EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -284,16 +285,16 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Orientation.Horizontal)
         self.setCentralWidget(split)
 
-        self.tabs = TabGrid(4)  # 탭 막대(화살표로 넘김) 대신 버튼 격자: 전부 보이고 한 번에 이동
-        self.tabs.addTab(self._tab_extract(), "0. 게임에서 추출")
-        self.tabs.addTab(self._tab_files(), "1. 파일·매핑")
-        self.tabs.addTab(self._tab_retarget(), "2. 리타깃 조절")
-        self.tabs.addTab(self._tab_quality(), "3. 품질 검수")
-        self.tabs.addTab(self._tab_export(), "4. 내보내기")
+        self.tabs = ChromeTabs()  # 크롬식 탭 줄: 누르면 전환 · 끌어내면 별도 창 · 다른 창 탭 줄에 놓으면 합쳐짐
+        self.tabs.addTab(self._tab_extract(), "추출", "0. 게임에서 추출")
+        self.tabs.addTab(self._tab_files(), "파일·매핑", "1. 파일·매핑")
+        self.tabs.addTab(self._tab_retarget(), "리타깃", "2. 리타깃 조절")
+        self.tabs.addTab(self._tab_quality(), "검수", "3. 품질 검수")
+        self.tabs.addTab(self._tab_export(), "내보내기", "4. 내보내기")
         self.vidfind = VidFindTab(self)
-        self.tabs.addTab(self.vidfind, "영상으로 찾기")
-        self.tabs.addTab(self._tab_help(), "추출 도우미")
-        self.tabs.setMinimumWidth(470)
+        self.tabs.addTab(self.vidfind, "영상찾기", "영상으로 찾기")
+        self.tabs.addTab(self._tab_help(), "도우미", "추출 도우미")
+        self.tabs.setMinimumWidth(500)
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         split.addWidget(self.tabs)
 

@@ -25,6 +25,13 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: python tests/run_all.py
+      - name: Real Qt smoke (offscreen)
+        # 가짜 Qt 로는 못 잡는 화면 구성 오류를 진짜 PySide6 로 확인한다. 실패해도 빌드는 계속한다.
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: python tests/real_qt_smoke.py
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
