@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import bridge, biped, export as X
+from . import animops, bridge, biped, export as X
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -34,6 +34,7 @@ class ExportOptions:
     write_skeleton_json: bool = False  # 본 구조 JSON 을 따로 저장
     blender: Optional[str] = None
     fbx_options: Dict = field(default_factory=dict)
+    edit: Optional[animops.EditOptions] = None  # 자르기/늘리기/fps/루프/키 압축
 
 
 class Project:
@@ -49,6 +50,7 @@ class Project:
         self.issues: List[Issue] = []
         self.blender: Optional[str] = None
         self.log: List[str] = []
+        self.edit_info: Optional[animops.EditInfo] = None
 
     # ------------------------------------------------------------------ 불러오기
     def load_source(self, path: str) -> Model:
@@ -255,7 +257,12 @@ class Project:
                 meshes = self.src.meshes if opt.include_mesh else None
                 model_path = self.src.path
             upm = X.guess_units_per_meter(skel, F)
-            files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns)
+            keys = None
+            if opt.edit is not None and opt.edit.active():
+                anim, keys, info = animops.apply_edit(anim, opt.edit, upm, skel.parents)
+                self.edit_info = info
+                warns += ["[%s] %s" % (anim_src.name, w) for w in info.notes]
+            files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys)
         if opt.write_skeleton_json:
             skel = self.tgt.skeleton if opt.what == "retargeted" else self.src.skeleton
             p = os.path.join(opt.out_dir, _safe(skel.name) + "_skeleton.json")
@@ -263,13 +270,15 @@ class Project:
             files.append(p)
         return files, warns
 
-    def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns) -> List[str]:
+    def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns, keys=None) -> List[str]:
         out: List[str] = []
         if not opt.include_skeleton:
             p = os.path.join(opt.out_dir, base + "_curves.json")
-            X.write_json(p, X.curves_dict(skel, anim))
+            X.write_json(p, X.curves_dict(skel, anim, keys))
             return [p]
         fmts = [f.lower() for f in opt.formats]
+        if keys is not None and "bip" in fmts:
+            warns.append("Biped 스크립트는 프레임마다 키를 찍는 방식이라 키 수는 줄지 않고, 정리(압축)된 모션으로 나갑니다.")
         if "bip" in fmts:  # 3ds Max Biped: 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
             slots = self.tgt_slots if opt.what == "retargeted" else self.src_slots
             try:
@@ -293,12 +302,15 @@ class Project:
                         npz = os.path.join(d, "payload.npz")
                         X.write_blender_payload(npz, skel, anim, base)
                         o = {"axis_forward": preset.fbx_forward, "axis_up": preset.fbx_up}
+                        if keys is not None and opt.edit is not None:
+                            # FBX 내보내기는 프레임마다 굽고 나서 줄이므로, 허용 오차를 Blender 의 단순화 계수로 옮겨 준다.
+                            o["simplify"] = float(max(min(np.sin(np.radians(opt.edit.rot_tol_deg) / 2.0), opt.edit.pos_tol_cm / 100.0), 1e-5))
                         o.update(opt.fbx_options)
                         r = bridge.apply_and_export_fbx(model_path, npz, p, o, opt.blender or self.blender)
                     warns += r.warnings
                     out.append(p)
         if "glb" in fmts:
             p = os.path.join(opt.out_dir, base + ".glb")
-            X.export_glb(p, skel, anim, F, upm, meshes)
+            X.export_glb(p, skel, anim, F, upm, meshes, keys)
             out.append(p)
         return out

@@ -391,6 +391,7 @@ def write_glb(
     anim: Optional[Animation],
     meshes: Optional[List[Mesh]] = None,
     translation_threshold: float = 1e-6,
+    keys=None,
 ) -> None:
     """스켈레톤 + (선택) 애니메이션 + (선택) 스킨드 메시를 GLB 로 쓴다. Y-up/미터 가정은 호출자 책임."""
     J = skel.n
@@ -469,18 +470,27 @@ def write_glb(
         times = (np.arange(T, dtype=np.float32) / np.float32(anim.fps)).reshape(T, 1)
         t_acc = buf.add(times, 5126, "SCALAR", minmax=True)
         samplers, channels = [], []
+
+        def time_acc(idx: np.ndarray) -> int:
+            """키 목록이면 그 프레임들만의 시간 accessor, 아니면 전체 프레임 공용 accessor."""
+            if keys is None or len(idx) == T:
+                return t_acc
+            return buf.add((idx.astype(np.float32) / np.float32(anim.fps)).reshape(-1, 1), 5126, "SCALAR", minmax=True)
+
         for j in range(J):
-            r = anim.rot[:, j]
+            ir = np.arange(T) if keys is None else np.asarray(keys.rot[j])
+            r = anim.rot[ir, j]
             r_xyzw = np.concatenate([r[:, 1:4], r[:, 0:1]], axis=1).astype(np.float32)
             a = buf.add(r_xyzw, 5126, "VEC4")
-            samplers.append({"input": t_acc, "output": a, "interpolation": "LINEAR"})
+            samplers.append({"input": time_acc(ir), "output": a, "interpolation": "LINEAR"})
             channels.append({"sampler": len(samplers) - 1, "target": {"node": j, "path": "rotation"}})
             moving = (skel.parents[j] < 0) or (np.abs(anim.pos[:, j] - anim.pos[0, j]).max() > translation_threshold) or (
                 np.abs(anim.pos[0, j] - skel.offsets[j]).max() > translation_threshold
             )
             if moving:
-                a = buf.add(anim.pos[:, j].astype(np.float32), 5126, "VEC3")
-                samplers.append({"input": t_acc, "output": a, "interpolation": "LINEAR"})
+                ip = np.arange(T) if keys is None else np.asarray(keys.pos[j])
+                a = buf.add(anim.pos[ip, j].astype(np.float32), 5126, "VEC3")
+                samplers.append({"input": time_acc(ip), "output": a, "interpolation": "LINEAR"})
                 channels.append({"sampler": len(samplers) - 1, "target": {"node": j, "path": "translation"}})
         animations.append({"name": anim.name, "samplers": samplers, "channels": channels})
 

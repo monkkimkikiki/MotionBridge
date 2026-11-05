@@ -26,7 +26,7 @@ from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
-from .widgets import NumField, PathTree, TabGrid, Worker, fit_widths, wrappable
+from .widgets import EditPanel, NumField, PathTree, TabGrid, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -1102,6 +1102,9 @@ class MainWindow(QMainWindow):
         lay.addWidget(b)
         self._update_blender_label()
 
+        self.edit_panel = EditPanel("애니메이션 가공 (늘리기 · fps · 구간 · 루프 · 키 압축)", self.cfg, "ex_edit")
+        lay.addWidget(self.edit_panel)
+
         g = QGroupBox("클립")
         v = QVBoxLayout(g)
         self.rb_clip_cur = QRadioButton("현재 클립만")
@@ -1575,7 +1578,11 @@ class MainWindow(QMainWindow):
         opt = ExportOptions(
             out_dir=out, presets=presets or ["blender"], formats=fmts or ["bvh"], include_skeleton=skel, what=what, clips=clips,
             include_mesh=self.cb_mesh.isChecked(), write_skeleton_json=self.cb_skel_json.isChecked(), blender=self.pr.blender,
+            edit=self.edit_panel.options(),
         )
+        self.edit_panel.save()
+        bridge.save_config(self.cfg)
+        self.pr.edit_info = None
         clip0 = self.pr.clip
         self.export_log.clear()
 
@@ -1586,6 +1593,8 @@ class MainWindow(QMainWindow):
             files, warns = res
             self.pr.clip = clip0
             self.export_log.appendPlainText("완료: 파일 %d개" % len(files))
+            if opt.edit is not None and opt.edit.active() and self.pr.edit_info is not None:  # 마지막 클립 기준 요약
+                self.export_log.appendPlainText("가공(%s): %s" % (opt.edit.describe(), self.pr.edit_info.summary()))
             for f in files:
                 self.export_log.appendPlainText("  " + f)
             for wmsg in warns:

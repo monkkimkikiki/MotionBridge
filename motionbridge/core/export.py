@@ -119,28 +119,45 @@ def export_bvh(path: str, skel: Skeleton, anim: Animation, frame_to_canon: np.nd
     return warns
 
 
-def export_glb(path: str, skel: Skeleton, anim: Optional[Animation], frame_to_canon: np.ndarray, units_per_meter: float, meshes: Optional[List[Mesh]] = None) -> None:
-    """glTF 규격(Y-up, 미터)으로 변환해서 쓴다."""
+def export_glb(path: str, skel: Skeleton, anim: Optional[Animation], frame_to_canon: np.ndarray, units_per_meter: float, meshes: Optional[List[Mesh]] = None,
+               keys=None) -> None:
+    """glTF 규격(Y-up, 미터)으로 변환해서 쓴다. keys(KeySet)가 있으면 관절마다 남긴 키만 쓴다."""
     sk, an, ms = reframe(skel, anim, frame_to_canon, 1.0 / units_per_meter, meshes)
-    write_glb(path, sk, an, ms)
+    write_glb(path, sk, an, ms, keys=keys)
 
 
-def curves_dict(skel: Skeleton, anim: Animation) -> dict:
-    """스켈레톤 구조 없이 애니메이션 커브만. 관절 이름 기준으로 이름이 같은 리그에 적용할 때 쓴다."""
-    return {
+def curves_dict(skel: Skeleton, anim: Animation, keys=None) -> dict:
+    """스켈레톤 구조 없이 애니메이션 커브만. 관절 이름 기준으로 이름이 같은 리그에 적용할 때 쓴다.
+
+    keys(KeySet)가 있으면 남긴 키만 쓰고, 각 채널에 `rotation_frames`/`position_frames`(프레임 번호)를 함께 넣는다.
+    """
+    joints = {}
+    for j in range(skel.n):
+        moving = (skel.parents[j] < 0) or np.abs(anim.pos[:, j] - skel.offsets[j]).max() > 1e-6
+        if keys is None:
+            joints[skel.names[j]] = {
+                "rotation": np.round(anim.rot[:, j], 6).tolist(),
+                "position": np.round(anim.pos[:, j], 6).tolist() if moving else None,
+            }
+        else:
+            kr, kp = keys.rot[j], keys.pos[j]
+            joints[skel.names[j]] = {
+                "rotation_frames": [int(x) for x in kr],
+                "rotation": np.round(anim.rot[kr, j], 6).tolist(),
+                "position_frames": [int(x) for x in kp] if moving else None,
+                "position": np.round(anim.pos[kp, j], 6).tolist() if moving else None,
+            }
+    d = {
         "format": "motionbridge-curves-1",
         "name": anim.name,
         "fps": anim.fps,
         "frames": anim.n_frames,
         "rotation_order": "wxyz quaternion, local",
-        "joints": {
-            skel.names[j]: {
-                "rotation": np.round(anim.rot[:, j], 6).tolist(),
-                "position": np.round(anim.pos[:, j], 6).tolist() if (skel.parents[j] < 0 or np.abs(anim.pos[:, j] - skel.offsets[j]).max() > 1e-6) else None,
-            }
-            for j in range(skel.n)
-        },
+        "joints": joints,
     }
+    if keys is not None:
+        d["sparse"] = True
+    return d
 
 
 def skeleton_dict(skel: Skeleton) -> dict:

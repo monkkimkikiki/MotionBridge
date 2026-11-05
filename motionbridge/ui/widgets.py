@@ -4,9 +4,10 @@ from __future__ import annotations
 import traceback
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton, QSizePolicy, QSlider, QStackedWidget,
-                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from ..core import animops
 from ..core.pathtree import Node, build_tree
 from ..core import filekind
 
@@ -281,3 +282,110 @@ class TabGrid(QWidget):
 
     def tabText(self, i: int) -> str:  # noqa: N802
         return self._btns[i].text()
+
+
+class EditPanel(QGroupBox):
+    """애니메이션 가공 옵션(늘리기/줄이기, fps, 구간, 루프, 키 압축). options() 로 animops.EditOptions 를 얻는다.
+
+    값은 cfg 에 `<prefix>_...` 로 기억한다.
+    """
+
+    KEYS = ("mode", "value", "fps", "start", "end", "loop", "compress", "rot", "pos")
+
+    def __init__(self, title="애니메이션 가공 (늘리기·압축)", cfg=None, prefix="edit", parent=None):
+        super().__init__(title, parent)
+        self.cfg, self.prefix = cfg if cfg is not None else {}, prefix
+        g = QGridLayout(self)
+        r = 0
+        g.addWidget(QLabel("길이"), r, 0)
+        self.mode = QComboBox()
+        for text, key in (("그대로", "none"), ("속도 배율", "speed"), ("프레임 수", "frames"), ("길이(초)", "seconds")):
+            self.mode.addItem(text, key)
+        self.mode.setToolTip("속도 배율: 2 = 2배 빠르게(길이 절반), 0.5 = 2배 느리게.  프레임 수/길이(초): 클립 전체를 그 길이에 맞춰 늘리거나 줄입니다.")
+        g.addWidget(self.mode, r, 1)
+        self.value = QDoubleSpinBox()
+        self.value.setDecimals(2)
+        self.value.setRange(0.01, 99999.0)
+        self.value.setValue(1.0)
+        g.addWidget(self.value, r, 2)
+        r += 1
+        g.addWidget(QLabel("fps"), r, 0)
+        self.fps = QDoubleSpinBox()
+        self.fps.setDecimals(1)
+        self.fps.setRange(0.0, 480.0)
+        self.fps.setSpecialValueText("그대로")
+        self.fps.setToolTip("0 = 그대로. 30 → 60 처럼 바꾸면 길이(초)는 유지하고 프레임 수만 바뀝니다.")
+        g.addWidget(self.fps, r, 1)
+        r += 1
+        g.addWidget(QLabel("구간(프레임)"), r, 0)
+        self.start = QSpinBox()
+        self.start.setRange(0, 999999)
+        self.end = QSpinBox()
+        self.end.setRange(0, 999999)
+        self.end.setSpecialValueText("끝까지")
+        self.end.setToolTip("0 = 끝까지. 시작/끝 프레임은 0부터 셉니다(포함).")
+        g.addWidget(self.start, r, 1)
+        g.addWidget(self.end, r, 2)
+        r += 1
+        g.addWidget(QLabel("루프 이음"), r, 0)
+        self.loop = QSpinBox()
+        self.loop.setRange(0, 999)
+        self.loop.setSuffix(" 프레임")
+        self.loop.setToolTip("0 = 끔. 끝 N프레임을 첫 포즈로 서서히 이어서 반복 재생이 튀지 않게 합니다(루트 이동량은 유지).")
+        g.addWidget(self.loop, r, 1)
+        r += 1
+        self.compress = QCheckBox("키프레임 압축")
+        self.compress.setToolTip("오차 허용치 안에서 군더더기 키를 줄입니다. GLB/JSON 은 줄어든 키만 저장하고, FBX 는 Blender 단순화로 줄이며,\nBVH/Biped/PSA 는 프레임마다 값을 쓰는 형식이라 '정리된 모션'으로 저장됩니다.")
+        g.addWidget(self.compress, r, 0, 1, 3)
+        r += 1
+        g.addWidget(QLabel("허용 오차"), r, 0)
+        self.rot = QDoubleSpinBox()
+        self.rot.setDecimals(2)
+        self.rot.setRange(0.0, 45.0)
+        self.rot.setSuffix(" °")
+        self.rot.setValue(0.5)
+        self.pos = QDoubleSpinBox()
+        self.pos.setDecimals(2)
+        self.pos.setRange(0.0, 100.0)
+        self.pos.setSuffix(" cm")
+        self.pos.setValue(0.1)
+        g.addWidget(self.rot, r, 1)
+        g.addWidget(self.pos, r, 2)
+        self.load()
+
+    # ---- 값 <-> 설정
+    def options(self) -> "animops.EditOptions":
+        mode, v = self.mode.currentData() or "none", float(self.value.value())
+        end = int(self.end.value())
+        return animops.EditOptions(
+            trim_start=int(self.start.value()), trim_end=(end if end > 0 else None),
+            speed=(v if mode == "speed" else 1.0),
+            frames=(int(round(v)) if mode == "frames" else None),
+            seconds=(v if mode == "seconds" else None),
+            fps=(float(self.fps.value()) or None),
+            loop_frames=int(self.loop.value()),
+            compress=bool(self.compress.isChecked()),
+            rot_tol_deg=float(self.rot.value()), pos_tol_cm=float(self.pos.value()),
+        )
+
+    def save(self) -> None:
+        c, p = self.cfg, self.prefix
+        c[p + "_mode"] = self.mode.currentData() or "none"
+        c[p + "_value"] = float(self.value.value())
+        c[p + "_fps"] = float(self.fps.value())
+        c[p + "_start"], c[p + "_end"], c[p + "_loop"] = int(self.start.value()), int(self.end.value()), int(self.loop.value())
+        c[p + "_compress"] = bool(self.compress.isChecked())
+        c[p + "_rot"], c[p + "_pos"] = float(self.rot.value()), float(self.pos.value())
+
+    def load(self) -> None:
+        c, p = self.cfg, self.prefix
+        i = self.mode.findData(c.get(p + "_mode", "none"))
+        self.mode.setCurrentIndex(max(i, 0))
+        self.value.setValue(float(c.get(p + "_value", 1.0)))
+        self.fps.setValue(float(c.get(p + "_fps", 0.0)))
+        self.start.setValue(int(c.get(p + "_start", 0)))
+        self.end.setValue(int(c.get(p + "_end", 0)))
+        self.loop.setValue(int(c.get(p + "_loop", 0)))
+        self.compress.setChecked(bool(c.get(p + "_compress", False)))
+        self.rot.setValue(float(c.get(p + "_rot", 0.5)))
+        self.pos.setValue(float(c.get(p + "_pos", 0.1)))

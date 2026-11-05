@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, vision
-from .widgets import fit_widths, wrappable
+from .widgets import EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
 MEMORY_FILE = os.path.join(bridge.CONFIG_DIR, "matches.json")
@@ -324,6 +324,9 @@ class VidFindTab(QWidget):
         self.btn_view.clicked.connect(lambda *_a: self.open_in_viewport())
         v.addWidget(self.btn_view)
         self.anim_list.itemDoubleClicked.connect(self._anim_double_clicked)
+        self.edit_panel = EditPanel("추출할 애니메이션 가공 (선택) — 늘리기 · fps · 구간 · 루프 · 키 압축", self.cfg, "vf_edit")
+        self.edit_panel.setToolTip("켜면 추출한 PSA 옆에 '<이름>_edit.psa' 를 하나 더 만듭니다(원본은 그대로). 아무것도 안 고르면 가공하지 않습니다.")
+        v.addWidget(self.edit_panel)
         self.btn_extract = QPushButton("선택한 메시 + 애니메이션 추출 (파일로만)")
         self.btn_extract.setMinimumHeight(34)
         self.btn_extract.setToolTip("0번 탭의 형식/리깅/대상 프로그램/출력 폴더 설정을 그대로 씁니다.")
@@ -885,6 +888,8 @@ class VidFindTab(QWidget):
                 return
         lay = win.make_layout(self._single_char())
         lay.chars.update(self._char_map(anims))
+        edit = self.edit_panel.options()
+        self.edit_panel.save()
         bridge.save_config(self.cfg)
         win._ex_skips = []
         total = len(meshes) + len(anims)
@@ -904,7 +909,13 @@ class VidFindTab(QWidget):
             if meshes:
                 files += extractor.export_meshes(*a, meshes, out, fmts, variants, preset, win.pr.blender, tex, keep_raw, ev, win._ex_skips.append, lay=lay)
             if anims:
-                files += extractor.export_assets(*a, anims, out, ev, kind="anim", lay=lay)
+                got = extractor.export_assets(*a, anims, out, ev, kind="anim", lay=lay)
+                files += got
+                if edit.active():  # 늘리기/압축 등: 추출한 PSA 옆에 가공본을 만든다
+                    infos: List[str] = []
+                    made, warns = extractor.edit_psa_files(got, edit, on_info=lambda f, i: infos.append("%s — %s" % (os.path.basename(f), i.summary())))
+                    files += made
+                    win._ex_skips += ["가공(%s): %s" % (edit.describe(), x) for x in infos[:3]] + warns
             return files
 
         win.run_async(job, self._after_extract, "추출 중")

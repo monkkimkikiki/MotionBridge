@@ -20,7 +20,7 @@ import sys
 import tempfile
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import bridge, layout, meshconv
+from . import animops, bridge, layout, meshconv
 from .gamescan import normalize_aes_key
 
 HELPER_NAMES = ["mbextract.exe", "mbextract"]
@@ -249,3 +249,36 @@ def export_locres(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
     os.makedirs(out_dir, exist_ok=True)
     args = ["locres"] + _base_args(game, ue, aes, usmap) + ["--out", out_dir]
     return [e["file"] for e in run_helper(helper, args, on_event) if e.get("type") == "exported" and e.get("file")]
+
+
+def edit_psa_files(files: List[str], opt: "animops.EditOptions", suffix: str = "_edit", units_per_meter: float = 100.0,
+                   on_info: Optional[Callable[[str, "animops.EditInfo"], None]] = None) -> Tuple[List[str], List[str]]:
+    """추출한 PSA 를 읽어 늘리기/fps/자르기/루프/압축을 적용하고 `<이름><suffix>.psa` 로 옆에 저장한다(원본은 그대로).
+
+    반환: (만든 파일, 경고). PSA 는 프레임마다 값을 담는 형식이라 압축은 '키로 정리한(군더더기를 뺀) 모션'으로 저장된다.
+    Unreal 의 길이 단위는 cm 이므로 units_per_meter 기본값은 100.
+    """
+    from .io_psa import read_psa_exact, write_psa
+
+    made: List[str] = []
+    warns: List[str] = []
+    if opt is None or not opt.active():
+        return made, warns
+    for f in files:
+        if not f.lower().endswith(".psa") or not os.path.isfile(f):
+            continue
+        try:
+            m = read_psa_exact(f)
+            out_anims = []
+            for a in m.animations:
+                a2, _keys, info = animops.apply_edit(a, opt, units_per_meter, m.skeleton.parents)
+                out_anims.append(a2)
+                warns += ["%s: %s" % (os.path.basename(f), n) for n in info.notes]
+                if on_info:
+                    on_info(f, info)
+            dst = os.path.splitext(f)[0] + suffix + ".psa"
+            write_psa(dst, m.skeleton, out_anims)
+            made.append(dst)
+        except Exception as e:  # 한 파일이 실패해도 나머지는 계속
+            warns.append("%s: 가공 실패 — %s" % (os.path.basename(f), e))
+    return made, warns

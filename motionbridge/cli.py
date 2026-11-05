@@ -16,6 +16,7 @@ from .core import bridge, extractor, gamescan, layout, meshconv
 from .core.export import PRESETS
 from .core.loader import load_model
 from .core.mapping import SLOT_ORDER, auto_map, detect_frame, slot_label
+from .core import animops
 from .core.pipeline import ExportOptions, Project
 from .core.retarget import RetargetSettings
 
@@ -100,11 +101,19 @@ def cmd_retarget(args) -> int:
     if args.save_profile:
         pr.save_profile(args.save_profile)
         _p("프로필 저장:", args.save_profile)
+    edit = animops.EditOptions(
+        trim_start=args.trim[0] if args.trim else 0, trim_end=args.trim[1] if args.trim else None,
+        speed=args.speed, frames=args.frames, seconds=args.seconds, fps=args.fps, loop_frames=args.loop,
+        compress=args.compress, rot_tol_deg=args.rot_tol, pos_tol_cm=args.pos_tol,
+    )
     opt = ExportOptions(
         out_dir=args.out, presets=args.presets, formats=args.formats, include_skeleton=not args.no_skeleton,
         what=args.what, clips=clips, include_mesh=not args.no_mesh, write_skeleton_json=args.skeleton_json, blender=args.blender,
+        edit=edit if edit.active() else None,
     )
     files, warns = pr.export(opt, progress=lambda i, n, nm: _p("[%d/%d] %s" % (i + 1, n, nm)))
+    if opt.edit is not None and pr.edit_info is not None:
+        _p("가공(%s): %s" % (opt.edit.describe(), pr.edit_info.summary()))
     for w in warns:
         _p("경고:", w)
     _p("완료: 파일 %d개" % len(files))
@@ -227,6 +236,15 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--ground-offset", type=float)
     for k in ("src-up", "src-fwd", "tgt-up", "tgt-fwd"):
         r.add_argument("--" + k, dest=k.replace("-", "_"), help="좌표축 수동 지정 (+X..-Z), 기본 자동")
+    r.add_argument("--speed", type=float, default=1.0, help="재생 속도 배율 (2=2배 빠르게, 0.5=2배 느리게)")
+    r.add_argument("--frames", type=int, help="클립 전체를 이 프레임 수로 늘리거나 줄임 (--speed 보다 우선)")
+    r.add_argument("--seconds", type=float, help="클립 전체를 이 길이(초)로 늘리거나 줄임")
+    r.add_argument("--fps", type=float, help="출력 fps (길이(초)는 유지)")
+    r.add_argument("--trim", type=int, nargs=2, metavar=("START", "END"), help="시작/끝 프레임만 남김 (0부터, 끝 포함)")
+    r.add_argument("--loop", type=int, default=0, metavar="N", help="끝 N프레임을 첫 포즈로 이어 루프가 되게 함")
+    r.add_argument("--compress", action="store_true", help="키프레임 압축 (GLB/JSON 은 키 수가 줄고, 나머지는 정리된 모션)")
+    r.add_argument("--rot-tol", type=float, default=0.5, help="압축 회전 허용 오차(도), 기본 0.5")
+    r.add_argument("--pos-tol", type=float, default=0.1, help="압축 위치 허용 오차(cm), 기본 0.1")
     r.add_argument("--blender")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_retarget)

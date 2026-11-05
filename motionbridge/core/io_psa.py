@@ -211,6 +211,16 @@ def read_psa(path: str, conj: Optional[Tuple[bool, bool]] = None, fmt: str = "cu
     return Model(path=path, skeleton=skel, animations=anims, meshes=[], notes=notes)
 
 
+def read_psa_exact(path: str) -> Model:
+    """사람 모양 점수와 상관없이 CUE4Parse 배치로만 읽는다(몬스터처럼 사람 모양이 아닌 PSA 용).
+
+    write_psa(path, skel, anims)(기본 배치)와 짝이라 읽고-고치고-다시 쓰는 용도에 맞다.
+    """
+    raw = parse_psa(path)
+    skel, anims = _build_cue4parse(raw)
+    return Model(path=path, skeleton=skel, animations=anims, meshes=[], notes=["PSA: CUE4Parse 배치로 읽음"])
+
+
 # ----------------------------------------------------------------------------- 쓰기 (테스트/내보내기용)
 def write_psa(path: str, skel: Skeleton, anims: List[Animation], conj: Optional[Tuple[bool, bool]] = None, to_left_handed: bool = True) -> None:
     """Model(오른손) -> PSA. conj 를 안 주면 CUE4Parse 와 같은 배치로, 주면 일반 방식(read_psa 의 conj 와 짝)으로 쓴다."""

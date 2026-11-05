@@ -100,6 +100,24 @@ AnimRef 의 `연동규격_추출툴.md` 를 따릅니다. 프로그램이 켜져
 - '영상으로 찾기' 탭에서 애니메이션을 고르고 **'AnimRef 에 결과 보내기'** 를 누르면 query.json 의 `result_path` 에 `result.json`(6절 형식: `status`/`animation`/`model_files`/`export_dir`/`candidates`)을 쓰고 AnimRef 의 `POST /v1/result {result_path, result}` 로 알립니다 → AnimRef 클립 옆에 🔗 표시. **'맞는 게 없음'** 은 `status: rejected`. 먼저 추출했다면 그 파일 경로가 `animation.file` / `model_files` 에 들어갑니다. AnimRef 가 꺼져 있거나 거절하면 이유를 보여 주고 `result.json` 은 남깁니다(AnimRef 의 [결과 가져오기]로 읽음).
 - 'AnimRef 클립 폴더…' 대화상자는 AnimRef 설정(`%APPDATA%\AnimRef\settings.json`)의 라이브러리/게임/clips 에서 시작합니다. 클립 옆 `*.json` 의 `label_manual`(손으로 고친 분류)을 `ai_label` 보다 먼저 읽습니다.
 
+## 애니메이션 가공: 늘리기 · fps · 구간 · 루프 · 키 압축
+
+찾은 애니메이션을 내보내기 직전에 가공할 수 있습니다. "2. 내보내기" 탭의 **애니메이션 가공**, "영상으로 찾기" 5) 의 **추출할 애니메이션 가공**, CLI 의 `--speed/--frames/--seconds/--fps/--trim/--loop/--compress` 가 같은 기능을 씁니다. 아무것도 안 고르면 가공하지 않습니다.
+
+| 항목 | 설명 |
+|---|---|
+| 길이 | 속도 배율(2=2배 빠르게), 프레임 수, 길이(초) 중 하나로 클립 전체를 늘리거나 줄임. 회전은 slerp, 위치는 선형 보간 |
+| fps | 길이(초)를 유지하고 프레임 수만 변경 (30→60 등) |
+| 구간 | 시작/끝 프레임만 남김 |
+| 루프 이음 | 끝 N프레임을 첫 포즈로 서서히 이음. 루트 이동량은 유지 |
+| 키프레임 압축 | 관절마다 회전(기본 0.5°)·위치(기본 0.1cm) 오차 안에서 군더더기 키를 줄임 (Ramer–Douglas–Peucker) |
+
+가공 순서: 자르기 → 늘리기/fps → 루프 이음 → 압축.
+
+형식별 압축 결과: **GLB·커브 JSON**은 남긴 키만 저장하므로 키 수와 파일 크기가 실제로 줄어듭니다. **FBX**는 Blender 가 프레임마다 굽기 때문에 허용 오차를 Blender 단순화 계수로 바꿔 줄입니다(오차 값은 근사). **BVH·Biped(.ms)·PSA**는 프레임마다 값을 쓰는 형식이라 키 수는 줄지 않고 '정리된 모션'이 저장됩니다. 내보낸 뒤에는 최대 오차와 키 수 변화(예: `키 968 → 100`)를 로그에 보여 줍니다.
+
+"영상으로 찾기"에서 추출할 때는 원본 PSA 는 그대로 두고 옆에 `<이름>_edit.psa` 를 하나 더 만듭니다.
+
 ## 3ds Max Biped 로 바로 내보내기
 
 FBX 는 Biped 에 직접 들어가지 않고(.bip 는 비공개 바이너리라 이 프로그램이 직접 쓸 수 없음) FBX → Biped 변환에 손이 한 번 더 갑니다. 내보내기 탭에서 **"3ds Max Biped (.ms)"** 를 체크하면 다음 두 파일이 만들어집니다.

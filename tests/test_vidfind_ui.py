@@ -367,6 +367,28 @@ def main():
         vt._anim_double_clicked(vt.anim_list.item(2))
         check(len(mw.pr.src.animations) == 1 and exported[-1] == [vt.anim_list.item(2).data(A.Qt.ItemDataRole.UserRole)], "더블클릭은 하나만 열기")
 
+        # ---------------- 추출 + 가공(늘리기/압축): 원본 PSA 옆에 _edit.psa 가 생긴다
+        from motionbridge.core.io_psa import read_psa_exact
+        vt.mesh_list.clearSelection() if hasattr(vt.mesh_list, "clearSelection") else None
+        vt.mesh_list.selectItems([]) if hasattr(vt.mesh_list, "selectItems") else None
+        vt.anim_list.selectItems([0])
+        vt.edit_panel.mode.setCurrentIndex(vt.edit_panel.mode.findData("speed"))
+        vt.edit_panel.value.setValue(2.0)
+        vt.edit_panel.compress.setChecked(True)
+        mw.ex_out.setText(os.path.join(d, "out3"))
+        vt.extract()
+        edited = [f for f in vt.last_files if f.endswith("_edit.psa")]
+        plain = [f for f in vt.last_files if f.endswith(".psa") and not f.endswith("_edit.psa")]
+        check(len(edited) == 1 and len(plain) == 1 and os.path.isfile(plain[0]), "원본 PSA 는 두고 _edit.psa 를 추가: %s" % vt.last_files)
+        n0 = read_psa_exact(plain[0]).animations[0].n_frames
+        n1 = read_psa_exact(edited[0]).animations[0].n_frames
+        check(abs(n1 - ((n0 - 1) / 2.0 + 1)) <= 1, "2배 빠르게 = 프레임 절반: %d -> %d" % (n0, n1))
+        check(vt.cfg.get("vf_edit_compress") is True and vt.cfg.get("vf_edit_mode") == "speed", "가공 설정을 기억")
+        vt.edit_panel.mode.setCurrentIndex(0)
+        vt.edit_panel.compress.setChecked(False)
+        vt.extract()
+        check(not [f for f in vt.last_files if f.endswith("_edit.psa")], "가공을 끄면 _edit 파일 없음")
+
         # Claude: 키 없으면 호출 전에 안내
         vt.engine.setCurrentIndex(vt.engine.findData("claude"))
         check(vt.model.text() == "claude-sonnet-5-5", "Claude 기본 모델: %s" % vt.model.text())
