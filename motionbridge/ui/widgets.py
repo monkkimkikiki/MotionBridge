@@ -292,22 +292,28 @@ class EditPanel(QGroupBox):
 
     KEYS = ("mode", "value", "fps", "start", "end", "loop", "compress", "rot", "pos")
 
-    def __init__(self, title="애니메이션 가공 (늘리기·압축)", cfg=None, prefix="edit", parent=None):
+    def __init__(self, title="애니메이션 가공 (늘리기·압축)", cfg=None, prefix="edit", parent=None, simple=False):
+        """simple=True: 길이/구간 칸을 숨긴다(길이·구간은 뷰어 아래 '구간 편집'에서 보면서 조절하므로)."""
         super().__init__(title, parent)
-        self.cfg, self.prefix = cfg if cfg is not None else {}, prefix
+        self.cfg, self.prefix, self.simple = cfg if cfg is not None else {}, prefix, bool(simple)
         g = QGridLayout(self)
         r = 0
-        g.addWidget(QLabel("길이"), r, 0)
+        self._hidden = []
+        lab_len = QLabel("길이")
+        self._hidden.append(lab_len)
+        g.addWidget(lab_len, r, 0)
         self.mode = QComboBox()
         for text, key in (("그대로", "none"), ("속도 배율", "speed"), ("프레임 수", "frames"), ("길이(초)", "seconds")):
             self.mode.addItem(text, key)
         self.mode.setToolTip("속도 배율: 2 = 2배 빠르게(길이 절반), 0.5 = 2배 느리게.  프레임 수/길이(초): 클립 전체를 그 길이에 맞춰 늘리거나 줄입니다.")
         g.addWidget(self.mode, r, 1)
+        self._hidden += [self.mode]
         self.value = QDoubleSpinBox()
         self.value.setDecimals(2)
         self.value.setRange(0.01, 99999.0)
         self.value.setValue(1.0)
         g.addWidget(self.value, r, 2)
+        self._hidden += [self.value]
         r += 1
         g.addWidget(QLabel("fps"), r, 0)
         self.fps = QDoubleSpinBox()
@@ -317,7 +323,9 @@ class EditPanel(QGroupBox):
         self.fps.setToolTip("0 = 그대로. 30 → 60 처럼 바꾸면 길이(초)는 유지하고 프레임 수만 바뀝니다.")
         g.addWidget(self.fps, r, 1)
         r += 1
-        g.addWidget(QLabel("구간(프레임)"), r, 0)
+        lab_rng = QLabel("구간(프레임)")
+        self._hidden.append(lab_rng)
+        g.addWidget(lab_rng, r, 0)
         self.start = QSpinBox()
         self.start.setRange(0, 999999)
         self.end = QSpinBox()
@@ -326,6 +334,7 @@ class EditPanel(QGroupBox):
         self.end.setToolTip("0 = 끝까지. 시작/끝 프레임은 0부터 셉니다(포함).")
         g.addWidget(self.start, r, 1)
         g.addWidget(self.end, r, 2)
+        self._hidden += [self.start, self.end]
         r += 1
         g.addWidget(QLabel("루프 이음"), r, 0)
         self.loop = QSpinBox()
@@ -351,14 +360,22 @@ class EditPanel(QGroupBox):
         self.pos.setValue(0.1)
         g.addWidget(self.rot, r, 1)
         g.addWidget(self.pos, r, 2)
+        if self.simple:
+            for w in self._hidden:
+                w.setVisible(False)
+            note = QLabel("길이·구간은 뷰어 아래 '구간 편집'에서 보면서 조절하세요 (여기서는 fps·루프·압축만).")
+            note.setWordWrap(True)
+            g.addWidget(note, r + 1, 0, 1, 3)
         self.load()
 
     # ---- 값 <-> 설정
     def options(self) -> "animops.EditOptions":
         mode, v = self.mode.currentData() or "none", float(self.value.value())
         end = int(self.end.value())
+        if self.simple:
+            mode, v, end = "none", 1.0, 0
         return animops.EditOptions(
-            trim_start=int(self.start.value()), trim_end=(end if end > 0 else None),
+            trim_start=(0 if self.simple else int(self.start.value())), trim_end=(end if end > 0 else None),
             speed=(v if mode == "speed" else 1.0),
             frames=(int(round(v)) if mode == "frames" else None),
             seconds=(v if mode == "seconds" else None),

@@ -102,6 +102,31 @@ def test_full_flow():
         assert abs(nf.value() - mw.pr.settings.scale_mult) < 1e-9, "배율 칸에도 반영"
         assert "전체 키" in mw.scale_note.text() and abs(mw.pr.run(analyze_quality=False).k - rep.chosen.ratio) < 0.02 * rep.chosen.ratio
         mw._reset_settings()
+        # 구간 편집: 1~20프레임을 10프레임으로 줄이면 화면(뷰데이터)이 바로 짧아지고, 확정/취소가 된다
+        bar = mw.retime_bar
+        T0 = mw.pr.src.animations[0].n_frames
+        mw.recompute()
+        assert bar.start.value() == 1 and bar.end.value() == T0 and bar.length.value() == T0, (bar.start.value(), bar.end.value(), bar.length.value(), T0)
+        bar.end.setValue(20)
+        assert bar.length.value() == 20 and mw.pr.pending is None
+        bar.length.set_value(10)
+        bar.length.changed.emit(10.0)
+        assert mw.pr.pending is not None and mw.pr.pending[1].length == 10
+        mw.recompute()
+        assert mw.vd.n_frames == T0 - 10 and mw.frame_slider._hi == T0 - 11, "미리보기가 화면에 반영"
+        assert "미리보기" in bar.info.text() and "배 빠르게" in bar.info.text(), bar.info.text()
+        assert bar.end.value() == 20, "미리보기가 구간 범위를 흔들지 않음"
+        bar.commit()
+        assert mw.pr.pending is None and len(mw.pr.retimes[0]) == 1 and mw.vd.n_frames == T0 - 10
+        assert bar.start.value() == 1 and bar.end.value() == 10 and bar.length.value() == 10, (bar.start.value(), bar.end.value())
+        bar.undo()
+        assert not mw.pr.retimes[0] and mw.vd.n_frames == T0
+        bar.length.changed.emit(30.0)  # 구간(1~10) 을 30프레임으로 늘리기
+        mw.recompute()
+        assert mw.vd.n_frames == T0 + 20
+        bar.reset()
+        assert mw.pr.pending is None and mw.vd.n_frames == T0
+        mw._reset_settings()
         # 타임라인 / 뷰포트 그리기
         mw.frame_slider.setValue(12)
         assert "13 / 40" in mw.frame_label.text()

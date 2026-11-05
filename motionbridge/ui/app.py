@@ -24,6 +24,7 @@ from ..core.mapping import FINGERS, SLOT_ORDER, slot_label
 from ..core.pipeline import ExportOptions, Project
 from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
+from .retimebar import RetimeBar
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
 from .widgets import EditPanel, NumField, PathTree, TabGrid, Worker, fit_widths, wrappable
@@ -354,6 +355,8 @@ class MainWindow(QMainWindow):
         self.frame_label.setMinimumWidth(130)
         tl.addWidget(self.frame_label)
         rl.addLayout(tl)
+        self.retime_bar = RetimeBar(self)
+        rl.addWidget(self.retime_bar)
         split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
@@ -1116,7 +1119,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(b)
         self._update_blender_label()
 
-        self.edit_panel = EditPanel("애니메이션 가공 (늘리기 · fps · 구간 · 루프 · 키 압축)", self.cfg, "ex_edit")
+        self.edit_panel = EditPanel("내보낼 때 추가 가공 (선택) — fps · 루프 · 키 압축", self.cfg, "ex_edit", simple=True)
         lay.addWidget(self.edit_panel)
 
         g = QGroupBox("클립")
@@ -1484,6 +1487,7 @@ class MainWindow(QMainWindow):
         self.frame_slider.blockSignals(False)
         self.viewport.set_data(self.pr, self.vd, reframe=reframe)
         self._frame_changed(self.frame_slider.value())
+        self.retime_bar.refresh()
         self._update_info(err)
         self._update_quality()
 

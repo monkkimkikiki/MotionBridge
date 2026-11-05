@@ -205,6 +205,60 @@ def test_psa_edit_and_cli():
         assert g.animations[0].n_frames == 21, g.animations[0].n_frames
 
 
+def test_retime_segment():
+    an = toy(100)
+    r = A.retime_segment(an, 0, 42, 30)  # 1~43프레임을 30프레임으로 줄이기
+    assert r.n_frames == 100 - 43 + 30
+    assert ang(r.rot[29], an.rot[42]) < 1e-9 and ang(r.rot[30], an.rot[43]) < 1e-9, "구간 끝 포즈와 그 다음 프레임이 이어짐"
+    assert ang(r.rot[0], an.rot[0]) < 1e-9 and abs(r.pos[29, 0, 0] - an.pos[42, 0, 0]) < 1e-9
+    assert abs(A.speed_of(A.Retime(0, 42, 30)) - 42 / 29) < 1e-9
+    r = A.retime_segment(an, 40, 99, 120)  # 끝 구간 늘리기
+    assert r.n_frames == 160 and abs(r.pos[-1, 0, 0] - an.pos[-1, 0, 0]) < 1e-9
+    assert A.retime_segment(an, 10, 20, 11).n_frames == 100 and ang(A.retime_segment(an, 10, 20, 11).rot, an.rot) < 1e-9
+    assert A.retime_segment(an, 10, 20, 1).n_frames == 90, "길이 1 = 구간을 한 포즈로"
+    assert A.retime_segment(an, 5, 5, 4).n_frames == 103, "프레임 하나 늘리기"
+    assert A.retime_segment(an, -5, 999, 50).n_frames == 50, "범위는 자동으로 맞춰짐"
+    r = A.apply_retimes(an, [A.Retime(0, 42, 30), A.Retime(0, 29, 60)])
+    assert r.n_frames == 100 - 43 + 30 - 30 + 60, r.n_frames
+    assert A.apply_retimes(an, []) is an
+    back = A.retime_segment(A.retime_segment(an, 0, 99, 199), 0, 198, 100)  # 두 배로 늘렸다가 되돌리면 거의 같다
+    assert ang(back.rot, an.rot) < 0.2
+
+
+def test_project_retimes():
+    with tempfile.TemporaryDirectory() as d:
+        src, src2, tgt, _a, _b = TP.make_inputs(d)
+        p = Project()
+        p.load_source(src)
+        p.load_target(tgt)
+        p.automap()
+        T0 = p.src.animations[0].n_frames  # 40
+        assert p.anim is p.src.animations[0]
+        p.pending = (0, A.Retime(0, 19, 10))
+        assert p.anim.n_frames == T0 - 10 and p.edited(0, with_pending=False).n_frames == T0
+        res = p.run(analyze_quality=False)
+        assert res.anim.n_frames == T0 - 10, "리타깃도 편집된 모션으로"
+        p.pending = (1, A.Retime(0, 19, 10))
+        assert p.anim.n_frames == T0, "다른 클립의 미리보기는 적용 안 됨"
+        p.pending = (0, A.Retime(0, 19, 10))
+        assert p.commit_pending() and p.pending is None and len(p.retimes[0]) == 1 and p.anim.n_frames == T0 - 10
+        assert not p.commit_pending()
+        p.pending = (0, A.Retime(0, 9, 30))
+        assert p.undo_retime() and p.pending is None and len(p.retimes[0]) == 1, "미리보기가 있으면 그것부터 버림"
+        assert p.undo_retime() and not p.retimes[0] and not p.undo_retime()
+        p.pending = (0, A.Retime(0, 19, 10))
+        p.commit_pending()
+        p.pending = (0, A.Retime(0, 9, 5))  # 내보내기는 보이는 그대로(확정 + 미리보기)
+        files, _w = p.export(ExportOptions(os.path.join(d, "o"), include_skeleton=False))
+        js = json.load(open(files[0], encoding="utf-8"))
+        assert js["frames"] == T0 - 10 - 5, js["frames"]
+        p.reset_retimes()
+        assert p.anim.n_frames == T0 and p.pending is None
+        p.pending = (0, A.Retime(0, 5, 2))
+        p.load_source(src)
+        assert p.pending is None and not p.retimes, "새 소스를 열면 편집 초기화"
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):

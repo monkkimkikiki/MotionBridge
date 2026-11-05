@@ -177,6 +177,59 @@ def loop_blend(anim: Animation, n: int, skel_parents: Optional[np.ndarray] = Non
     return out
 
 
+# ------------------------------------------------------------------------------------------ 구간 리타이밍
+@dataclass
+class Retime:
+    """프레임 start~end(0부터, 끝 포함)를 length 프레임으로 줄이거나 늘린다. 구간 밖은 그대로 이어 붙인다."""
+
+    start: int
+    end: int
+    length: int
+
+    def span(self) -> int:
+        return self.end - self.start + 1
+
+
+def retime_segment(anim: Animation, start: int, end: int, length: int) -> Animation:
+    """구간만 새 길이로 다시 샘플링한다. 구간의 첫/끝 포즈는 그대로라 앞뒤와 이음매가 생기지 않는다.
+
+    전체 길이는 T - (end-start+1) + length 가 된다. length=1 이면 구간이 첫 포즈 하나로 합쳐진다.
+    """
+    T = anim.n_frames
+    a = int(np.clip(start, 0, T - 1))
+    b = int(np.clip(end, a, T - 1))
+    m = max(int(length), 1)
+    n = b - a + 1
+    if m == n:
+        return anim.copy()
+    if n < 2:  # 프레임 하나를 늘리면 같은 포즈를 m 번 (줄이기는 그대로)
+        idx = np.full(m, float(a))
+    elif m == 1:
+        idx = np.array([float(a)])
+    else:
+        idx = np.linspace(float(a), float(b), m)
+    seg_rot, seg_pos = _sample(anim, idx)
+    rot = np.concatenate([anim.rot[:a], seg_rot, anim.rot[b + 1:]], axis=0)
+    pos = np.concatenate([anim.pos[:a], seg_pos, anim.pos[b + 1:]], axis=0)
+    return Animation(anim.name, anim.fps, Q.make_continuous(rot), pos)
+
+
+def apply_retimes(anim: Animation, edits) -> Animation:
+    """편집을 차례로 적용한다. 각 편집의 프레임 번호는 '그 직전까지 적용한 결과' 기준이다."""
+    out = anim
+    for e in edits:
+        out = retime_segment(out, e.start, e.end, e.length)
+    return out
+
+
+def speed_of(edit: Retime) -> float:
+    """구간의 재생 속도 배율 (2 = 2배 빠르게). 길이 1 이하는 0 으로."""
+    n, m = edit.span(), edit.length
+    if n < 2 or m < 2:
+        return 0.0
+    return (n - 1) / float(m - 1)
+
+
 # ------------------------------------------------------------------------------------------ 키 압축
 def _simplify(err_fn, T: int, tol: float) -> np.ndarray:
     """Ramer–Douglas–Peucker 방식. err_fn(a, b) -> 구간 (a,b) 안쪽 프레임들의 오차 배열(길이 b-a-1)."""
