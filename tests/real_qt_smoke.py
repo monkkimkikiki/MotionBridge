@@ -110,6 +110,33 @@ with tempfile.TemporaryDirectory() as d:
         app.processEvents()
         check(mw.tabs.pages.index(ar) == 7, "AnimRef 탭 합치기")
         check(ar.can_close(), "닫기 허용")
+    # 프레임 편집 줄: 실제 그리기/마우스/편집이 진짜 Qt 에서 돈다
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import test_pipeline as TP  # noqa: E402
+
+    src, _s2, tgt, _a, _b = TP.make_inputs(d)
+    mw.pr.load_source(src)
+    mw.pr.load_target(tgt)
+    mw.pr.automap()
+    mw.recompute()
+    app.processEvents()
+    bar = mw.retime_bar
+    T0 = mw.pr.src.animations[0].n_frames
+    bar.strip.resize(700, bar.strip.H)
+    img = bar.strip.grab()
+    check(not img.isNull() and bar.strip.blocks() and mw.vd.n_frames == T0, "조각 줄 그리기")
+    bar.strip.press_at(bar.strip.x_of(12))
+    bar.strip._drag = None
+    check(mw.frame_slider.value() == 12 and bar.strip.frame == 12, "줄 클릭 -> 프레임 이동")
+    mw.frame_slider.setValue(8)
+    bar.mark_in()
+    mw.frame_slider.setValue(24)
+    bar.mark_out()
+    check(bar.apply_speed(2.0) and mw.vd.n_frames == T0 - 8, "구간 속도 2배 -> 화면 반영")
+    app.processEvents()
+    check(not bar.strip.grab().isNull() and len(bar.strip.blocks()) == 3, "편집 후 조각 3개 그리기")
+    mw.frame_slider.setValue(3)
+    check(bar.hold() and bar.undo() and bar.redo() and bar.reset() and mw.vd.n_frames == T0, "정지/되돌리기/다시/원본")
     mw.close()
     check(alink.LOCAL_TOOL is None if ar.inner is not None else True, "닫으면 직접 전달 해제")
 

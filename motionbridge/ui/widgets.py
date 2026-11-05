@@ -221,7 +221,7 @@ class EditPanel(QGroupBox):
     KEYS = ("mode", "value", "fps", "start", "end", "loop", "compress", "rot", "pos")
 
     def __init__(self, title="애니메이션 가공 (늘리기·압축)", cfg=None, prefix="edit", parent=None, simple=False):
-        """simple=True: 길이/구간 칸을 숨긴다(길이·구간은 뷰어 아래 '구간 편집'에서 보면서 조절하므로)."""
+        """simple=True: 길이/구간 칸을 숨긴다(길이·구간은 뷰어 아래 '프레임 편집'에서 보면서 조절하므로)."""
         super().__init__(title, parent)
         self.cfg, self.prefix, self.simple = cfg if cfg is not None else {}, prefix, bool(simple)
         g = QGridLayout(self)
@@ -291,7 +291,7 @@ class EditPanel(QGroupBox):
         if self.simple:
             for w in self._hidden:
                 w.setVisible(False)
-            note = QLabel("길이·구간은 뷰어 아래 '구간 편집'에서 보면서 조절하세요 (여기서는 fps·루프·압축만).")
+            note = QLabel("길이·구간은 뷰어 아래 '프레임 편집'에서 보면서 조절하세요 (여기서는 fps·루프·압축만).")
             note.setWordWrap(True)
             g.addWidget(note, r + 1, 0, 1, 3)
         self.load()

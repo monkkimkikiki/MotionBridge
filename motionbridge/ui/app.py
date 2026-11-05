@@ -1551,6 +1551,8 @@ class MainWindow(QMainWindow):
         n = self.vd.n_frames if self.vd else 1
         fps = self.vd.fps if self.vd else 30.0
         self.viewport.set_frame(f)
+        if getattr(self, "retime_bar", None) is not None:
+            self.retime_bar.set_frame(f)
         self.frame_label.setText("%d / %d  (%.2fs)" % (f + 1, n, f / fps if fps else 0.0))
 
     def _toggle_play(self, on: bool) -> None:

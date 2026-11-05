@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import animops, bridge, biped, export as X
+from . import animops, bridge, biped, frameedit, export as X
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -51,8 +51,7 @@ class Project:
         self.blender: Optional[str] = None
         self.log: List[str] = []
         self.edit_info: Optional[animops.EditInfo] = None
-        self.retimes: Dict[int, List[animops.Retime]] = {}
-        self.pending: Optional[Tuple[int, animops.Retime]] = None
+        self.edits: Dict[int, frameedit.FrameEdit] = {}  # 클립별 프레임 조각 편집(영상 편집기식)
 
     # ------------------------------------------------------------------ 불러오기
     def load_source(self, path: str) -> Model:
@@ -62,7 +61,7 @@ class Project:
         self.src = m
         self.src_slots = auto_map(m.skeleton)
         self.clip = 0
-        self.retimes, self.pending = {}, None
+        self.edits = {}
         self.result = None
         self.log += m.notes
         return m
@@ -98,7 +97,7 @@ class Project:
         self.src = base
         self.src_slots = auto_map(base.skeleton)
         self.clip = 0
-        self.retimes, self.pending = {}, None
+        self.edits = {}
         self.result = None
         self.log += base.notes
         return base, skipped
@@ -135,37 +134,25 @@ class Project:
         return [s for s in SLOT_ORDER if (s in self.src_slots) != (s in self.tgt_slots)]
 
     # ------------------------------------------------------------------ 실행
-    # ---- 구간 편집(보면서 줄이기/늘리기): 확정한 편집 목록 + 아직 확정 안 한 미리보기 하나
-    def edited(self, ci: int, with_pending: bool = True) -> Animation:
-        """소스 클립 ci 에 구간 편집을 적용한 모션 (미리보기 중인 편집은 현재 클립에만)."""
+    # ---- 프레임 편집(영상 편집기식 조각 줄): 클립마다 하나. 편집은 바로 적용된다.
+    def frame_edit(self, ci: Optional[int] = None) -> frameedit.FrameEdit:
+        """클립 ci(기본: 현재 클립)의 편집 모델 (없으면 만든다). 소스가 없으면 오류."""
+        ci = self.clip if ci is None else ci
+        n = self.src.animations[ci].n_frames
+        e = self.edits.get(ci)
+        if e is None or e.T != n:
+            e = self.edits[ci] = frameedit.FrameEdit(n)
+        return e
+
+    def edited(self, ci: int) -> Animation:
+        """소스 클립 ci 에 프레임 편집을 적용한 모션 (편집하지 않았으면 원본 그대로)."""
         base = self.src.animations[ci]
-        stack = list(self.retimes.get(ci, []))
-        if with_pending and self.pending is not None and self.pending[0] == ci:
-            stack.append(self.pending[1])
-        return animops.apply_retimes(base, stack) if stack else base
+        e = self.edits.get(ci)
+        return frameedit.render(base, e) if e is not None and e.T == base.n_frames else base
 
-    def commit_pending(self) -> bool:
-        if self.pending is None:
-            return False
-        ci, e = self.pending
-        self.retimes.setdefault(ci, []).append(e)
-        self.pending = None
-        return True
-
-    def undo_retime(self) -> bool:
-        """미리보기가 있으면 그것을 버리고, 없으면 마지막 확정 편집을 취소."""
-        if self.pending is not None:
-            self.pending = None
-            return True
-        st = self.retimes.get(self.clip)
-        if st:
-            st.pop()
-            return True
-        return False
-
-    def reset_retimes(self) -> None:
-        self.retimes.pop(self.clip, None)
-        self.pending = None
+    def is_edited(self, ci: Optional[int] = None) -> bool:
+        e = self.edits.get(self.clip if ci is None else ci)
+        return e is not None and not e.is_untouched()
 
     @property
     def anim(self) -> Animation:

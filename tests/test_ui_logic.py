@@ -102,30 +102,54 @@ def test_full_flow():
         assert abs(nf.value() - mw.pr.settings.scale_mult) < 1e-9, "배율 칸에도 반영"
         assert "전체 키" in mw.scale_note.text() and abs(mw.pr.run(analyze_quality=False).k - rep.chosen.ratio) < 0.02 * rep.chosen.ratio
         mw._reset_settings()
-        # 구간 편집: 1~20프레임을 10프레임으로 줄이면 화면(뷰데이터)이 바로 짧아지고, 확정/취소가 된다
+        # 프레임 편집(영상 편집기식 조각 줄): 구간 속도 / 자르기 / 삭제 / 복제 / 정지 / 되돌리기가 바로 화면에 반영된다
         bar = mw.retime_bar
         T0 = mw.pr.src.animations[0].n_frames
         mw.recompute()
-        assert bar.start.value() == 1 and bar.end.value() == T0 and bar.length.value() == T0, (bar.start.value(), bar.end.value(), bar.length.value(), T0)
-        bar.end.setValue(20)
-        assert bar.length.value() == 20 and mw.pr.pending is None
-        bar.length.set_value(10)
-        bar.length.changed.emit(10.0)
-        assert mw.pr.pending is not None and mw.pr.pending[1].length == 10
-        mw.recompute()
-        assert mw.vd.n_frames == T0 - 10 and mw.frame_slider._hi == T0 - 11, "미리보기가 화면에 반영"
-        assert "미리보기" in bar.info.text() and "배 빠르게" in bar.info.text(), bar.info.text()
-        assert bar.end.value() == 20, "미리보기가 구간 범위를 흔들지 않음"
-        bar.commit()
-        assert mw.pr.pending is None and len(mw.pr.retimes[0]) == 1 and mw.vd.n_frames == T0 - 10
-        assert bar.start.value() == 1 and bar.end.value() == 10 and bar.length.value() == 10, (bar.start.value(), bar.end.value())
-        bar.undo()
-        assert not mw.pr.retimes[0] and mw.vd.n_frames == T0
-        bar.length.changed.emit(30.0)  # 구간(1~10) 을 30프레임으로 늘리기
-        mw.recompute()
-        assert mw.vd.n_frames == T0 + 20
+        assert bar.strip.blocks() and len(bar.strip.blocks()) == 1 and "원본 %d → 결과 %d" % (T0, T0) in bar.info.text(), bar.info.text()
+        assert not bar.btn_undo.isEnabled() and not bar.btn_reset.isEnabled()
+        # 줄 클릭 = 그 프레임으로 이동 (x -> 프레임 -> x 가 일치)
+        x20 = bar.strip.x_of(20)
+        bar.strip.press_at(x20)
+        bar.strip._drag = None
+        assert mw.frame_slider.value() == 20 and bar.strip.frame == 20
+        assert abs(bar.strip.frame_at(bar.strip.x_of(33)) - 33) <= 0
+        # 표시 없이 속도 = 지금 조각 전체
+        assert bar.range() == (0, T0 - 1)
+        # 시작/끝 표시 -> 그 구간만 2배 빠르게
+        mw.frame_slider.setValue(10)
+        bar.mark_in()
+        mw.frame_slider.setValue(30)
+        bar.mark_out()
+        assert bar.range() == (10, 30)
+        assert bar.apply_speed(2.0)
+        assert mw.pr.is_edited() and mw.vd.n_frames == T0 - 10 and mw.frame_slider._hi == T0 - 11
+        assert (bar.strip.m_in, bar.strip.m_out) == (10, 20), "표시가 새 구간을 따라감"
+        assert len(bar.strip.blocks()) == 3 and "빠르게 1" in bar.info.text() and bar.btn_undo.isEnabled() and bar.btn_reset.isEnabled()
+        # 되돌리기 / 다시
+        assert bar.undo() and mw.vd.n_frames == T0 and not mw.pr.is_edited()
+        assert bar.redo() and mw.vd.n_frames == T0 - 10
+        # 자르기 / 복제 / 삭제 / 정지 / 부드럽게
+        bar.clear_marks()
+        mw.frame_slider.setValue(5)
+        assert bar.split() and len(mw.pr.frame_edit().pieces) == 4
+        n_before = mw.vd.n_frames
+        assert bar.duplicate() and mw.vd.n_frames > n_before
+        assert bar.delete() and mw.vd.n_frames == n_before
+        bar.hold_n.setValue(7)
+        assert bar.hold() and mw.vd.n_frames == n_before + 7
+        assert bar.reset() and mw.vd.n_frames == T0 and not mw.pr.is_edited()
+        bar.ramp_a.setValue(1.0)
+        bar.ramp_b.setValue(2.0)
+        assert bar.ramp() and mw.vd.n_frames < T0
+        assert bar.undo()
+        # 조각 순서 바꾸기: 앞 조각을 뒤로 -> 길이는 그대로, 더 못 가면 아무 일 없음
         bar.reset()
-        assert mw.pr.pending is None and mw.vd.n_frames == T0
+        mw.frame_slider.setValue(5)
+        assert bar.split()
+        mw.frame_slider.setValue(0)
+        assert bar.move(1) and mw.vd.n_frames == T0 and not bar.move(1) and mw.frame_slider.value() == 34
+        bar.reset()
         mw._reset_settings()
         # 타임라인 / 뷰포트 그리기
         mw.frame_slider.setValue(12)

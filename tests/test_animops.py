@@ -228,7 +228,7 @@ def test_retime_segment():
     assert ang(back.rot, an.rot) < 0.2
 
 
-def test_project_retimes():
+def test_project_frame_edits():
     with tempfile.TemporaryDirectory() as d:
         src, src2, tgt, _a, _b = TP.make_inputs(d)
         p = Project()
@@ -236,30 +236,27 @@ def test_project_retimes():
         p.load_target(tgt)
         p.automap()
         T0 = p.src.animations[0].n_frames  # 40
-        assert p.anim is p.src.animations[0]
-        p.pending = (0, A.Retime(0, 19, 10))
-        assert p.anim.n_frames == T0 - 10 and p.edited(0, with_pending=False).n_frames == T0
+        assert p.anim is p.src.animations[0] and not p.is_edited()
+        e = p.frame_edit()
+        e.set_speed(0, 20, 2.0)                    # 앞 20프레임 구간을 2배 빠르게 -> 10프레임
+        assert p.is_edited() and p.anim.n_frames == T0 - 10
+        assert p.edited(0) is not p.src.animations[0]
         res = p.run(analyze_quality=False)
         assert res.anim.n_frames == T0 - 10, "리타깃도 편집된 모션으로"
-        p.pending = (1, A.Retime(0, 19, 10))
-        assert p.anim.n_frames == T0, "다른 클립의 미리보기는 적용 안 됨"
-        p.pending = (0, A.Retime(0, 19, 10))
-        assert p.commit_pending() and p.pending is None and len(p.retimes[0]) == 1 and p.anim.n_frames == T0 - 10
-        assert not p.commit_pending()
-        p.pending = (0, A.Retime(0, 9, 30))
-        assert p.undo_retime() and p.pending is None and len(p.retimes[0]) == 1, "미리보기가 있으면 그것부터 버림"
-        assert p.undo_retime() and not p.retimes[0] and not p.undo_retime()
-        p.pending = (0, A.Retime(0, 19, 10))
-        p.commit_pending()
-        p.pending = (0, A.Retime(0, 9, 5))  # 내보내기는 보이는 그대로(확정 + 미리보기)
+        if len(p.src.animations) > 1:
+            assert not p.is_edited(1), "다른 클립은 영향 없음"
+        e.undo()
+        assert not p.is_edited() and p.anim is p.src.animations[0]
+        e.set_speed(0, 20, 2.0)
+        e.add_hold(25, 5)
         files, _w = p.export(ExportOptions(os.path.join(d, "o"), include_skeleton=False))
         js = json.load(open(files[0], encoding="utf-8"))
-        assert js["frames"] == T0 - 10 - 5, js["frames"]
-        p.reset_retimes()
-        assert p.anim.n_frames == T0 and p.pending is None
-        p.pending = (0, A.Retime(0, 5, 2))
+        assert js["frames"] == T0 - 10 + 5, js["frames"]
+        e.reset()
+        assert p.anim.n_frames == T0
+        e.set_speed(0, 5, 2.0)
         p.load_source(src)
-        assert p.pending is None and not p.retimes, "새 소스를 열면 편집 초기화"
+        assert not p.edits and not p.is_edited(), "새 소스를 열면 편집 초기화"
 
 
 if __name__ == "__main__":
