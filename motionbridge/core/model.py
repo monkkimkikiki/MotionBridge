@@ -177,6 +177,7 @@ class Mesh:
     uv: Optional[np.ndarray] = None
     color: Optional[Tuple[float, float, float, float]] = None  # 머티리얼 기본 색(RGBA 0..1)
     texture: Optional[bytes] = None  # 기본 색 텍스처(PNG/JPEG 원본 바이트). 화면 표시용
+    material: Optional[str] = None  # 머티리얼 이름 (색이 없을 때 이름으로 구분 색을 정한다)
 
     def skin(self, skel: Skeleton, wr: np.ndarray, wp: np.ndarray) -> np.ndarray:
         """한 프레임의 월드 회전 (J,4) / 위치 (J,3) 로 선형 블렌드 스키닝."""

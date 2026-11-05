@@ -242,6 +242,57 @@ def test_gltf_material_roundtrip():
     print("gltf material roundtrip OK")
 
 
+def test_material_colors():
+    """머티리얼 보기: 텍스처가 없어도 재질마다 다른 색이 나와야 하고, 실제 색/텍스처가 있으면 그것이 우선한다."""
+    from motionbridge.core.matcolor import is_placeholder_color, material_color
+    from motionbridge.ui.viewer_math import DEFAULT_SURFACE_RGB, build_display_mesh, render_surface
+
+    # 이름 색: 고정, 서로 다름, 너무 어둡거나 탁하지 않음
+    names = ["MI_Dwarf_Torso_01", "MI_Dwarf_Head_01", "MI_Dwarf_Leg_01", "MI_Dwarf_Arms_01", "MI_Dwarf_Belt_01", "MI_Dwarf_Cloth_01"]
+    cols = [material_color(n, i) for i, n in enumerate(names)]  # 번호 기준: 겹치지 않음
+    assert cols == [material_color(n, i) for i, n in enumerate(names)] and material_color("x") == material_color("x")
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            assert max(abs(a - b) for a, b in zip(cols[i], cols[j])) > 0.08, (names[i], names[j], cols[i], cols[j])
+    assert all(0.3 < max(c) <= 1.0 for c in cols)
+    assert is_placeholder_color(None) and is_placeholder_color((0.8, 0.8, 0.8, 1.0)) and is_placeholder_color((1, 1, 1, 1))
+    assert not is_placeholder_color((0.8, 0.2, 0.2, 1.0))
+
+    cam = OrbitCamera()
+    cam.frame(np.array([0.0, 1.0, 0.0]), 1.2)
+
+    def center(m, material=True):
+        dm = build_display_mesh(m, max_tris=1500)
+        img = render_surface([(dm, dm.sub.vertices)], cam, 200, 200, material=material)
+        return dm, img[100, 100, :3].astype(int)
+
+    a = _sphere(30, 40); a.material = names[0]; a.color = (0.8, 0.8, 0.8, 1.0)  # Blender 기본 회색 = 색 없음
+    b = _sphere(30, 40); b.material = names[1]
+    def center(m, material=True, idx=None):
+        dm = build_display_mesh(m, max_tris=1500, color_index=idx)
+        img = render_surface([(dm, dm.sub.vertices)], cam, 200, 200, material=material)
+        return dm, img[100, 100, :3].astype(int)
+
+    dma, ca = center(a, idx=0)
+    dmb, cb = center(b, idx=1)
+    assert not dma.real_material and not dmb.real_material
+    assert np.abs(ca - cb).max() > 15, "머티리얼이 다른데 색이 같음 (솔리드와 구분 안 됨)"
+    _, sa = center(a, material=False, idx=0)
+    assert tuple(sa) != tuple(ca), "머티리얼 보기가 솔리드와 같아 보임"
+    # 실제 색이 있으면 그 색
+    c = _sphere(30, 40, color=(0.9, 0.1, 0.1, 1.0)); c.material = names[0]
+    dmc, cc = center(c)
+    assert dmc.real_material and cc[0] > 150 and cc[1] < 90, cc
+    # 실제 텍스처가 있으면 이름 색이 곱해지지 않는다 (빨강 텍스처는 빨강 그대로)
+    from motionbridge.ui.viewer_math import build_display_mesh as bdm
+    t = _sphere(30, 40, texture=_tiny_png((255, 0, 0))); t.material = names[1]
+    dec = lambda _b: np.tile(np.array([255, 0, 0, 255], np.uint8), (2, 2, 1))
+    dmt = bdm(t, decode=dec, max_tris=1500)
+    img = render_surface([(dmt, dmt.sub.vertices)], cam, 200, 200, material=True)[100, 100, :3].astype(int)
+    assert dmt.real_material and img[0] > 200 and img[1] < 40 and img[2] < 40, img
+    print("material colors OK")
+
+
 def test_heavy_mesh_performance():
     """무거운 메시: 점 표시는 간추린 정점만 스키닝하고, 품질은 삼각형 수로 자동 선택, 솎아 그리기는 점 수를 줄인다."""
     from motionbridge.core.model import Mesh as M
@@ -284,6 +335,7 @@ def test_heavy_mesh_performance():
 
 
 if __name__ == "__main__":
+    test_material_colors()
     test_heavy_mesh_performance()
     test_camera()
     test_reduced_parents()

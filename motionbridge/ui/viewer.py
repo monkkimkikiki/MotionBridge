@@ -17,7 +17,7 @@ from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera
 _POINT_RADIUS = {"pt_mesh": 0.0, "pt_target_joints": 2.0, "pt_plant": 6.0, "pt_bad": 6.0}
 
 # 메시 표시 방식 (키, 이름)
-MESH_MODES = [("off", "표시 안 함"), ("points", "점"), ("wire", "와이어"), ("translucent", "반투명"), ("solid", "솔리드"), ("material", "머티리얼")]
+MESH_MODES = [("off", "표시 안 함"), ("points", "점"), ("wire", "와이어"), ("translucent", "반투명"), ("solid", "솔리드"), ("material", "머티리얼 (재질별 색/텍스처)")]
 
 
 def decode_texture(data: bytes):
@@ -85,15 +85,15 @@ class Viewport(QWidget):
         self.quality_note = ("무거운 메시라 자동으로 낮은 품질로 표시 중 (보기 → 메시 품질에서 변경, 데이터는 그대로)" if (self.mesh_quality == "auto" and q != "high") else "")
         tris, samples, wire_tris = QUALITY[q]
         out = []
-        for m in tgt.meshes:
+        for mi, m in enumerate(tgt.meshes):
             key = (id(m), kind, q)
             if key not in self._dm:
                 for k in [k for k in self._dm if k[0] == id(m) and k[1] == kind]:
                     del self._dm[k]  # 같은 메시의 다른 품질 캐시는 버린다
                 if kind == "wire":
-                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=wire_tris, n_samples=8, want_edges=True)
+                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=wire_tris, n_samples=8, want_edges=True, color_index=mi)
                 else:
-                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=tris, n_samples=samples)
+                    self._dm[key] = build_display_mesh(m, decode_texture, max_tris=tris, n_samples=samples, color_index=mi)
             if self._dm[key] is not None:
                 out.append(self._dm[key])
         return out
@@ -132,8 +132,8 @@ class Viewport(QWidget):
             p.setOpacity(0.38 if mode == "translucent" else 1.0)
             p.drawImage(0, 0, qimg)
             p.setOpacity(1.0)
-        if mode == "material" and not any(dm.has_material for dm in dms):
-            return "머티리얼 정보가 없는 메시라 솔리드로 표시 중 (GLB 추출 시 '머티리얼/텍스처 포함' 체크)"
+        if mode == "material" and not any(dm.real_material for dm in dms):
+            return "이 메시에는 텍스처/색 정보가 없어 머티리얼(재질) 이름별 구분 색으로 표시 중 — 진짜 텍스처는 추출 시 '머티리얼/텍스처 포함'(GLB)"
         return self.quality_note
 
     # --------------------------------------------------------------- 그리기

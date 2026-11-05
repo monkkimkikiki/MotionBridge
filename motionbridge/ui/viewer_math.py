@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from ..core import quat as Q
+from ..core.matcolor import is_placeholder_color, material_color
 from ..core.model import Mesh, fk
 
 
@@ -300,6 +301,7 @@ class DisplayMesh:
     n_full_faces: int
     edges: Optional[np.ndarray] = None  # (E,2) 와이어 표시용
     orient: float = 0.0  # +1/-1: 삼각형 법선이 바깥/안쪽(닫힌 메시일 때), 0: 알 수 없음 -> 뒷면 제거 안 함
+    real_material: bool = False  # True: 파일에 든 실제 색/텍스처, False: 이름으로 정한 구분 색
 
 
 def _reduce_mesh(verts: np.ndarray, faces: np.ndarray, max_tris: int):
@@ -371,7 +373,7 @@ def pick_quality(n_faces: int, setting: str = "auto") -> str:
     return "low" if n_faces > 150000 else ("mid" if n_faces > 50000 else "high")
 
 
-def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples: int = 90000, seed: int = 1, want_edges: bool = False) -> Optional[DisplayMesh]:
+def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples: int = 90000, seed: int = 1, want_edges: bool = False, color_index: Optional[int] = None) -> Optional[DisplayMesh]:
     """decode(bytes) -> (H,W,3|4) uint8 또는 None. 텍스처 해독은 Qt 쪽에서 넣어 준다."""
     if len(mesh.faces) == 0 or len(mesh.vertices) == 0:
         return None
@@ -389,9 +391,13 @@ def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples
     st = np.minimum(np.searchsorted(cum, rng.random(n_samples)), len(tris) - 1)
     r1, r2 = np.sqrt(rng.random(n_samples)), rng.random(n_samples)
     bary = np.stack([1 - r1, r1 * (1 - r2), r1 * r2], axis=1)
-    base = np.array(mesh.color[:3] if mesh.color is not None else DEFAULT_SURFACE_RGB, float)
+    real_color = mesh.color is not None and not is_placeholder_color(mesh.color)
+    if real_color:
+        base = np.array(mesh.color[:3], float)
+    else:  # 색 정보가 없거나 기본값이면 머티리얼/메시 이름으로 정한 구분 색 (텍스처가 있으면 아래에서 덮어쓴다)
+        base = np.array(material_color(mesh.material or mesh.name, color_index), float)
     rgb = np.tile(base, (n_samples, 1))
-    has_mat = mesh.color is not None
+    has_mat = True
     tex = None
     if mesh.texture is not None and uv is not None and decode is not None:
         tex = decode(mesh.texture)
@@ -400,8 +406,9 @@ def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples
         H, W = tex.shape[:2]
         px = np.clip(((suv[:, 0] % 1.0) * W).astype(int), 0, W - 1)
         py = np.clip(((suv[:, 1] % 1.0) * H).astype(int), 0, H - 1)
-        rgb = tex[py, px, :3].astype(float) / 255.0 * base
+        rgb = tex[py, px, :3].astype(float) / 255.0 * (base if real_color else 1.0)  # 구분 색(대체 색)은 텍스처에 곱하지 않는다
         has_mat = True
+        real_color = True  # 실제 텍스처가 있음
     edges = None
     if want_edges:
         e = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
@@ -417,7 +424,7 @@ def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples
     orient = 0.0
     if denom > 1e-12 and abs(float(dots.sum())) / denom > 0.5:
         orient = 1.0 if dots.sum() > 0 else -1.0
-    return DisplayMesh(sub, tris, st, bary, np.clip(rgb, 0.0, 1.0), has_mat, len(mesh.faces), edges, orient)
+    return DisplayMesh(sub, tris, st, bary, np.clip(rgb, 0.0, 1.0), has_mat, len(mesh.faces), edges, orient, bool(real_color))
 
 
 def skin_display(dm: DisplayMesh, skel, wr: np.ndarray, wp: np.ndarray, Ft: np.ndarray) -> np.ndarray:

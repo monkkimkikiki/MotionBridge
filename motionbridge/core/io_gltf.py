@@ -94,7 +94,7 @@ def _material_of(gltf, buffers, prim, base_dir: str):
     try:
         mi = prim.get("material")
         if mi is None:
-            return None, None
+            return None, None, None
         mat = gltf["materials"][mi]
         pbr = mat.get("pbrMetallicRoughness", {})
         col = pbr.get("baseColorFactor")
@@ -109,9 +109,9 @@ def _material_of(gltf, buffers, prim, base_dir: str):
                 tex = bytes(buffers[bv["buffer"]][off:off + bv["byteLength"]])
             elif "uri" in img:
                 tex = _read_uri(img["uri"], base_dir)
-        return color, tex
+        return color, tex, mat.get("name")
     except (KeyError, IndexError, OSError, ValueError, TypeError):
-        return None, None
+        return None, None, None
 
 
 def _trs_matrix(node) -> np.ndarray:
@@ -355,8 +355,8 @@ def read_gltf(path: str, fps: Optional[float] = None) -> Model:
                 else:
                     vw = (world(ni) @ vh.T).T[:, :3]
                 uv = _accessor(gltf, buffers, at["TEXCOORD_0"]).astype(float) if "TEXCOORD_0" in at else None
-                mcolor, mtex = _material_of(gltf, buffers, prim, os.path.dirname(path))
-                meshes.append(Mesh(nd.get("name", "mesh%d" % ni) + ("_%d" % pi if pi else ""), vw, faces, jn_skel, wt, uv, mcolor, mtex))
+                mcolor, mtex, mname = _material_of(gltf, buffers, prim, os.path.dirname(path))
+                meshes.append(Mesh(nd.get("name", "mesh%d" % ni) + ("_%d" % pi if pi else ""), vw, faces, jn_skel, wt, uv, mcolor, mtex, mname))
     return Model(path=path, skeleton=skel, animations=anims, meshes=meshes, notes=notes)
 
 

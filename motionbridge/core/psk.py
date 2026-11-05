@@ -17,6 +17,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .matcolor import material_color
+
 
 class PskError(Exception):
     pass
@@ -243,6 +245,7 @@ def to_blender(mesh: PskMesh, keep_bones: bool = True) -> Dict[str, np.ndarray]:
         "wedge_uv": mesh.wedge_uv.astype(np.float32),
         "face_mat": mesh.face_mat.astype(np.int64),
         "materials": np.array(mesh.materials, dtype=object),
+        "material_colors": np.array([material_color(m, i) for i, m in enumerate(mesh.materials)], dtype=np.float32).reshape(-1, 3),
         "name": np.array(mesh.name),
         "flipped": np.array(flipped),
     }
@@ -279,8 +282,8 @@ def write_obj(mesh: PskMesh, path: str) -> str:
     base = os.path.splitext(os.path.basename(path))[0]
     mtl = os.path.splitext(path)[0] + ".mtl"
     with open(mtl, "w", encoding="utf-8") as f:
-        for m in mesh.materials:
-            f.write("newmtl %s\nKd 0.8 0.8 0.8\n\n" % m)
+        for i, m in enumerate(mesh.materials):
+            f.write("newmtl %s\nKd %.3f %.3f %.3f\n\n" % ((m,) + tuple(material_color(m, i))))
     with open(path, "w", encoding="utf-8") as f:
         f.write("# MotionBridge\nmtllib %s.mtl\no %s\n" % (base, base))
         for v in verts:

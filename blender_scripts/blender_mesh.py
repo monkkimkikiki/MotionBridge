@@ -39,8 +39,20 @@ def build_from_npz(path):
     pt_idx = wpt[tris]  # (F,3) 점 번호
     me.from_pydata([tuple(map(float, v)) for v in verts], [], [tuple(map(int, t)) for t in pt_idx])
     me.update()
-    for m in mats:
+    mcols = d["material_colors"] if "material_colors" in d.files else None
+    for i, m in enumerate(mats):
         mat = bpy.data.materials.new(m)
+        if mcols is not None and i < len(mcols):
+            # 머티리얼마다 다른 색을 줘서, 텍스처가 없어도 FBX/GLB 에서 재질이 구분되게 한다
+            r, g, b = (float(x) for x in mcols[i])
+            mat.diffuse_color = (r, g, b, 1.0)
+            try:
+                mat.use_nodes = True
+                bsdf = mat.node_tree.nodes.get("Principled BSDF")
+                if bsdf is not None:
+                    bsdf.inputs["Base Color"].default_value = (r, g, b, 1.0)
+            except Exception:  # noqa: BLE001
+                pass
         me.materials.append(mat)
     if len(me.polygons) == len(fmat):
         me.polygons.foreach_set("material_index", [int(min(x, max(len(mats) - 1, 0))) for x in fmat])
