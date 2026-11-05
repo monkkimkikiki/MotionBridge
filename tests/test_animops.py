@@ -154,6 +154,9 @@ def test_pipeline_edit():
         js = json.load(open(files[0], encoding="utf-8"))
         assert "sparse" not in js and len(next(iter(js["joints"].values()))["rotation"]) == 40
         # FBX: 허용 오차가 Blender 단순화 계수로 전달된다
+        if sys.platform == 'win32':  # 셔뱅 가짜 실행파일은 Windows 에서 못 쓴다 (test_pipeline 과 같은 이유)
+            print('FBX 단순화 계수 전달: Windows 에서는 건너뜀')
+            return
         fb = os.path.join(d, "fakeblender")
         with open(fb, "w") as f:
             f.write(TP.FAKE_BLENDER.format(py=sys.executable))
