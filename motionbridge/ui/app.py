@@ -26,7 +26,7 @@ from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
-from .widgets import NumField, PathTree, Worker, fit_widths, wrappable
+from .widgets import NumField, PathTree, TabGrid, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -84,6 +84,9 @@ class MainWindow(QMainWindow):
         try:
             srv = animlink.LinkServer(self._link_sig.opened.emit, __version__, directory)
             srv.start()
+        except animlink.LinkBusy as e:
+            self.statusBar().showMessage(str(e) + " — 이 창에서는 [파일 > AnimRef에서 가져오기]로 query.json 을 열 수 있습니다.")
+            return False
         except OSError as e:
             self.statusBar().showMessage("AnimRef 연결을 열지 못했습니다: %s" % e)
             return False
@@ -98,6 +101,19 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev) -> None:  # noqa: N802
         self.stop_link()
         super().closeEvent(ev)
+
+    def import_animref(self) -> None:
+        """메뉴: AnimRef 가 만든 query.json 을 골라 '영상으로 찾기' 탭에 넣는다 (실시간 연결이 안 될 때)."""
+        self.vidfind.open_query_file()
+
+    def handoff(self, query_path: str) -> None:
+        """시작할 때 --handoff <query.json> 으로 받은 요청을 처리한다."""
+        try:
+            q = animlink.parse_query(query_path)
+        except animlink.LinkError as e:
+            self.statusBar().showMessage("AnimRef 요청을 읽지 못했습니다: %s" % e)
+            return
+        self._on_link_open(q)
 
     def _on_link_open(self, query) -> None:
         """UI 스레드: AnimRef 요청을 받으면 '영상으로 찾기' 탭에 후보 화면을 띄운다."""
@@ -114,6 +130,7 @@ class MainWindow(QMainWindow):
         spec = [
             ("파일", "open_source", "소스 모션 열기…", "open_source", ("Ctrl+O",)),
             ("파일", "open_target", "타깃 모델 열기…", "open_target", ("Ctrl+Shift+O",)),
+            ("파일", "import_animref", "AnimRef에서 가져오기…", "import_animref", ("Ctrl+Shift+A",)),
             ("파일", None, None, None, ()),
             ("파일", "load_profile", "프로필 불러오기…", "load_profile", ("Ctrl+Shift+P",)),
             ("파일", "save_profile", "프로필 저장…", "save_profile", ("Ctrl+S",)),
@@ -266,7 +283,7 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Orientation.Horizontal)
         self.setCentralWidget(split)
 
-        self.tabs = QTabWidget()
+        self.tabs = TabGrid(4)  # 탭 막대(화살표로 넘김) 대신 버튼 격자: 전부 보이고 한 번에 이동
         self.tabs.addTab(self._tab_extract(), "0. 게임에서 추출")
         self.tabs.addTab(self._tab_files(), "1. 파일·매핑")
         self.tabs.addTab(self._tab_retarget(), "2. 리타깃 조절")
@@ -1596,7 +1613,9 @@ def _dark_palette(app: QApplication) -> None:
     app.setPalette(p)
 
 
-def run_gui() -> int:
+def run_gui(handoff: str = "") -> int:
+    if handoff and animlink.forward_open(handoff):  # 이미 켜진 MotionBridge 가 있으면 그 창에 넘기고 끝낸다
+        return 0
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("MotionBridge")
     _dark_palette(app)
@@ -1605,6 +1624,8 @@ def run_gui() -> int:
     w.show()
     w.start_link()
     app.aboutToQuit.connect(w.stop_link)
+    if handoff:
+        QTimer.singleShot(0, lambda: w.handoff(handoff))
     return app.exec()
 
 

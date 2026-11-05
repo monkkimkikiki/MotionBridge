@@ -117,7 +117,8 @@ class NameBook:
                 if not got:
                     continue
                 cov = len(got) / max(len(kw), 1)
-                sc = h.score * (0.6 + 0.4 * cov)
+                spec = len([w for w in kw if w in m.toks]) / max(len(m.toks), 1)  # 이름이 키와 딱 맞는 메시(본체)를 부위(Arm 등)보다 위로
+                sc = h.score * (0.6 + 0.4 * cov) * (0.85 + 0.15 * spec)
                 why = "게임 글자 '%s' (키 %s) → %s" % (h.text, h.key, ", ".join(got))
                 prev = out.get(m.path)
                 if prev is None or sc > prev.score:

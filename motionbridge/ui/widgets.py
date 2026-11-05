@@ -4,7 +4,8 @@ from __future__ import annotations
 import traceback
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtWidgets import QAbstractItemView, QDoubleSpinBox, QHBoxLayout, QSlider, QTreeWidget, QTreeWidgetItem, QWidget
+from PySide6.QtWidgets import (QAbstractItemView, QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton, QSizePolicy, QSlider, QStackedWidget,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..core.pathtree import Node, build_tree
 from ..core import filekind
@@ -208,3 +209,75 @@ class PathTree(QTreeWidget):
 
     def set_all_expanded(self, v: bool) -> None:
         self.expandAll() if v else self.collapseAll()
+
+
+class TabGrid(QWidget):
+    """탭 막대 대신 쓰는 버튼 격자 + 화면 전환. 탭이 많아도 화살표로 넘길 필요 없이 전부 보이고 한 번에 눌린다.
+
+    QTabWidget 처럼 addTab / setCurrentIndex / currentIndex / indexOf / count / widget / setTabText 를 쓸 수 있다.
+    """
+    currentChanged = Signal(int)
+    STYLE = ("QPushButton{padding:5px 2px;border:1px solid #555;border-radius:4px;}"
+             "QPushButton:checked{background:#2f6db5;color:white;font-weight:bold;border-color:#5ab0ff;}"
+             "QPushButton:hover:!checked{background:#3a3f48;}")
+
+    def __init__(self, columns: int = 4, parent=None) -> None:
+        super().__init__(parent)
+        self._cols = max(1, int(columns))
+        self._btns: list = []
+        self._pages: list = []
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self._grid = QGridLayout()
+        self._grid.setSpacing(3)
+        v.addLayout(self._grid)
+        self._stack = QStackedWidget()
+        v.addWidget(self._stack, 1)
+
+    def addTab(self, widget, title: str) -> int:  # noqa: N802
+        i = len(self._btns)
+        self._pages.append(widget)
+        self._stack.addWidget(widget)
+        b = QPushButton(title)
+        b.setCheckable(True)
+        b.setToolTip(title)
+        b.setStyleSheet(self.STYLE)
+        b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        b.clicked.connect(lambda *_a, k=i: self.setCurrentIndex(k))
+        self._btns.append(b)
+        self._grid.addWidget(b, i // self._cols, i % self._cols)
+        if i == 0:
+            self.setCurrentIndex(0)
+        return i
+
+    def setCurrentIndex(self, i: int) -> None:  # noqa: N802
+        i = int(i)
+        if not (0 <= i < len(self._btns)):
+            return
+        changed = i != self.currentIndex()
+        self._stack.setCurrentIndex(i)
+        for k, b in enumerate(self._btns):
+            b.setChecked(k == i)
+        self._cur = i
+        if changed:
+            self.currentChanged.emit(i)
+
+    def currentIndex(self) -> int:  # noqa: N802
+        return getattr(self, "_cur", -1)
+
+    def indexOf(self, widget) -> int:  # noqa: N802
+        return self._pages.index(widget) if widget in self._pages else -1
+
+    def count(self) -> int:
+        return len(self._btns)
+
+    def widget(self, i: int):
+        return self._pages[i] if 0 <= i < len(self._pages) else None
+
+    def setTabText(self, i: int, text: str) -> None:  # noqa: N802
+        self._btns[i].setText(text)
+        self._btns[i].setToolTip(text)
+
+    def tabText(self, i: int) -> str:  # noqa: N802
+        return self._btns[i].text()

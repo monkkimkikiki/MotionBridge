@@ -89,15 +89,16 @@ dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:Publish
 
 한계: 애니메이션 후보는 **이름과 분류 단어**로만 고릅니다(영상 속 동작과 PSA 의 실제 움직임을 비교하는 것은 아직 없음). AnimRef 의 내부 저장 형식을 몰라 위 단서 방식으로 읽으므로, 분류가 안 읽히면 폴더 구조나 파일을 알려 주세요.
 
-### AnimRef 연결
+### AnimRef 연결 (연동규격 v1.1)
 
-프로그램이 켜져 있는 동안 `127.0.0.1` 의 임의 포트에 작은 서버를 열고 `%APPDATA%\AnimRefLink\animtool.json` 에 `port` / `token` / `pid` 를 씁니다(끝낼 때 지움, 다른 프로그램이 쓴 파일은 건드리지 않음).
+AnimRef 의 `연동규격_추출툴.md` 를 따릅니다. 프로그램이 켜져 있는 동안 `127.0.0.1` 의 임의 포트에 작은 서버를 열고 `%APPDATA%\AnimRefLink\animtool.json` 에 `app`/`port`/`token`/`pid` 를 씁니다(끝낼 때 지움, 다른 프로그램이 쓴 파일은 건드리지 않음). 이미 다른 MotionBridge 가 연결 중이면 두 번째 창은 연결을 열지 않고, 낡은 파일(비정상 종료)은 무시하고 새로 씁니다.
 
-- `GET /v1/ping` — 살아 있는지 확인(토큰 불필요)
-- `POST /v1/open {"query": …}` — 토큰 필요(`X-Token` 또는 `Authorization: Bearer`). query 가 `query.json` 경로면 파일을 읽고, 객체면 그대로 씁니다. 받으면 UI 스레드로 넘겨 '영상으로 찾기' 탭에 후보 화면을 띄우고, 게임 폴더를 이미 검사해 뒀으면 바로 몬스터 추측을 시작합니다.
-- 화면 아래 **'AnimRef 에 결과 보내기'**(고른 메시/애니메이션) 또는 **'맞는 게 없음'** 을 누르면 `result.json`(query.json 옆)을 쓰고 AnimRef 의 `POST /v1/result` 로 알립니다. AnimRef 가 꺼져 있으면 `result.json` 만 남깁니다.
-
-※ query.json / result.json 의 항목 이름, AnimRef 접속 정보 파일 위치, 토큰 헤더 이름은 연동규격서 8절을 받기 전의 **가정**입니다. `core/animlink.py` 의 `parse_query` / `build_result` 와 맨 위 상수(`ANIMREF_FILE`, `TOKEN_HEADERS`)에 모여 있어 규격에 맞게 한 곳만 고치면 됩니다.
+- 모든 요청은 `X-AnimRef-Token` 헤더가 맞아야 하고(아니면 401), `Host` 가 로컬이 아니면 403. `GET /v1/ping` 도 토큰이 필요합니다.
+- `POST /v1/open {"query": "…\\handoff\\<클립>\\query.json"}` — query.json 을 읽어 `clip.video` 영상을 목록에 넣고, `clip.label`(분류)·`hits`(타격 시각, 개수는 타수에 반영)·`character.name`(→ '아는 정보' 칸)을 같이 보여 줍니다. 게임 폴더를 이미 검사해 뒀으면 바로 몬스터 추측을 시작합니다.
+- 실시간 연결이 안 될 때는 메뉴 **파일 > AnimRef에서 가져오기…**(Ctrl+Shift+A) 로 query.json 을 직접 고르면 같은 동작을 합니다.
+- AnimRef 가 `MotionBridge.exe --handoff "<query.json>"` 으로 실행해도 처리합니다(이미 켜져 있으면 그 창에 넘기고 끝납니다).
+- '영상으로 찾기' 탭에서 애니메이션을 고르고 **'AnimRef 에 결과 보내기'** 를 누르면 query.json 의 `result_path` 에 `result.json`(6절 형식: `status`/`animation`/`model_files`/`export_dir`/`candidates`)을 쓰고 AnimRef 의 `POST /v1/result {result_path, result}` 로 알립니다 → AnimRef 클립 옆에 🔗 표시. **'맞는 게 없음'** 은 `status: rejected`. 먼저 추출했다면 그 파일 경로가 `animation.file` / `model_files` 에 들어갑니다. AnimRef 가 꺼져 있거나 거절하면 이유를 보여 주고 `result.json` 은 남깁니다(AnimRef 의 [결과 가져오기]로 읽음).
+- 'AnimRef 클립 폴더…' 대화상자는 AnimRef 설정(`%APPDATA%\AnimRef\settings.json`)의 라이브러리/게임/clips 에서 시작합니다. 클립 옆 `*.json` 의 `label_manual`(손으로 고친 분류)을 `ai_label` 보다 먼저 읽습니다.
 
 ## 3ds Max Biped 로 바로 내보내기
 

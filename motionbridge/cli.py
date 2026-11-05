@@ -259,13 +259,30 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _split_handoff(argv: List[str]):
+    """AnimRef 가 `MotionBridge.exe --handoff <query.json>` 으로 실행할 때의 인자를 뗀다. -> (나머지 인자, query 경로)"""
+    rest, path, i = [], "", 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--handoff" and i + 1 < len(argv):
+            path, i = argv[i + 1], i + 2
+            continue
+        if a.startswith("--handoff="):
+            path, i = a.split("=", 1)[1], i + 1
+            continue
+        rest.append(a)
+        i += 1
+    return rest, path
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    argv, handoff = _split_handoff(list(sys.argv[1:] if argv is None else argv))
     ap = build_parser()
     args = ap.parse_args(argv)
     if args.cmd in (None, "gui"):
         from .ui.app import run_gui
 
-        return run_gui()
+        return run_gui(handoff)
     try:
         return args.fn(args)
     except (ValueError, bridge.BlenderError, extractor.ExtractError, OSError) as e:

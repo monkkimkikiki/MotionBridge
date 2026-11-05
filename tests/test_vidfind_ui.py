@@ -392,20 +392,33 @@ def main():
         vt.rows[-1].search.setText("hexa")
         check(vt.rows[-1].chosen() == MESHES[1], "빈 줄에서 검색: %s" % vt.rows[-1].chosen())
 
-        # ---------------- AnimRef 연결: 요청 -> 화면 -> 결과
+        # ---------------- AnimRef 연결: 요청 -> 화면 -> 결과 (AnimRef 1.13 의 실제 query.json 모양)
         from motionbridge.core import animlink
         ldir = os.path.join(d, "link")
         check(mw.start_link(ldir) and mw.link is not None and os.path.isfile(os.path.join(ldir, "animtool.json")), "연결 서버 시작")
-        qf = os.path.join(d, "r", "query.json")
-        os.makedirs(os.path.dirname(qf))
-        json.dump({"id": "q7", "clips": ["/v/hit1.mp4"], "label": "타격", "hits": 3}, open(qf, "w"))
-        # 서버 스레드가 받은 요청이 UI 쪽 처리기로 전달된다 (가짜 Qt 는 즉시 호출)
+        hdir = os.path.join(d, "lib", "모탈셸2", "handoff", "포로_내려찍기")
+        os.makedirs(hdir)
+        qf = os.path.join(hdir, "query.json")
+        rf = os.path.join(hdir, "result.json")
+
+        def write_query(cid, label, hits, char=None, video="/v/hit1.mp4"):
+            json.dump({"animref_handoff": 1, "game": "모탈셸2", "clip": {"id": cid, "label": label, "duration": 3.9, "fps": 60.0, "video": video},
+                       "character": char, "subject": None, "hits": hits, "motion": None, "result_path": rf}, open(qf, "w", encoding="utf-8"), ensure_ascii=False)
+
+        def send_open():
+            rq = urllib.request.Request("http://127.0.0.1:%d/v1/open" % mw.link.port, data=json.dumps({"query": qf}).encode(),
+                                        headers={"X-AnimRef-Token": mw.link.token}, method="POST")
+            return urllib.request.urlopen(rq, timeout=5).status
+
         import urllib.request
-        tok = mw.link.token
-        rq = urllib.request.Request("http://127.0.0.1:%d/v1/open" % mw.link.port, data=json.dumps({"query": qf}).encode(), headers={"X-Token": tok}, method="POST")
-        urllib.request.urlopen(rq, timeout=5).read()
-        check(vt.link_query and vt.link_query["id"] == "q7" and vt.source_paths(False) == ["/v/hit1.mp4"], "요청이 화면에 반영: %s" % vt.source_paths(False))
-        check(vt.link_box._visible and "q7" in vt.link_banner.text() and vt.label.currentData() == "타격" and vt.hits.value() == 3, "배너/분류/타수")
+        write_query("포로_내려찍기", "타격", [0.28, 0.8, 3.3], {"name": "The Nameless Captive", "kind": "creature"})
+        check(send_open() == 200, "AnimRef 의 /v1/open 은 200")
+        check(vt.link_query and vt.link_query["id"] == "포로_내려찍기" and vt.source_paths(False) == ["/v/hit1.mp4"], "clip.video 가 목록에 들어감: %s" % vt.source_paths(False))
+        check(vt.link_box._visible and "포로_내려찍기" in vt.link_banner.text() and vt.label.currentData() == "타격" and vt.hits.value() == 3, "배너/분류/타수")
+        check("0.28" in vt.link_banner.text() and "3.3" in vt.link_banner.text() and "분류 타격" in vt.src_note.text(), "타격 시각과 분류를 같이 표시: %s" % vt.src_note.text())
+        check("The Nameless Captive" in vt.known.toPlainText(), "AnimRef 캐릭터가 '아는 정보'에 들어감: %r" % vt.known.toPlainText())
+        check("영상 파일이 없습니다" in vt.link_banner.text(), "영상 파일이 없으면 경고")
+        vt.known.setPlainText("")
         # 아무것도 안 고르고 보내기 -> 안내, 요청은 유지
         QMessageBox.calls.clear()
         vt.send_result(False)
@@ -415,26 +428,54 @@ def main():
         vt.index = assetidx.AssetIndex(MESHES, ANIMS)
         vt.confirmed = [MESHES[0]]
         vt.mesh_list.clear()
-        it = A.QListWidgetItem("Dwarf") if hasattr(A, "QListWidgetItem") else None
-        vt._refill_anims()
         vt.mesh_list.addItem(V.QListWidgetItem("Dwarf"))
         vt.mesh_list.item(0).setData(A.Qt.ItemDataRole.UserRole, MESHES[0])
         vt.mesh_list.selectAll()
-        vt.anim_list.selectItems([0])
+        vt._refill_anims()
+        vt.anim_list.selectItems([0, 1])
         pick = vt.anim_list.item(0).data(A.Qt.ItemDataRole.UserRole)
+        stem = os.path.basename(pick).split(".")[0]
+        vt.last_files = ["/out/G/Dwarf/Animations/%s.psa" % stem, "/out/G/Dwarf/Models/SK_Dwarf_rigged.fbx"]
         vt.send_result(False)
-        rf = os.path.join(d, "r", "result.json")
         res = json.load(open(rf, encoding="utf-8"))
-        check(res["status"] == "confirmed" and res["id"] == "q7" and res["meshes"] == [MESHES[0]] and res["animations"] == [pick], "result.json: %s" % res)
-        check(vt.link_query is None and not vt.link_box._visible and "꺼져 있어" in vt.link_banner.text(), "AnimRef 꺼짐 안내: %s" % vt.link_banner.text())
-        # '맞는 게 없음'
-        json.dump({"id": "q8", "path": "/v/x.mp4"}, open(qf, "w"))
-        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/v1/open" % mw.link.port, data=json.dumps({"query": qf}).encode(), headers={"X-Token": tok}, method="POST"), timeout=5).read()
+        check(res["animref_result"] == 1 and res["status"] == "confirmed" and res["clip_id"] == "포로_내려찍기", "result.json 6절 형식: %s" % res)
+        check(res["animation"]["id"] == pick and res["animation"]["name"] == stem and res["animation"]["file"].endswith(stem + ".psa"), "고른 애니메이션: %s" % res["animation"])
+        check(res["model_files"] == ["/out/G/Dwarf/Models/SK_Dwarf_rigged.fbx"] and res["export_dir"] == "/out/G/Dwarf" and "함께 고른" in res["note"], "모델 파일/폴더/메모: %s" % res)
+        check(vt.link_query is None and not vt.link_box._visible and "알리지 못했습니다" in vt.link_banner.text() and "결과 가져오기" in vt.link_banner.text(), "AnimRef 꺼짐 안내: %s" % vt.link_banner.text())
+        # '맞는 게 없음' -> rejected
+        write_query("포로_내려찍기", "타격", [])
+        send_open()
         vt.send_result(True)
         res = json.load(open(rf, encoding="utf-8"))
-        check(res["status"] == "none" and res["id"] == "q8" and not res["meshes"], "맞는 게 없음 결과: %s" % res)
+        check(res["status"] == "rejected" and res["clip_id"] == "포로_내려찍기" and "animation" not in res, "맞는 게 없음 결과: %s" % res)
         mw.stop_link()
         check(mw.link is None and not os.path.exists(os.path.join(ldir, "animtool.json")), "종료 시 접속 정보 삭제")
+
+        # 메뉴 [파일 > AnimRef에서 가져오기]: query.json 을 직접 골라도 같은 동작
+        write_query("직접", "스킬", [1.0, 2.0])
+        QFileDialog.open_ret = (qf, "")
+        mw.import_animref()
+        check(vt.link_query and vt.link_query["id"] == "직접" and vt.label.currentData() == "스킬" and vt.hits.value() == 2, "query.json 직접 열기")
+        check(any(v[3] == "AnimRef에서 가져오기…" for v in mw._actions.values()), "파일 메뉴에 항목")
+        vt.link_query = None
+
+        # AnimRef 클립 폴더 대화상자는 AnimRef 설정의 라이브러리/게임/clips 에서 시작
+        os.environ["APPDATA"] = os.path.join(d, "appdata")
+        os.makedirs(os.path.join(d, "appdata", "AnimRef"))
+        clips = os.path.join(d, "lib", "모탈셸2", "clips")
+        os.makedirs(clips)
+        json.dump({"library_dir": os.path.join(d, "lib"), "game": "모탈셸2"}, open(os.path.join(d, "appdata", "AnimRef", "settings.json"), "w", encoding="utf-8"), ensure_ascii=False)
+        seen_start = []
+        QFileDialog.getExistingDirectory = staticmethod(lambda parent, title, start="", *a, **k: seen_start.append(start) or "")
+        vt.add_animref()
+        check(seen_start == [clips], "클립 폴더 대화상자 시작 위치: %s" % seen_start)
+
+        # 탭: 화살표 없이 전부 보이는 격자, 클릭 한 번으로 이동
+        check(mw.tabs.count() == 7 and mw.tabs.tabText(5) == "영상으로 찾기" and mw.tabs.indexOf(vt) == 5, "탭 7개")
+        mw.tabs.setCurrentIndex(5)
+        check(mw.tabs.currentIndex() == 5 and mw.tabs._btns[5].isChecked() and not mw.tabs._btns[0].isChecked(), "탭 이동/표시")
+        mw.tabs._btns[2].clicked.emit()
+        check(mw.tabs.currentIndex() == 2, "버튼 클릭으로 이동")
 
     print("모두 통과" if not fails else "실패 %d개" % len(fails))
     sys.exit(1 if fails else 0)

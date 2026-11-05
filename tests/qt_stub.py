@@ -141,6 +141,9 @@ class QCheckBox(QWidget):
     def isChecked(self):
         return self._checked
 
+    def text(self):
+        return self._text
+
 
 QRadioButton = QCheckBox
 

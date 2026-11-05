@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 from .assetidx import KNOWN_LABELS
 from .frames import VIDEO_EXTS
 
-LABEL_KEYS = ("label", "ai", "category", "class", "분류", "ai_label", "user_label")
+LABEL_KEYS = ("label_manual", "label", "ai", "category", "class", "분류", "ai_label", "user_label")  # AnimRef 는 손으로 고친 label_manual 이 우선
 LIST_FILES = ("library.json", "clips.json", "index.json", "meta.json", "metadata.json")
 _HIT = re.compile(r"(\d+)\s*[/_-]\s*(\d+)\s*타")
 
@@ -110,8 +110,9 @@ def scan_clips(root: str, limit: int = 2000) -> List[ClipInfo]:
         stem = os.path.splitext(os.path.basename(p))[0]
         label = ""
         side = os.path.splitext(p)[0] + ".json"
-        if os.path.isfile(side):
-            label = _pick_label(_read_json(side))
+        sd = _read_json(side) if os.path.isfile(side) else None
+        if sd is not None:
+            label = _pick_label(sd)
         if not label:
             label = listed.get(stem, "")
         group = ""
@@ -129,7 +130,11 @@ def scan_clips(root: str, limit: int = 2000) -> List[ClipInfo]:
                     label = w
                     break
         m = _HIT.search(stem)
-        out.append(ClipInfo(p, stem, label, group, int(m.group(1)) if m else None, int(m.group(2)) if m else None))
+        hi, ht = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+        if hi is None and isinstance(sd, dict):  # AnimRef 의 hit_index / hit_count
+            if isinstance(sd.get("hit_index"), int) and isinstance(sd.get("hit_count"), int):
+                hi, ht = sd["hit_index"], sd["hit_count"]
+        out.append(ClipInfo(p, stem, label, group, hi, ht))
     return out
 
 

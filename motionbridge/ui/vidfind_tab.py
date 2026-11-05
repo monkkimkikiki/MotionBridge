@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from .. import __version__
 from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, vision
 from .widgets import fit_widths, wrappable
 
@@ -78,6 +79,7 @@ class VidFindTab(QWidget):
         self.confirmed: List[str] = []
         self.clip_labels: Dict[str, str] = {}
         self.link_query: Optional[dict] = None  # AnimRef 가 보낸 요청 (답을 보내기 전까지)
+        self.last_files: List[str] = []         # 방금 추출한 파일 (AnimRef 결과에 넣는다)
         self._build()
 
     # ================================================================== 화면
@@ -115,6 +117,10 @@ class VidFindTab(QWidget):
         b = QPushButton("AnimRef 클립 폴더…")
         b.setToolTip("AnimRef 가 자른 클립 폴더. 분류(타격/피격/스킬…)를 함께 읽습니다.")
         b.clicked.connect(self.add_animref)
+        h.addWidget(b)
+        b = QPushButton("AnimRef query.json 열기…")
+        b.setToolTip("AnimRef 가 '추출 툴로 보내기' 때 만든 query.json 을 직접 고릅니다 (실시간 연결이 안 될 때). 메뉴 파일 > AnimRef에서 가져오기 와 같습니다.")
+        b.clicked.connect(lambda *_a: self.open_query_file())
         h.addWidget(b)
         b = QPushButton("목록 비우기")
         b.clicked.connect(self.clear_sources)
@@ -364,7 +370,8 @@ class VidFindTab(QWidget):
         self._update_src_note()
 
     def add_animref(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "AnimRef 클립 폴더", self.cfg.get("animref_dir", ""))
+        start = animlink.default_clip_dir() or self.cfg.get("animref_dir", "")  # AnimRef 설정의 라이브러리/게임/clips
+        d = QFileDialog.getExistingDirectory(self, "AnimRef 클립 폴더", start)
         if not d:
             return
         self.cfg["animref_dir"] = d
@@ -842,6 +849,7 @@ class VidFindTab(QWidget):
 
         def done(res):
             files, n, skipped = res
+            self.last_files = list(files)
             win.ex_files.set_paths(files)
             win._after_load("source")
             win.tabs.setCurrentIndex(1)
@@ -903,6 +911,7 @@ class VidFindTab(QWidget):
 
     def _after_extract(self, files) -> None:
         win = self.win
+        self.last_files = list(files or [])
         win.ex_files.set_paths(files)
         if not files:
             why = [x for x in getattr(win, "_ex_skips", []) if x][:6]
@@ -912,6 +921,24 @@ class VidFindTab(QWidget):
         win.tabs.setCurrentIndex(0)
 
     # ================================================================== AnimRef 연결
+    def open_query_file(self, path: str = "") -> None:
+        """AnimRef 가 만든 query.json 을 골라 같은 화면을 채운다 (실시간 연결과 같은 동작)."""
+        if not path:
+            lib = animlink.animref_settings().get("library_dir") or ""
+            start = os.path.join(lib, "handoff") if lib else self.cfg.get("last_dir", "")
+            path, _ = QFileDialog.getOpenFileName(self, "AnimRef query.json 선택", self.cfg.get("animref_query_dir") or start, "query.json (query.json *.json)")
+        if not path:
+            return
+        try:
+            q = animlink.parse_query(path)
+        except animlink.LinkError as e:
+            QMessageBox.warning(self, "AnimRef 가져오기", str(e))
+            return
+        self.cfg["animref_query_dir"] = os.path.dirname(os.path.dirname(path))
+        bridge.save_config(self.cfg)
+        self.load_query(q)
+        self.win.tabs.setCurrentIndex(self.win.tabs.indexOf(self))
+
     def load_query(self, q: dict) -> None:
         """AnimRef 가 보낸 요청으로 화면을 채운다 (UI 스레드에서 불린다)."""
         self.link_query = q
@@ -920,38 +947,74 @@ class VidFindTab(QWidget):
             self._add_source(p, q.get("label", ""))
         if q.get("label") in LABEL_CHOICES:
             self.label.setCurrentIndex(max(self.label.findData(q["label"]), 0))
-        if q.get("hits"):
-            self.hits.setValue(int(q["hits"]))
+        hits = q.get("hits") or []
+        if hits:  # 타격 시각 개수 = 타수 (AnimRef 가 소리·번쩍임으로 찾은 값이라 틀릴 수 있음)
+            self.hits.setValue(min(len(hits), 9))
+        ch = q.get("character") or {}
+        if ch.get("name"):  # AnimRef 에서 유저가 정한 캐릭터 -> '아는 정보'에 넣어 이름으로 리소스를 먼저 찾는다
+            have = [k.name.lower() for k in gamenames.parse_known(self.known.toPlainText())]
+            if ch["name"].lower() not in have:
+                cur = self.known.toPlainText().strip()
+                self.known.setPlainText((cur + "\n" if cur else "") + ch["name"] + (" — %s" % ch["kind"] if ch.get("kind") else ""))
         self.rows, self.confirmed = [], []
         self.table.setRowCount(0)
         self.mesh_list.clear()
         self.anim_list.clear()
-        self._update_src_note()
+        facts = []
+        if q.get("label"):
+            facts.append("분류 %s" % q["label"])
+        if hits:
+            facts.append("타격 시각 %s초 (AnimRef 추정, 틀릴 수 있음)" % ", ".join("%g" % t for t in hits))
+        if ch.get("name"):
+            facts.append("캐릭터 %s" % ch["name"])
+        self._update_src_note(prefix=" · ".join(facts))
         self.link_box.setVisible(True)
         n = len(q.get("paths", []))
-        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개. 몬스터를 추측·검수하고 메시/애니메이션을 고른 뒤 '결과 보내기', 없으면 '맞는 게 없음'을 누르세요."
-                                 % (" #%s" % q["id"] if q.get("id") else "", n))
+        missing = [p for p in q.get("paths", []) if not os.path.isfile(p)]
+        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개%s. 몬스터를 추측·검수하고 메시/애니메이션을 고른 뒤 '결과 보내기', 없으면 '맞는 게 없음'을 누르세요."
+                                 % (" #%s" % q["id"] if q.get("id") else "", n, " · " + " · ".join(facts) if facts else ""))
+        if missing:
+            self.link_banner.setText(self.link_banner.text() + "\n⚠ 영상 파일이 없습니다: " + wrappable(missing[0]))
         sc = self.win.scan
-        if n and sc is not None and sc.found and sc.root == self.win.ex_game.text().strip():
+        if n and not missing and sc is not None and sc.found and sc.root == self.win.ex_game.text().strip():
             self.start_guess()  # 게임 폴더를 이미 검사해 뒀으면 바로 추측 시작
         elif n:
             self.link_banner.setText(self.link_banner.text() + "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '몬스터 추측 시작'을 누르세요.)")
+
+    def _extracted_for(self, asset: str) -> str:
+        """방금 추출한 파일 중 이 에셋의 결과(이름이 같은 파일)."""
+        stem = os.path.basename(asset).split(".")[0].lower()
+        for f in self.last_files:
+            if os.path.splitext(os.path.basename(f))[0].lower() == stem and not f.lower().endswith((".png", ".jpg")):
+                return f
+        return ""
 
     def send_result(self, none: bool) -> None:
         q = self.link_query
         if q is None:
             return
-        meshes = [it.data(Qt.ItemDataRole.UserRole) for it in self.mesh_list.selectedItems()]
         anims = [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems()]
-        if not none and not meshes and not anims:
-            QMessageBox.warning(self, "결과 보내기", "보낼 메시나 애니메이션을 목록에서 고르세요. 맞는 게 없으면 '맞는 게 없음'을 누르세요.")
+        listed = [self.anim_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(min(self.anim_list.count(), 50))]
+        if not none and not anims:
+            QMessageBox.warning(self, "결과 보내기", "AnimRef 에 알릴 애니메이션을 목록에서 고르세요 (AnimRef 는 고른 애니메이션 이름을 클립 옆에 표시합니다). 맞는 게 없으면 '맞는 게 없음'을 누르세요.")
             return
+        ver = "MotionBridge " + __version__
+        if none:
+            res = animlink.build_result(q, "rejected", candidates=listed, tool=ver, note="후보 중 맞는 게 없음" if listed else "")
+        else:
+            first = anims[0]
+            anim = {"id": first, "name": os.path.basename(first).split(".")[0], "file": self._extracted_for(first)}
+            files = [f for f in self.last_files if not f.lower().endswith(".psa")]
+            exp = os.path.dirname(os.path.dirname(self.last_files[0])) if self.last_files else ""
+            note = ("함께 고른 애니메이션: " + ", ".join(os.path.basename(a).split(".")[0] for a in anims[1:])) if len(anims) > 1 else ""
+            res = animlink.build_result(q, "confirmed", anim, files, exp, listed, note, ver)
         try:
-            out = animlink.deliver(q, meshes, anims, none)
+            out = animlink.deliver(q, res)
         except OSError as e:
             QMessageBox.warning(self, "결과 보내기", "result.json 을 쓰지 못했습니다: %s" % e)
             return
         self.link_query = None
         self.link_box.setVisible(False)
-        self.link_banner.setText("결과를 보냈습니다: %s — %s" % (wrappable(str(out["file"])), "AnimRef 에 알렸습니다." if out["notified"] else "AnimRef 가 꺼져 있어 result.json 만 저장했습니다."))
+        tail = "AnimRef 에 알렸습니다 (클립 옆에 🔗 표시)." if out["notified"] else "AnimRef 에 알리지 못했습니다 (%s) — result.json 은 저장했으니 AnimRef 의 [결과 가져오기]를 누르세요." % out["error"]
+        self.link_banner.setText("결과를 보냈습니다: %s — %s" % (wrappable(str(out["file"])), tail))
         self.win.statusBar().showMessage("AnimRef 결과 저장: " + str(out["file"]))
