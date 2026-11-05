@@ -38,8 +38,8 @@ PICK_FILTER = "영상/이미지 (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.png *.jp
 class _Row:
     """검수 표의 한 줄."""
 
-    def __init__(self, group: vision.Group, combo, search, exclude, base: List[assetidx.MeshCandidate]) -> None:
-        self.group, self.combo, self.search, self.exclude, self.base = group, combo, search, exclude, base
+    def __init__(self, group: vision.Group, combo, search, exclude, base: List[assetidx.MeshCandidate], sure: bool = True) -> None:
+        self.group, self.combo, self.search, self.exclude, self.base, self.sure = group, combo, search, exclude, base, sure
 
     def chosen(self) -> Optional[str]:
         if self.exclude.isChecked():
@@ -185,10 +185,17 @@ class VidFindTab(QWidget):
         g = QGroupBox("3) 몬스터 추측")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
+        self.min_conf = QSpinBox()
+        self.min_conf.setRange(0, 100)
+        self.min_conf.setSuffix("%")
+        self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
+        self.min_conf.setToolTip("AI 확신이 이 값보다 낮으면 메시를 자동으로 고르지 않고 '직접 고르세요'로 둡니다 (엉뚱한 몬스터로 넘어가는 것을 막음).")
         self.btn_guess = QPushButton("몬스터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.btn_guess, 1)
+        h.addWidget(QLabel("자동 선택 최소 확신"))
+        h.addWidget(self.min_conf)
         b = QPushButton("에셋 목록 새로 읽기")
         b.setToolTip("게임 파일에서 메시/애니메이션 이름 목록을 다시 만듭니다 (처음 한 번 만들면 저장해 두고 씁니다).")
         b.clicked.connect(lambda *_a: self.start_guess(True))
@@ -267,7 +274,14 @@ class VidFindTab(QWidget):
         h.addWidget(b)
         h.addStretch(1)
         v.addLayout(h)
-        self.btn_extract = QPushButton("선택한 메시 + 애니메이션 추출")
+        self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타깃 작업)")
+        self.btn_view.setMinimumHeight(34)
+        self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 열고 '1. 파일·매핑' 탭으로 이동합니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
+                                 "같은 스켈레톤(같은 몬스터)의 애니메이션만 함께 열립니다.")
+        self.btn_view.clicked.connect(lambda *_a: self.open_in_viewport())
+        v.addWidget(self.btn_view)
+        self.anim_list.itemDoubleClicked.connect(self._anim_double_clicked)
+        self.btn_extract = QPushButton("선택한 메시 + 애니메이션 추출 (파일로만)")
         self.btn_extract.setMinimumHeight(34)
         self.btn_extract.setToolTip("0번 탭의 형식/리깅/대상 프로그램/출력 폴더 설정을 그대로 씁니다.")
         self.btn_extract.clicked.connect(self.extract)
@@ -364,6 +378,7 @@ class VidFindTab(QWidget):
         self.cfg["vf_per"] = int(self.per.value())
         self.cfg["vf_hint"] = self.hint.text().strip()
         self.cfg["vf_filter"] = self.filter.text().strip()
+        self.cfg["vf_min_conf"] = int(self.min_conf.value())
         bridge.save_config(self.cfg)
 
     def provider(self) -> vision.Provider:
@@ -498,8 +513,11 @@ class VidFindTab(QWidget):
     def _cand_text(self, c: assetidx.MeshCandidate) -> str:
         return "%s   [%d%%] %s" % (c.name, round(min(c.score, 1.0) * 100), c.why)
 
-    def _fill_combo(self, combo, cands: List[assetidx.MeshCandidate]) -> None:
+    def _fill_combo(self, combo, cands: List[assetidx.MeshCandidate], pick_first: bool = True) -> None:
+        """후보를 채운다. pick_first=False 면 맨 위에 '직접 고르세요'를 두고 그것이 선택된 채로 시작한다."""
         combo.clear()
+        if not pick_first and cands:
+            combo.addItem("(확신이 낮아 자동 선택 안 함 — 후보에서 고르거나 아래 칸에서 검색)", None)
         for c in cands:
             combo.addItem(self._cand_text(c), c.path)
         if not cands:
@@ -515,19 +533,22 @@ class VidFindTab(QWidget):
     def _make_row(self, r: int, g: vision.Group) -> None:
         idx = self.index or assetidx.AssetIndex()
         base = idx.rank_meshes(g.name, g.description, 8, self.memory)
+        remembered = bool(base) and base[0].why.startswith("이전에 확정")
+        sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
         pm = _thumb(g.frame, g.box)
         if pm is not None:
             it.setIcon(QIcon(pm))
         self.table.setItem(r, 0, it)
         name = g.name or "(모름)"
-        txt = "%s\n확신 %d%% · %d장면\n%s" % (name, round(g.confidence * 100), g.seen, g.description[:80])
+        warn = "⚠ 확신 낮음 — 직접 확인\n" if g.name and not sure else ""
+        txt = "%s%s\n확신 %d%% · %d장면\n%s" % (warn, name, round(g.confidence * 100), g.seen, g.description[:80])
         self.table.setItem(r, 1, QTableWidgetItem(txt))
         box = QWidget()
         bl = QVBoxLayout(box)
         bl.setContentsMargins(2, 2, 2, 2)
         combo = QComboBox()
-        self._fill_combo(combo, base)
+        self._fill_combo(combo, base, pick_first=sure)
         search = QLineEdit()
         search.setPlaceholderText("다른 메시 찾기: 이름 일부를 입력")
         bl.addWidget(combo)
@@ -535,7 +556,7 @@ class VidFindTab(QWidget):
         self.table.setCellWidget(r, 2, box)
         ex = QCheckBox("제외")
         self.table.setCellWidget(r, 3, ex)
-        row = _Row(g, combo, search, ex, base)
+        row = _Row(g, combo, search, ex, base, sure)
         search.textChanged.connect(lambda text, rw=row: self._on_search(rw, text))
         self.rows.append(row)
         self.table.setRowHeight(r, 108)
@@ -543,7 +564,7 @@ class VidFindTab(QWidget):
     def _on_search(self, row: _Row, text: str) -> None:
         text = (text or "").strip()
         if not text:
-            self._fill_combo(row.combo, row.base)
+            self._fill_combo(row.combo, row.base, pick_first=row.sure)
             return
         idx = self.index
         self._fill_combo(row.combo, idx.search(text) if idx else [])
@@ -618,6 +639,53 @@ class VidFindTab(QWidget):
         if empty:
             msg += " 이름이 맞는 애니메이션을 못 찾은 몬스터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
         self.anim_note.setText(msg)
+
+    # ================================================================== 뷰포트로 열기
+    def _anim_double_clicked(self, item, *_a) -> None:
+        self.open_in_viewport([item.data(Qt.ItemDataRole.UserRole)])
+
+    def open_in_viewport(self, anims: Optional[List[str]] = None) -> None:
+        if anims is None:
+            anims = [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems()]
+        if not anims:
+            QMessageBox.warning(self, "뷰포트로 열기", "열 애니메이션을 목록에서 고르세요 (Ctrl/Shift 로 여러 개, 더블클릭은 하나).")
+            return
+        a = self.win._extract_args()
+        if a is None:
+            return
+        win = self.win
+        out = win.ex_out.text().strip()
+        if not out:
+            return
+        bridge.save_config(self.cfg)
+        win._ex_skips = []
+
+        def job(w):
+            def ev(e):
+                if e.get("type") == "skip":
+                    win._ex_skips.append("%s — %s" % (os.path.basename(e.get("path", "")), e.get("reason", "")))
+                if e.get("type") in ("exported", "skip"):
+                    w.progress.emit(0, len(anims), os.path.basename(e.get("path", "")))
+            files = extractor.export_assets(*a, anims, extractor.anim_dir(out), ev, kind="anim")
+            psa = [f for f in files if f.lower().endswith(".psa")]
+            if not psa:
+                raise RuntimeError("애니메이션을 뽑지 못했습니다. " + " / ".join(win._ex_skips[:3]))
+            w.progress.emit(0, 1, "모션 읽는 중")
+            m, skipped = win.pr.load_source_many(psa)
+            return files, len(m.animations), skipped
+
+        def done(res):
+            files, n, skipped = res
+            win.ex_files.set_paths(files)
+            win._after_load("source")
+            win.tabs.setCurrentIndex(1)
+            msg = "소스 모션 %d개를 열었습니다 — 오른쪽 '클립' 목록에서 바꿔 볼 수 있습니다" % n
+            if skipped:
+                msg += " (건너뜀 %d: %s)" % (len(skipped), skipped[0][:80])
+                QMessageBox.information(self, "뷰포트로 열기", "일부는 열지 못했습니다:\n" + "\n".join(skipped)[:700])
+            win.statusBar().showMessage(msg)
+
+        win.run_async(job, done, "애니메이션 뽑는 중")
 
     # ================================================================== 추출
     def extract(self) -> None:

@@ -199,6 +199,68 @@ def main():
         vt.engine.setCurrentIndex(vt.engine.findData("claude"))
         check(not vt.btn_pull._visible, "Claude 선택 시 받기 버튼 숨김")
 
+
+        # ---------------- 확신이 낮으면 자동으로 고르지 않음 (이름 없는 보스를 엉뚱한 몬스터로 확정하던 문제)
+        vt.index = assetidx.AssetIndex(MESHES, ANIMS)
+        vt.memory = assetidx.MatchMemory(os.path.join(d, "m2.json"))
+        vt.min_conf.setValue(60)
+        vt.fill_table([vision.Group("Hexapod", "six legged", 2, 0.4, "", None, []), vision.Group("Hexapod", "six legged", 2, 0.9, "", None, []),
+                       vision.Group("", "grey stone brute", 1, 0.3, "", None, [])])
+        lo, hi, unk = vt.rows
+        check(lo.chosen() is None and "확신이 낮아" in lo.combo.currentText() and not lo.sure, "낮은 확신은 자동 선택 안 함: %s" % lo.combo.currentText())
+        check(hi.chosen() == MESHES[1], "높은 확신은 자동 선택")
+        check("⚠" in vt.table.item(0, 1).text() and "⚠" not in vt.table.item(1, 1).text(), "낮은 확신 표시")
+        lo.combo.setCurrentIndex(1)
+        check(lo.chosen() == MESHES[1], "후보에서 직접 고르면 선택됨")
+        lo.search.setText("zzzz")
+        lo.search.setText("")
+        check(lo.chosen() is None, "검색을 지워도 낮은 확신은 자동 선택으로 돌아가지 않음")
+        vt.min_conf.setValue(30)
+        vt.fill_table([vision.Group("Hexapod", "", 1, 0.4, "", None, [])])
+        check(vt.rows[0].chosen() == MESHES[1], "기준을 낮추면 자동 선택")
+        vt.min_conf.setValue(60)
+
+        # ---------------- 후보 애니메이션을 뷰포트(소스 모션)로 열기
+        from motionbridge.core.io_psa import write_psa
+        import synth
+        sk_, meta_ = synth.build_skeleton("ue", "z_up_x", 100.0, "A", "bone_x")
+        an1, _ = synth.walk_animation(sk_, meta_, n_frames=20, name="x")
+        an2, _ = synth.walk_animation(sk_, meta_, n_frames=14, name="y", speed=1.2)
+        exported = []
+
+        def fake_ea2(helper, root, ue, aes, usmap, paths, out, on_event=None, kind="anim", **k):
+            os.makedirs(out, exist_ok=True)
+            res = []
+            for pth, an in zip(paths, (an1, an2, an1)):
+                f = os.path.join(out, os.path.basename(pth) + ".psa")
+                write_psa(f, sk_, [an])
+                res.append(f)
+            exported.append(list(paths))
+            return res
+
+        V.extractor.export_assets = fake_ea2
+        vt.index = assetidx.AssetIndex(MESHES, ANIMS)
+        vt.confirmed = [MESHES[0]]
+        vt.mesh_list.clear()
+        vt.mesh_list.addItem(V.QListWidgetItem("Dwarf"))
+        vt.mesh_list.item(0).setData(A.Qt.ItemDataRole.UserRole, MESHES[0])
+        vt.mesh_list.selectAll()
+        vt._refill_anims()
+        QMessageBox.calls.clear()
+        vt.anim_list.selectItems([])
+        vt.open_in_viewport()
+        check(QMessageBox.calls and mw.pr.src is None, "선택 없이 열기 안내")
+        vt.anim_list.selectItems([0, 1])
+        picks = [vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in (0, 1)]
+        mw.ex_out.setText(os.path.join(d, "out2"))
+        vt.open_in_viewport()
+        check(exported and exported[-1] == picks, "고른 애니메이션만 뽑음: %s" % exported)
+        check(mw.pr.src is not None and len(mw.pr.src.animations) == 2 and mw.clip_combo.count() == 2, "소스 모션으로 열림: %d" % (len(mw.pr.src.animations) if mw.pr.src else -1))
+        check(mw.ex_files.count() == 2, "추출 목록에도 올라감")
+        # 더블클릭 = 그 하나만
+        vt._anim_double_clicked(vt.anim_list.item(2))
+        check(len(mw.pr.src.animations) == 1 and exported[-1] == [vt.anim_list.item(2).data(A.Qt.ItemDataRole.UserRole)], "더블클릭은 하나만 열기")
+
         # Claude: 키 없으면 호출 전에 안내
         vt.engine.setCurrentIndex(vt.engine.findData("claude"))
         check(vt.model.text() == "claude-sonnet-5-5", "Claude 기본 모델: %s" % vt.model.text())

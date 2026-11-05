@@ -58,8 +58,9 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "") -> str:
         "(ignore the player's own hands/weapon, UI, and scenery). Several can be on screen at once.\n"
         "Known character names in this game's files:\n[%s]\n\n"
         "For each visible character answer with:\n"
-        '  "name": the best matching name from the list above exactly as written, or "unknown" if none fits,\n'
-        '  "confidence": a number from 0 to 1,\n'
+        '  "name": the matching name from the list above exactly as written. Do NOT force a match: if the character is not clearly one of them '
+        '(for example an unnamed or unique boss/NPC, or a variant you cannot tell apart), answer "unknown",\n'
+        '  "confidence": a number from 0 to 1 (use below 0.5 when you are unsure),\n'
         '  "description": a short English description of its look (colors, body shape, weapon),\n'
         '  "box": [left, top, right, bottom] as fractions of the image (0 to 1), or null if unsure.\n'
         'Reply with ONLY JSON in this form: {"characters":[{"name":"...","confidence":0.0,"description":"...","box":null}]}. '

@@ -62,6 +62,41 @@ class Project:
         self.log += m.notes
         return m
 
+    def load_source_many(self, paths: List[str]):
+        """여러 모션 파일(PSA 등)을 하나의 소스로 연다. 스켈레톤이 같은 파일의 클립은 한 목록에 합치고, 다른 것은 건너뛴다.
+
+        돌려주는 값: (모델, 건너뛴 이유 목록). 클립 이름은 파일 이름으로 맞춘다(한 파일에 클립이 하나일 때).
+        """
+        base: Optional[Model] = None
+        skipped: List[str] = []
+        for p in paths:
+            nm = os.path.basename(p)
+            try:
+                m = load_model(p, self.blender)
+            except Exception as e:  # noqa: BLE001 - 한 파일이 깨져도 나머지는 연다
+                skipped.append("%s: %s" % (nm, e))
+                continue
+            if not m.animations:
+                skipped.append("%s: 애니메이션이 없습니다" % nm)
+                continue
+            if len(m.animations) == 1:
+                m.animations[0].name = os.path.splitext(nm)[0]
+            if base is None:
+                base = m
+            elif list(m.skeleton.names) == list(base.skeleton.names) and np.array_equal(m.skeleton.parents, base.skeleton.parents):
+                base.animations += m.animations
+                base.notes += m.notes
+            else:
+                skipped.append("%s: 스켈레톤이 달라 함께 열 수 없습니다 (처음 파일과 다른 몬스터)" % nm)
+        if base is None:
+            raise ValueError("열 수 있는 모션이 없습니다.\n" + "\n".join(skipped))
+        self.src = base
+        self.src_slots = auto_map(base.skeleton)
+        self.clip = 0
+        self.result = None
+        self.log += base.notes
+        return base, skipped
+
     def load_target(self, path: str) -> Model:
         m = load_model(path, self.blender)
         self.tgt = m

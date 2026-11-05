@@ -156,7 +156,36 @@ def test_psa_as_source():
     print("psa as source OK")
 
 
+def test_load_source_many():
+    """여러 PSA 를 한 소스로: 같은 스켈레톤은 클립으로 합치고, 다른 몬스터/깨진 파일은 건너뛴다."""
+    sk, anims = make()
+    sk2, meta2 = synth.build_skeleton("mixamo", "y_up_z", 1.0, "T", "aligned")
+    an3, _ = synth.walk_animation(sk2, meta2, n_frames=20, name="other")
+    with tempfile.TemporaryDirectory() as d:
+        a, b, c, bad = (os.path.join(d, n) for n in ("A_Dwarf_Attack.psa", "A_Dwarf_Idle.psa", "A_Other.psa", "broken.psa"))
+        write_psa(a, sk, anims[:1])
+        write_psa(b, sk, anims[1:])
+        write_psa(c, sk2, [an3])
+        open(bad, "wb").write(b"not a psa")
+        pr = Project()
+        m, skipped = pr.load_source_many([a, b, c, bad])
+        assert [x.name for x in m.animations] == ["A_Dwarf_Attack", "A_Dwarf_Idle"], [x.name for x in m.animations]
+        assert len(skipped) == 2 and any("스켈레톤이 달라" in x for x in skipped) and any("broken.psa" in x for x in skipped), skipped
+        assert pr.src is m and pr.clip == 0 and len(pr.src_slots) > 15
+        # 하나만 열어도 된다
+        m1, sk1 = Project().load_source_many([a])
+        assert len(m1.animations) == 1 and not sk1
+        # 열 수 있는 것이 없으면 오류
+        try:
+            Project().load_source_many([bad])
+            raise AssertionError("오류가 나야 함")
+        except ValueError as e:
+            assert "열 수 있는 모션이 없습니다" in str(e)
+    print("load_source_many OK")
+
+
 if __name__ == "__main__":
+    test_load_source_many()
     test_roundtrip_all_conventions()
     test_cue4parse_layout()
     test_errors()
