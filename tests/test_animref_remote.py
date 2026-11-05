@@ -7,6 +7,9 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 fails = []
+import faulthandler  # noqa: E402
+
+faulthandler.dump_traceback_later(150, exit=True)  # 멈추면 어디서 멈췄는지 남기고 끝낸다 (CI 에서 원인 파악용)
 
 
 def check(c, m):

@@ -1,0 +1,15 @@
+name: debug-remote
+on: workflow_dispatch
+jobs:
+  t:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy opencv-python-headless Pillow imageio-ffmpeg PySide6
+      - name: remote test
+        env:
+          PYTHONUTF8: "1"
+        run: python -u tests/test_animref_remote.py
