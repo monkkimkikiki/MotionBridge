@@ -208,8 +208,23 @@ def main():
         vt.find_by_ingame_name()
         check(QMessageBox.calls, "이름 없이 누르면 안내")
         del vt.provider  # 시험용으로 바꾼 것을 되돌림
+        # ---------------- 아는 정보: 영상에 나오는 몬스터를 미리 적으면 이름이 달라도 리소스를 먼저 찾아 AI 에게 알려 준다
+        os.remove(V.NAMES_CACHE) if os.path.exists(V.NAMES_CACHE) else None
+        vt.known.setPlainText("The Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior")
+        script["i"] = 0
+        prompts.clear()
+        vt.start_guess()
+        check(prompts and "The Nameless Captive" in prompts[0] and "internal name probably: Prisoner" in prompts[0] and "쇠사슬" in prompts[0], "아는 정보가 AI 질문에 들어감")
+        by = {r.group.name: r for r in vt.rows}
+        check("Prisoner" in by and by["Prisoner"].chosen() == pris, "AI 가 '모름'이라 한 줄이 아는 정보와 합쳐져 Prisoner 로: %s" % list(by))
+        check(by["Dwarf"].chosen() == MESHES[0] and "게임 속 이름: Dwarf Warrior" in by["Dwarf"].group.description, "AI 가 알아본 몬스터는 확신이 올라감")
+        check("아는 정보: The Nameless Captive → Prisoner" in vt.status.text(), "상태에 해석 결과: %s" % vt.status.text())
+        check(vt.cfg.get("vf_known", "").startswith("The Nameless"), "입력은 설정에 기억")
+        vt.known.setPlainText("")
+
         # 글자 사전 만들기: 도우미가 꺼낸 .locres 를 읽어 저장
-        os.remove(V.NAMES_CACHE)
+        if os.path.exists(V.NAMES_CACHE):
+            os.remove(V.NAMES_CACHE)
         V.LOCRES_DIR = os.path.join(d, "locres")
         real_el = V.extractor.export_locres
 

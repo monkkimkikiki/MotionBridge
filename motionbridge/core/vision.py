@@ -50,13 +50,18 @@ class Group:
 
 
 # ---------------------------------------------------------------------- 질문과 답 해석
-def build_prompt(vocab: Sequence[str], game_hint: str = "") -> str:
+def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = ()) -> str:
     names = ", ".join(vocab)
     game = (" from the video game %s" % game_hint) if game_hint else " from a video game"
+    extra = ""
+    if known:
+        extra = ("The user says these characters appear in the video (their in-game display name, the likely internal name, and a note):\n%s\n"
+                 "Use this as a strong hint. If a visible character matches one of them, answer with its internal name from the list.\n\n"
+                 % "\n".join("- " + k for k in known))
     return (
         "This is a screenshot%s. Identify every distinct monster, enemy, boss or NPC character visible "
         "(ignore the player's own hands/weapon, UI, and scenery). Several can be on screen at once.\n"
-        "Known character names in this game's files:\n[%s]\n\n"
+        "%sKnown character names in this game's files:\n[%s]\n\n"
         "For each visible character answer with:\n"
         '  "name": the matching name from the list above exactly as written. Do NOT force a match: if the character is not clearly one of them '
         '(for example an unnamed or unique boss/NPC, or a variant you cannot tell apart), answer "unknown",\n'
@@ -64,7 +69,7 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "") -> str:
         '  "description": a short English description of its look (colors, body shape, weapon),\n'
         '  "box": [left, top, right, bottom] as fractions of the image (0 to 1), or null if unsure.\n'
         'Reply with ONLY JSON in this form: {"characters":[{"name":"...","confidence":0.0,"description":"...","box":null}]}. '
-        'If no character is visible reply {"characters":[]}.' % (game, names)
+        'If no character is visible reply {"characters":[]}.' % (game, extra, names)
     )
 
 
@@ -199,8 +204,8 @@ class Provider:
     def _send(self, prompt: str, image_path: Optional[str]) -> str:  # pragma: no cover - 하위 클래스가 구현
         raise NotImplementedError
 
-    def analyze(self, image_path: str, vocab: Sequence[str], game_hint: str = "") -> List[Detection]:
-        text = self.ask(image_path, build_prompt(list(vocab)[: self.vocab_limit()], game_hint))
+    def analyze(self, image_path: str, vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = ()) -> List[Detection]:
+        text = self.ask(image_path, build_prompt(list(vocab)[: self.vocab_limit()], game_hint, known))
         return parse_response(text, image_path)
 
 

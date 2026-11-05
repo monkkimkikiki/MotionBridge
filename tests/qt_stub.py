@@ -187,6 +187,9 @@ class QPlainTextEdit(QWidget):
     def toPlainText(self):
         return "\n".join(self._t)
 
+    def setPlainText(self, t):
+        self._t = [t] if t else []
+
 
 class _Num(QWidget):
     def __init__(self, *a):

@@ -147,7 +147,36 @@ def test_find_meshes():
     print("find_meshes OK")
 
 
+def test_known():
+    from motionbridge.core import vision
+    ks = gamenames.parse_known("The Nameless Captive — 보스, 쇠사슬\n- Dwarf Warrior\n\nstone golem: 회색 거인; the nameless captive")
+    assert [(k.name, k.note) for k in ks] == [("The Nameless Captive", "보스, 쇠사슬"), ("Dwarf Warrior", ""), ("stone golem", "회색 거인")], ks
+    idx = assetidx.AssetIndex(MESHES, [])
+    gamenames.resolve_known(ks, idx)
+    assert ks[0].top and ks[0].top.path == MESHES[1] and "internal name probably" in ks[0].prompt_line()
+    # AI 가 Dwarf 만 봤고 알려 준 건 3개: 못 찾은 둘은 새 줄로 추가
+    G = vision.Group
+    groups = [G("Dwarf_Warrior", "armored", 2, 0.6, "f", None, [])]
+    out = gamenames.merge_known(groups, ks)
+    names = [g.name for g in out]
+    assert names[0] == "Dwarf_Warrior" and out[0].confidence >= 0.9 and "게임 속 이름: Dwarf Warrior" in out[0].description, out[0]
+    assert "NamelessCaptive_Boss" in names and "StoneGolem" in names and len(out) == 3, names
+    # 모름 한 줄 + 못 찾은 하나 -> 합침
+    out = gamenames.merge_known([G("unknown", "chained pale man", 1, 0.4, "f", None, [])], ks[:1])
+    assert len(out) == 1 and out[0].name == "NamelessCaptive_Boss" and out[0].frame == "f", out
+    # 리소스를 못 찾으면 확신 0 으로 추가 (자동 선택 안 함)
+    k = gamenames.resolve_known(gamenames.parse_known("Zzyzx Qwop"), idx)
+    out = gamenames.merge_known([], k)
+    assert out[0].name == "Zzyzx Qwop" and out[0].confidence == 0.0
+    # 질문에 들어간다
+    pr = vision.build_prompt(["A"], "G", [ks[0].prompt_line()])
+    assert "Nameless Captive" in pr and "[A]" in pr and "strong hint" in pr
+    assert "strong hint" not in vision.build_prompt(["A"], "G")
+    print("known OK")
+
+
 if __name__ == "__main__":
+    test_known()
     test_parse()
     test_book()
     test_find_meshes()

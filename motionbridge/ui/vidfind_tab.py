@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget,
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -177,6 +177,12 @@ class VidFindTab(QWidget):
         self.filter.setToolTip("AI에게 알려줄 후보 이름을 경로로 줄입니다. 무기/소품이 섞이면 정확도가 떨어집니다.")
         h.addWidget(self.filter, 1)
         v.addLayout(h)
+        v.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 몬스터를 한 줄에 하나씩: 게임 속 이름 — 메모"))
+        self.known = QPlainTextEdit()
+        self.known.setPlainText(self.cfg.get("vf_known", ""))
+        self.known.setPlaceholderText("예)\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior\n(비워도 됩니다. 적으면 이름이 달라도 리소스를 먼저 찾아 AI에게 알려 주고, AI가 놓친 몬스터도 표에 넣어 줍니다)")
+        self.known.setMaximumHeight(90)
+        v.addWidget(self.known)
         self.engine_note = QLabel("")
         self.engine_note.setWordWrap(True)
         v.addWidget(self.engine_note)
@@ -401,6 +407,7 @@ class VidFindTab(QWidget):
             self.cfg.pop("vf_claude_key", None)
         self.cfg["vf_per"] = int(self.per.value())
         self.cfg["vf_hint"] = self.hint.text().strip()
+        self.cfg["vf_known"] = self.known.toPlainText()
         self.cfg["vf_filter"] = self.filter.text().strip()
         self.cfg["vf_min_conf"] = int(self.min_conf.value())
         bridge.save_config(self.cfg)
@@ -491,6 +498,9 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "인식 방식", msg)
             return
         per, hint, pat = int(self.per.value()), self.hint.text().strip(), self.filter.text().strip()
+        hint = hint or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")  # 비우면 0번 탭의 게임 이름
+        known = gamenames.parse_known(self.known.toPlainText())
+        book = self.name_book() if known else None
         ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
         w_cap = 24
 
@@ -506,17 +516,24 @@ class VidFindTab(QWidget):
                 pass
             fr = frames.sample_sources(ff, srcs, FRAME_DIR, per, w_cap, lambda i, n, name: w.progress.emit(i, n, "장면 뽑는 중 " + name))
             vocab, notes = self._vocab(idx, prov.vocab_limit(), pat)
+            if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
+                gamenames.resolve_known(known, idx, book)
+                for k in known:
+                    if k.top and k.top.name not in vocab:
+                        vocab = [k.top.name] + list(vocab)
+                    notes.append("아는 정보: %s → %s" % (k.name, (k.top.name + " (%d%%)" % round(k.top.score * 100)) if k.top else "리소스를 못 찾음"))
+            klines = [k.prompt_line() for k in known]
             dets: List[vision.Detection] = []
             errors: List[str] = []
             for i, f in enumerate(fr):
                 w.progress.emit(i, len(fr), "몬스터 인식 중 " + os.path.basename(f.path))
                 try:
-                    dets += prov.analyze(f.path, vocab, hint)
+                    dets += prov.analyze(f.path, vocab, hint, klines)
                 except vision.VisionError as e:
                     errors.append("%s: %s" % (os.path.basename(f.path), e))
                     if len(errors) >= 3 and not dets:
                         break  # 계속 실패하면 멈춘다 (키/연결 문제)
-            return {"idx": idx, "groups": vision.aggregate(dets), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
+            return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
 
         self.win.run_async(job, self._after_guess, "몬스터 추측 중")
 

@@ -12,11 +12,11 @@ import difflib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import layout, locres, vision
-from .assetidx import STOP, AssetIndex, MeshCandidate, tokens
+from .assetidx import STOP, UNKNOWN_WORDS, AssetIndex, MeshCandidate, tokens
 
 ARTICLES = {"the", "a", "an"}
 KEY_NOISE = {"name", "names", "desc", "description", "title", "text", "label", "display", "displayname", "tooltip", "lore", "short",
@@ -219,3 +219,71 @@ def find_meshes(name: str, index: AssetIndex, book: Optional[NameBook] = None, p
     if not out:
         notes.append("비슷한 이름의 메시를 찾지 못했습니다. 영상 장면으로 찾거나 검색창에 리소스 이름 일부를 직접 넣어 보세요.")
     return out[:limit], notes
+
+
+# ---------------------------------------------------------------------- 사용자가 아는 정보
+@dataclass
+class Known:
+    """사용자가 적어 준 '이 영상에 나오는 몬스터' 한 줄."""
+    name: str                       # 게임 속 이름 (The Nameless Captive)
+    note: str = ""                  # 메모 (보스, 쇠사슬에 묶임 …)
+    cands: List[MeshCandidate] = field(default_factory=list)  # 이름으로 찾은 메시 후보
+
+    @property
+    def top(self) -> Optional[MeshCandidate]:
+        return self.cands[0] if self.cands and self.cands[0].score >= 0.5 else None
+
+    def prompt_line(self) -> str:
+        t = self.top
+        s = self.name + ((" (internal name probably: %s)" % t.name) if t else "")
+        return s + ((" — " + self.note) if self.note else "")
+
+
+def parse_known(text: str) -> List[Known]:
+    """한 줄에 하나: '이름 — 메모' (구분은 —, -, :, 쉼표 앞의 첫 구분자)."""
+    out: List[Known] = []
+    for line in re.split(r"[\r\n;]+", text or ""):
+        line = line.strip(" \t-•*")
+        if not line:
+            continue
+        m = re.split(r"\s+[—–-]\s+|\s*[:：]\s*|\s*\|\s*", line, maxsplit=1)
+        name, note = m[0].strip(), (m[1].strip() if len(m) > 1 else "")
+        if name and not any(k.name.lower() == name.lower() for k in out):
+            out.append(Known(name, note))
+    return out
+
+
+def resolve_known(known: Sequence[Known], index: AssetIndex, book: Optional[NameBook] = None) -> List[Known]:
+    for k in known:
+        k.cands, _n = find_meshes(k.name, index, book, None, k.note, 5)
+    return list(known)
+
+
+def merge_known(groups: List["vision.Group"], known: Sequence[Known]) -> List["vision.Group"]:
+    """AI 가 찾은 몬스터 목록에 사용자가 알려 준 몬스터를 합친다.
+
+    * AI 가 같은 메시로 인식했으면 그 줄을 확신 높게 + 게임 속 이름 메모
+    * AI 가 '모름' 한 줄이 하나뿐이고 알려 준 것도 하나 남았으면 같은 몬스터로 보고 합친다
+    * 그 밖에는 '사용자 지정' 줄을 새로 추가 (AI 가 놓친 몬스터)
+    """
+    groups = list(groups)
+    unmatched: List[Known] = []
+    for k in known:
+        t = k.top
+        hit = next((g for g in groups if t and g.name and g.name.lower() == t.name.lower()), None)
+        if hit is not None:
+            hit.confidence = max(hit.confidence, 0.9)
+            hit.description = ("게임 속 이름: %s. %s" % (k.name, hit.description)).strip()
+        else:
+            unmatched.append(k)
+    unk = [g for g in groups if not g.name or g.name.lower() in UNKNOWN_WORDS]
+    for k in unmatched:
+        label = k.top.name if k.top else k.name
+        desc = "게임 속 이름: %s%s" % (k.name, (". " + k.note) if k.note else "")
+        if len(unk) == 1 and len(unmatched) == 1:
+            g = unk[0]
+            g.name, g.description = label, desc + ". " + g.description
+            g.confidence = 0.85 if k.top else 0.0
+        else:
+            groups.append(vision.Group(label, desc, 0, 0.85 if k.top else 0.0, "", None, []))
+    return groups
