@@ -79,7 +79,7 @@ dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:Publish
 - `POST /v1/open {"query": …}` — 토큰 필요(`X-Token` 또는 `Authorization: Bearer`). query 가 `query.json` 경로면 파일을 읽고, 객체면 그대로 씁니다. 받으면 UI 스레드로 넘겨 '영상으로 찾기' 탭에 후보 화면을 띄우고, 게임 폴더를 이미 검사해 뒀으면 바로 몬스터 추측을 시작합니다.
 - 화면 아래 **'AnimRef 에 결과 보내기'**(고른 메시/애니메이션) 또는 **'맞는 게 없음'** 을 누르면 `result.json`(query.json 옆)을 쓰고 AnimRef 의 `POST /v1/result` 로 알립니다. AnimRef 가 꺼져 있으면 `result.json` 만 남깁니다.
 
-※ query.json / result.json 의 항목 이름, AnimRef 접속 정보 파일 위치, 토큰 헤더 이름은 연동규격서 8절을 받기 전의 **가정**입니다. `core/animlink.py` 의 `parse_query` / `build_result` / `SPEC_*` 상수에 모여 있어 규격에 맞게 한 곳만 고치면 됩니다.
+※ query.json / result.json 의 항목 이름, AnimRef 접속 정보 파일 위치, 토큰 헤더 이름은 연동규격서 8절을 받기 전의 **가정**입니다. `core/animlink.py` 의 `parse_query` / `build_result` 와 맨 위 상수(`ANIMREF_FILE`, `TOKEN_HEADERS`)에 모여 있어 규격에 맞게 한 곳만 고치면 됩니다.
 
 ## 3ds Max Biped 로 바로 내보내기
 

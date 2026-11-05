@@ -7,7 +7,7 @@
   3) 유저가 확정하거나 '맞는 게 없음'을 누르면 result.json 을 쓰고 AnimRef 의 POST /v1/result 로 알린다.
      AnimRef 가 꺼져 있으면 result.json 만 남긴다.
 
-※ 연동규격 문서(8절)를 받기 전의 가정은 아래 SPEC_* 상수와 parse_query / build_result 두 함수에 모아 두었다.
+※ 연동규격 문서(8절)를 받기 전의 가정은 맨 위 상수(ANIMREF_FILE, TOKEN_HEADERS)와 parse_query / build_result 두 함수에 모아 두었다.
 """
 from __future__ import annotations
 
