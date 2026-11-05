@@ -96,4 +96,12 @@ def ANIMREF_OK():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # 표준입력을 읽는 감시 스레드가 남아 있으면 Windows 에서 파이썬이 종료되지 않고 멈추므로 바로 끝낸다
+        try:
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(0)

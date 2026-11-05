@@ -172,7 +172,11 @@ def run(py, fn, params, s, log=noop, progress=noop, cancel=None):
                 progress(float(m.get("f", 0.0)), m.get("m", ""))
             elif t in ("done", "error"):
                 final = m
-        p.wait()
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:  # 결과를 받은 뒤에도 끝나지 않으면 정리한다 (결과는 이미 받았다)
+            p.kill()
+            p.wait()
     finally:
         done.set()
         try:
