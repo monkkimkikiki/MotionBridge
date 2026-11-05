@@ -190,7 +190,7 @@ def test_undo_shortcuts_meshmode():
         assert table["실행 취소"] == "Ctrl+Z" and "Ctrl+Y" in table["다시 실행"] and "Ctrl+Shift+Z" in table["다시 실행"]
         for need in ("Ctrl+O", "Ctrl+S", "Ctrl+E", "Space", "F", "B", "Ctrl+Q"):
             assert need in keys, need
-        assert [table["메시: " + n] for n in ("표시 안 함", "점", "와이어", "반투명", "솔리드", "머티리얼")] == ["0", "1", "2", "3", "4", "5"]
+        assert [table["메시: " + n] for n in ("표시 안 함", "점", "와이어", "반투명", "솔리드", "머티리얼 (재질별 색/텍스처)")] == ["0", "1", "2", "3", "4", "5"]
         # 모든 메뉴 동작이 실제 메서드로 연결되어 있다
         for key, (qa, sc, action, text) in mw._actions.items():
             assert hasattr(mw, action.partition(":")[0]), (key, action)
