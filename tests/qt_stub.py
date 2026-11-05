@@ -8,7 +8,7 @@ import types
 
 SIGNAL_NAMES = {
     "valueChanged", "currentIndexChanged", "toggled", "clicked", "timeout", "itemClicked", "triggered", "textChanged",
-    "stateChanged", "finished", "started", "returnPressed", "itemDoubleClicked",
+    "stateChanged", "finished", "started", "returnPressed", "itemDoubleClicked", "itemSelectionChanged",
 }
 
 
@@ -336,6 +336,81 @@ class QListWidget(QWidget):
 
     def selectItems(self, idx):
         self._sel = [self._items[i] for i in idx]
+
+
+class QTreeWidgetItem:
+    def __init__(self, texts=None):
+        self._t = list(texts or [""])
+        self._d = {}
+        self._ch = []
+        self.expanded = False
+        self.tip = ""
+
+    def setData(self, c, role, v):
+        self._d[(c, role)] = v
+
+    def data(self, c, role):
+        return self._d.get((c, role))
+
+    def setToolTip(self, c, t):
+        self.tip = t
+
+    def addChild(self, ch):
+        self._ch.append(ch)
+
+    def childCount(self):
+        return len(self._ch)
+
+    def child(self, i):
+        return self._ch[i]
+
+    def text(self, c=0):
+        return self._t[c]
+
+    def setExpanded(self, v):
+        self.expanded = bool(v)
+
+
+class QTreeWidget(QWidget):
+    def __init__(self, *a):
+        super().__init__()
+        self._top = []
+        self._sel = []
+
+    def clear(self):
+        self._top = []
+        self._sel = []
+
+    def addTopLevelItem(self, it):
+        self._top.append(it)
+
+    def topLevelItemCount(self):
+        return len(self._top)
+
+    def topLevelItem(self, i):
+        return self._top[i]
+
+    def _walk(self, its):
+        for it in its:
+            yield it
+            yield from self._walk(it._ch)
+
+    def expandAll(self):
+        for it in self._walk(self._top):
+            it.expanded = True
+
+    def collapseAll(self):
+        for it in self._walk(self._top):
+            it.expanded = False
+
+    def selectedItems(self):
+        return list(self._sel)
+
+    def selectAll(self):
+        self._sel = list(self._top)
+
+    def select_where(self, fn):
+        self._sel = [it for it in self._walk(self._top) if fn(it)]
 
 
 class QThread(QObject):

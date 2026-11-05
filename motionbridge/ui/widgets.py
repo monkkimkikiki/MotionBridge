@@ -4,7 +4,9 @@ from __future__ import annotations
 import traceback
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QSlider, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QDoubleSpinBox, QHBoxLayout, QSlider, QTreeWidget, QTreeWidgetItem, QWidget
+
+from ..core.pathtree import Node, build_tree
 
 
 class Worker(QThread):
@@ -95,3 +97,71 @@ class NumField(QWidget):
         self.spin.setValue(v)
         self.spin.blockSignals(False)
         self.changed.emit(float(self.spin.value()))
+
+
+class PathTree(QTreeWidget):
+    """경로 목록을 폴더 트리로 보여준다. 폴더는 화살표로 접고 펼치며, 폴더를 고르면 안의 파일 전부가 선택된 것으로 친다."""
+
+    ROLE = Qt.ItemDataRole.UserRole
+    AUTO_EXPAND_MAX = 40  # 이 개수 이하면 처음부터 모두 펼친다
+
+    def __init__(self, parent=None, strip_ext: bool = False):
+        super().__init__(parent)
+        self.strip_ext = strip_ext
+        self._paths = []
+        self.setHeaderHidden(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setUniformRowHeights(True)
+
+    # -- 채우기
+    def set_paths(self, paths) -> None:
+        self.clear()
+        self._paths = list(dict.fromkeys(paths))
+        for n in build_tree(self._paths, strip_ext=self.strip_ext):
+            self.addTopLevelItem(self._make(n))
+        if len(self._paths) <= self.AUTO_EXPAND_MAX:
+            self.expandAll()
+        else:
+            for i in range(self.topLevelItemCount()):
+                self.topLevelItem(i).setExpanded(True)  # 최상위 폴더만 연다
+
+    def _make(self, n: Node) -> QTreeWidgetItem:
+        if n.is_leaf:
+            it = QTreeWidgetItem([n.name])
+            it.setData(0, self.ROLE, n.path)
+            it.setToolTip(0, n.path)
+            return it
+        it = QTreeWidgetItem(["%s  (%d)" % (n.name, n.count)])
+        for c in n.children:
+            it.addChild(self._make(c))
+        return it
+
+    # -- 읽기
+    def count(self) -> int:
+        return len(self._paths)
+
+    def all_paths(self):
+        return list(self._paths)
+
+    @staticmethod
+    def _leaves(it):
+        p = it.data(0, PathTree.ROLE)
+        if p is not None:
+            return [p]
+        out = []
+        for i in range(it.childCount()):
+            out += PathTree._leaves(it.child(i))
+        return out
+
+    def selected_paths(self):
+        """선택된 파일 + 선택된 폴더 아래의 모든 파일 (중복 없이, 목록 순서대로)."""
+        got = set()
+        for it in self.selectedItems():
+            got.update(self._leaves(it))
+        return [p for p in self._paths if p in got]
+
+    def first_path(self):
+        return self._paths[0] if self._paths else None
+
+    def set_all_expanded(self, v: bool) -> None:
+        self.expandAll() if v else self.collapseAll()

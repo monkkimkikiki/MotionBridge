@@ -25,7 +25,7 @@ from ..core.pipeline import ExportOptions, Project
 from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
 from .viewer_math import ViewData
-from .widgets import NumField, Worker
+from .widgets import NumField, PathTree, Worker
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -365,15 +365,21 @@ class MainWindow(QMainWindow):
         b.clicked.connect(self._search_anims)
         h.addWidget(b)
         v.addLayout(h)
-        self.ex_list = QListWidget()
-        self.ex_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.ex_list.setMinimumHeight(180)
+        self.ex_list = PathTree(strip_ext=True)  # 폴더 구조대로 접고 펼치는 트리
+        self.ex_list.setMinimumHeight(220)
+        self.ex_list.itemSelectionChanged.connect(self._update_ex_count)
         v.addWidget(self.ex_list)
         self.ex_count = QLabel("")
         v.addWidget(self.ex_count)
         h = QHBoxLayout()
         b = QPushButton("전체 선택")
         b.clicked.connect(lambda: self.ex_list.selectAll())
+        h.addWidget(b)
+        b = QPushButton("모두 펼치기")
+        b.clicked.connect(lambda: self.ex_list.set_all_expanded(True))
+        h.addWidget(b)
+        b = QPushButton("모두 접기")
+        b.clicked.connect(lambda: self.ex_list.set_all_expanded(False))
         h.addWidget(b)
         h.addStretch(1)
         v.addLayout(h)
@@ -393,9 +399,9 @@ class MainWindow(QMainWindow):
 
         g = QGroupBox("4) 추출된 파일 열기")
         v = QVBoxLayout(g)
-        self.ex_files = QListWidget()
-        self.ex_files.setMinimumHeight(110)
-        self.ex_files.itemDoubleClicked.connect(lambda it: self._open_extracted())
+        self.ex_files = PathTree()
+        self.ex_files.setMinimumHeight(130)
+        self.ex_files.itemDoubleClicked.connect(lambda it, c=0: it.childCount() == 0 and self._open_extracted())
         v.addWidget(self.ex_files)
         b = QPushButton("선택한 파일을 소스 모션으로 열기")
         b.clicked.connect(self._open_extracted)
@@ -511,14 +517,17 @@ class MainWindow(QMainWindow):
         self.run_async(job, self._after_search, "에셋 검색 중")
 
     def _after_search(self, paths) -> None:
-        self.ex_list.clear()
-        for p in paths:
-            self.ex_list.addItem(QListWidgetItem(p))
+        self.ex_list.set_paths(paths)
         logs = getattr(self, "_ex_logs", [])
-        self.ex_count.setText("%d개" % len(paths) + ("" if paths else " — UE 버전, mappings(.usmap), 검색식을 확인해 보세요.\n도우미 로그: " + " / ".join(logs[-4:])))
+        self.ex_count.setText("%d개" % len(paths) + (" — 폴더 왼쪽 화살표로 열고 닫기, 폴더를 고르면 안의 파일 전부 추출" if paths else " — UE 버전, mappings(.usmap), 검색식을 확인해 보세요.\n도우미 로그: " + " / ".join(logs[-4:])))
+
+    def _update_ex_count(self) -> None:
+        n, sel = self.ex_list.count(), len(self.ex_list.selected_paths())
+        if n:
+            self.ex_count.setText("%d개 중 %d개 선택" % (n, sel) if sel else "%d개 — 폴더 왼쪽 화살표로 열고 닫기, 폴더를 고르면 안의 파일 전부 추출" % n)
 
     def _extract_selected(self) -> None:
-        paths = [it.text() for it in self.ex_list.selectedItems()]
+        paths = self.ex_list.selected_paths()
         if not paths:
             QMessageBox.warning(self, "추출", "추출할 항목을 목록에서 고르세요.")
             return
@@ -545,9 +554,7 @@ class MainWindow(QMainWindow):
         self.run_async(job, self._after_extract, "추출 중")
 
     def _after_extract(self, files) -> None:
-        self.ex_files.clear()
-        for f in files:
-            self.ex_files.addItem(QListWidgetItem(f))
+        self.ex_files.set_paths(files)
         self.statusBar().showMessage("추출 완료: %d개" % len(files))
         if len(files) == 1:
             if files[0].lower().endswith(".psa"):
@@ -556,16 +563,14 @@ class MainWindow(QMainWindow):
                 self._open_path_as_target(files[0])
 
     def _open_extracted(self) -> None:
-        sel = self.ex_files.selectedItems()
-        if not sel and self.ex_files.count():
-            sel = [self.ex_files.item(0)]
+        sel = self.ex_files.selected_paths() or ([self.ex_files.first_path()] if self.ex_files.count() else [])
         if sel:
-            self._open_path(sel[0].text())
+            self._open_path(sel[0])
 
     def _open_extracted_as_target(self) -> None:
-        sel = [it.text() for it in self.ex_files.selectedItems() if it.text().lower().endswith(".glb")]
+        sel = [p for p in self.ex_files.selected_paths() if p.lower().endswith(".glb")]
         if not sel:
-            sel = [self.ex_files.item(i).text() for i in range(self.ex_files.count()) if self.ex_files.item(i).text().lower().endswith(".glb")][:1]
+            sel = [p for p in self.ex_files.all_paths() if p.lower().endswith(".glb")][:1]
         if not sel:
             QMessageBox.warning(self, "열기", "열 수 있는 GLB 가 없습니다. 종류를 '메시 (GLB)'로 추출하세요.")
             return

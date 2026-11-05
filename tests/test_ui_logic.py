@@ -316,11 +316,24 @@ def test_extract_tab():
         mw.ex_filter.setText("(?i)AS_")
         mw._search_anims()
         assert mw.ex_list.count() == 2 and mw.ex_count.text().startswith("2개")
+        # 트리: 폴더 노드(개수 표시) 아래에 파일이 있고, 폴더를 고르면 안의 파일 전부가 선택된 것으로 센다
+        top = mw.ex_list.topLevelItem(0)
+        assert top.childCount() >= 1 and "(2)" in top.text(0), top.text(0)
+        assert mw.ex_list.selected_paths() == []
+        mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is None and "(2)" in it.text(0))
+        assert mw.ex_list.selected_paths() == mw.ex_list.all_paths() and len(mw.ex_list.all_paths()) == 2
+        mw._update_ex_count()
+        assert "2개 중 2개 선택" in mw.ex_count.text()
+        mw.ex_list.set_all_expanded(False)
+        assert not mw.ex_list.topLevelItem(0).expanded
+        mw.ex_list.set_all_expanded(True)
+        assert mw.ex_list.topLevelItem(0).expanded
+        mw.ex_list._sel = []
         QMessageBox.calls.clear()
         mw._extract_selected()  # 선택 없음
         assert QMessageBox.calls and "고르세요" in QMessageBox.calls[-1][2]
         mw.ex_out.setText(os.path.join(d, "ex"))
-        mw.ex_list.selectItems([0, 1])
+        mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
         mw._extract_selected()
         assert mw.ex_files.count() == 2 and sorted(os.listdir(os.path.join(d, "ex"))) == ["AS_Run.psa", "AS_Walk.psa"]
         # 추출 결과를 소스 모션으로
