@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import QAbstractItemView, QDoubleSpinBox, QHBoxLayout, QSlider, QTreeWidget, QTreeWidgetItem, QWidget
 
 from ..core.pathtree import Node, build_tree
+from ..core import filekind
 
 
 class Worker(QThread):
@@ -105,9 +106,10 @@ class PathTree(QTreeWidget):
     ROLE = Qt.ItemDataRole.UserRole
     AUTO_EXPAND_MAX = 40  # 이 개수 이하면 처음부터 모두 펼친다
 
-    def __init__(self, parent=None, strip_ext: bool = False):
+    def __init__(self, parent=None, strip_ext: bool = False, tag_kinds: bool = False):
         super().__init__(parent)
         self.strip_ext = strip_ext
+        self.tag_kinds = tag_kinds  # True 면 파일 종류 이름표([모델링 · 리깅 포함] 등)와 폴더 설명을 붙인다
         self._paths = []
         self.setHeaderHidden(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -125,13 +127,32 @@ class PathTree(QTreeWidget):
             for i in range(self.topLevelItemCount()):
                 self.topLevelItem(i).setExpanded(True)  # 최상위 폴더만 연다
 
+    KIND_COLORS = {"model": "#2e9e6a", "anim": "#3a7bd5"}
+
     def _make(self, n: Node) -> QTreeWidgetItem:
         if n.is_leaf:
-            it = QTreeWidgetItem([n.name])
+            text, tip = n.name, n.path
+            kind = None
+            if self.tag_kinds:
+                tag, kind, desc = filekind.describe(n.path)
+                text, tip = "%s  %s" % (tag, n.name), "%s\n%s" % (desc, n.path)
+            it = QTreeWidgetItem([text])
             it.setData(0, self.ROLE, n.path)
-            it.setToolTip(0, n.path)
+            it.setToolTip(0, tip)
+            col = self.KIND_COLORS.get(kind or "")
+            if col:
+                try:
+                    from PySide6.QtGui import QColor
+                    it.setForeground(0, QColor(col))
+                except Exception:  # noqa: BLE001
+                    pass
             return it
-        it = QTreeWidgetItem(["%s  (%d)" % (n.name, n.count)])
+        label = n.name
+        if self.tag_kinds:
+            h = filekind.folder_hint(n.name)
+            if h:
+                label = "%s  — %s" % (n.name, h)
+        it = QTreeWidgetItem(["%s  (%d)" % (label, n.count)])
         for c in n.children:
             it.addChild(self._make(c))
         return it

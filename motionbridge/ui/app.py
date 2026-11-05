@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
         self.ex_dir_label.setToolTip("클릭하면 탐색기에서 이 폴더가 열립니다")
         self.ex_dir_label.linkActivated.connect(lambda *_a: self._open_out_folder())
         v.addWidget(self.ex_dir_label)
-        self.ex_files = PathTree()
+        self.ex_files = PathTree(tag_kinds=True)  # [모델링 · 리깅 포함] / [애니메이션] 같은 이름표를 붙인다
         self.ex_files.setMinimumHeight(130)
         self.ex_files.itemDoubleClicked.connect(self._ex_files_double_clicked)
         v.addWidget(self.ex_files)
@@ -569,7 +569,7 @@ class MainWindow(QMainWindow):
             for i, f in enumerate(sel):
                 w.progress.emit(i, len(sel), os.path.basename(f))
                 try:
-                    made += meshconv.convert_mesh(f, out, fmts, variants, preset, self.pr.blender, self._ex_skips.append)
+                    made += meshconv.convert_mesh(f, extractor.models_dir(out), fmts, variants, preset, self.pr.blender, self._ex_skips.append)
                 except (meshconv.MeshConvError, bridge.BlenderError) as e:
                     self._ex_skips.append(str(e))
             return made
@@ -728,7 +728,7 @@ class MainWindow(QMainWindow):
                     w.progress.emit(n[0] - 1, len(paths), os.path.basename(e.get("path", "")))
             if kind == "mesh":
                 return extractor.export_meshes(*a, paths, out, fmts, variants, preset, self.pr.blender, tex, keep_raw, ev, self._ex_skips.append)
-            return extractor.export_assets(*a, paths, out, ev, kind="anim")
+            return extractor.export_assets(*a, paths, extractor.anim_dir(out), ev, kind="anim")
 
         self.run_async(job, self._after_extract, "추출 중")
 

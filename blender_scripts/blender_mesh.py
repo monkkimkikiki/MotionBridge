@@ -45,13 +45,19 @@ def build_from_npz(path):
     if len(me.polygons) == len(fmat):
         me.polygons.foreach_set("material_index", [int(min(x, max(len(mats) - 1, 0))) for x in fmat])
     uv = me.uv_layers.new(name="UVMap")
-    li = 0
-    for t in tris:
-        for w in t:
-            uv.data[li].uv = (float(wuv[w][0]), 1.0 - float(wuv[w][1]))
-            li += 1
+    loop_w = tris.reshape(-1)  # 루프(삼각형 모서리) 순서대로 웨지 번호
+    luv = np.asarray(wuv, dtype=np.float32)[loop_w].copy()
+    luv[:, 1] = 1.0 - luv[:, 1]
+    uv.data.foreach_set("uv", luv.reshape(-1))
     me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
     me.update()
+    if "wedge_normal" in d.files:
+        try:
+            if hasattr(me, "use_auto_smooth"):
+                me.use_auto_smooth = True  # Blender 4.0 이하
+            me.normals_split_custom_set([tuple(map(float, n)) for n in d["wedge_normal"][loop_w]])
+        except Exception as e:  # noqa: BLE001
+            print("MB_WARN 법선을 적용하지 못했습니다: %s" % e)
     ob = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(ob)
 
@@ -91,11 +97,18 @@ def build_from_npz(path):
         # 가중치 -> 버텍스 그룹
         groups = [ob.vertex_groups.new(name=n) for n in names]
         w = d["weights"]
+        order = np.argsort(w[:, 2], kind="stable")
+        bs = w[order, 2].astype(np.int64)
+        starts = np.searchsorted(bs, np.arange(len(names) + 1))
         for b in range(len(names)):
-            sel = w[w[:, 2] == b]
-            for val in sorted(set(sel[:, 0].round(5).tolist())):
-                idx = [int(x) for x in sel[sel[:, 0].round(5) == val][:, 1]]
-                groups[b].add(idx, float(val), "REPLACE")
+            seg = w[order[starts[b]:starts[b + 1]]]
+            if len(seg) == 0:
+                continue
+            vals, inv = np.unique(seg[:, 0].round(4), return_inverse=True)  # 같은 가중치끼리 묶어서 한 번에 넣는다
+            o2 = np.argsort(inv, kind="stable")
+            parts = np.split(seg[o2, 1].astype(np.int64), np.cumsum(np.bincount(inv))[:-1])
+            for val, idx in zip(vals, parts):
+                groups[b].add([int(x) for x in idx], float(val), "REPLACE")
         mod = ob.modifiers.new("Armature", "ARMATURE")
         mod.object = ao
         ob.parent = ao

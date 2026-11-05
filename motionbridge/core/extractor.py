@@ -142,16 +142,27 @@ def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
     return files
 
 
+def anim_dir(out_dir: str) -> str:
+    """애니메이션(PSA)은 출력 폴더 아래 Animations 에 모은다 (처음 보는 사람도 구분되게)."""
+    return os.path.join(out_dir, "Animations")
+
+
+def models_dir(out_dir: str) -> str:
+    """모델링(메시) 결과는 Models 에, 원본(PSKX/GLB)은 Models/_raw 에 둔다."""
+    return os.path.join(out_dir, "Models")
+
+
 def export_meshes(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str,
                   formats: List[str], variants: List[str], preset: str = "max", blender: Optional[str] = None, textures: bool = False,
                   keep_raw: bool = True, on_event=None, on_log: Optional[Callable[[str], None]] = None) -> List[str]:
     """메시를 뽑아서 바로 쓸 수 있는 형식으로 바꾼다.
 
-    1) 도우미로 원본을 out_dir/_raw 에 뽑는다 (기본 PSKX, textures=True 면 머티리얼/텍스처가 든 GLB).
-    2) formats(fbx/obj/glb) x variants(rigged/static) 로 변환해 out_dir 에 놓는다.
+    1) 도우미로 원본을 out_dir/Models/_raw 에 뽑는다 (기본 PSKX, textures=True 면 머티리얼/텍스처가 든 GLB).
+    2) formats(fbx/obj/glb) x variants(rigged/static) 로 변환해 out_dir/Models 에 놓는다.
     formats 가 비어 있으면 원본만 돌려준다. keep_raw=False 면 변환이 성공한 뒤 원본을 지운다.
     """
     log = on_log or (lambda m: None)
+    out_dir = models_dir(out_dir)
     raw_dir = os.path.join(out_dir, "_raw")
     raw = export_assets(helper, game, ue, aes, usmap, paths, raw_dir, on_event, kind="mesh",
                         mesh_format="glb" if textures else "psk", textures=textures)

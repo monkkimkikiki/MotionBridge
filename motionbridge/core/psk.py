@@ -5,8 +5,8 @@ CUE4Parse 가 스켈레탈 메시를 ActorX 로 내보내면 이 형식이 된�
   PNTS0000 점(float3)      VTXW0000/VTXW3200 웨지(점 번호, UV, 재질)   FACE0000/FACE3200 삼각형(웨지 3개, 재질)
   MATT0000 재질 이름       REFSKELT 본(이름, 부모, 회전, 위치)          RAWWEIGHTS 가중치(값, 점, 본)
 
-좌표: 언리얼은 왼손 좌표계(Z-up, 앞 +X). Blender/FBX 로 보낼 때는 Y 를 뒤집어 오른손계로 만들고, 캐릭터가 -Y 를 보게 돌린다
-(`to_blender`). 본 회전의 저장 방식(켤레 여부)은 파일마다 달라 보여서, 본 위치가 자기 정점 근처에 오는 쪽을 자동으로 고른다.
+좌표: CUE4Parse 의 ActorX 는 이미 오른손 Z-up, 캐릭터가 -Y 를 본다. `to_blender` 는 cm -> m 만 바꾼다.
+점 번호는 정점이 65536개를 넘으면 32비트로 저장되므로 항상 32비트로 읽는다. 본 회전의 저장 방식(켤레 여부)은 파일마다 달라 보여서, 본 위치가 자기 정점 근처에 오는 쪽을 자동으로 고른다.
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ class PskMesh:
     bone_quat: np.ndarray = field(default_factory=lambda: np.zeros((0, 4)))  # (B,4) x,y,z,w (파일에 저장된 그대로)
     bone_pos: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))  # (B,3) 부모 기준 위치
     weights: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))  # (N,3): 가중치, 점 번호, 본 번호
+    wedge_normal: Optional[np.ndarray] = None  # (W,3) 있으면 (VTXNORMS)
 
     @property
     def has_skeleton(self) -> bool:
@@ -72,10 +73,9 @@ def read_psk(path: str) -> PskMesh:
 
     wid = "VTXW3200" if "VTXW3200" in chunks else "VTXW0000"
     raw, size, count = need(wid)
-    if wid == "VTXW3200":
-        wdt = np.dtype([("p", "<u4"), ("u", "<f4"), ("v", "<f4"), ("m", "u1"), ("r", "u1"), ("pad2", "<u2")])
-    else:
-        wdt = np.dtype([("p", "<u2"), ("pad", "<u2"), ("u", "<f4"), ("v", "<f4"), ("m", "u1"), ("r", "u1"), ("pad2", "<u2")])
+    # 점 번호는 항상 32비트로 읽는다. 정점이 65536개를 넘으면 VTXW0000 이라는 이름 그대로 32비트로 저장되고,
+    # 16비트판은 뒤의 2바이트가 0 이라 32비트로 읽어도 같은 값이다. (16비트로 읽으면 큰 메시가 뒤죽박죽이 된다)
+    wdt = np.dtype([("p", "<u4"), ("u", "<f4"), ("v", "<f4"), ("m", "u1"), ("r", "u1"), ("pad2", "<u2")])
     if wdt.itemsize != size:
         raise PskError("웨지 크기가 예상(%d)과 다릅니다: %d" % (wdt.itemsize, size))
     w = np.frombuffer(raw, wdt)
@@ -104,6 +104,11 @@ def read_psk(path: str) -> PskMesh:
         mats.append("material_%d" % len(mats))
 
     mesh = PskMesh(os.path.splitext(os.path.basename(path))[0], points, wedge_point, wedge_uv, faces, face_mat, mats)
+
+    if "VTXNORMS" in chunks:
+        raw, size, count = chunks["VTXNORMS"]
+        if size == 12 and count == len(wedge_point):
+            mesh.wedge_normal = np.frombuffer(raw, "<f4").reshape(count, 3).astype(np.float64)
 
     if "REFSKELT" in chunks:
         raw, size, count = chunks["REFSKELT"]
@@ -205,8 +210,9 @@ def solve_skeleton(mesh: PskMesh) -> Tuple[np.ndarray, np.ndarray, str]:
     return best[1], best[2], best[3]
 
 
-# 언리얼(왼손 Z-up, 앞 +X, 오른쪽 +Y) -> 오른손 Z-up, 앞 -Y (Blender 규약). p' = (-y, -x, z), 단위 cm -> m
-_T = np.array([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+# CUE4Parse 가 쓴 ActorX 는 이미 오른손 Z-up 이고 캐릭터가 -Y 를 본다(실제 Mortal Shell 2 메시로 확인: 왼손이 +X, 발끝이 -Y 쪽).
+# 그래서 Blender 규약(오른손 Z-up, 앞 -Y)과 같아 축 변환이 필요 없고 단위(cm -> m)만 바꾼다.
+_T = np.eye(3)
 SCALE = 0.01
 
 
@@ -221,8 +227,14 @@ def to_blender(mesh: PskMesh, keep_bones: bool = True) -> Dict[str, np.ndarray]:
     nrm = np.cross(b - a, c - a)
     ctr = (a + b + c) / 3.0 - verts.mean(0)
     flipped = False
-    if len(tri) and float(np.sum(np.einsum("ij,ij->i", nrm, ctr))) < 0:
-        tri = wf  # 반대로 뒤집는 편이 바깥쪽이었다
+    if len(tri) and mesh.wedge_normal is not None:
+        # 파일에 든 법선이 있으면 그것과 삼각형 방향이 맞는 쪽을 고른다 (가장 믿을 만함)
+        nl = nrm / (np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12)
+        vn = (mesh.wedge_normal @ _T.T)[tri].mean(1)
+        if float(np.sum(np.einsum("ij,ij->i", nl, vn) > 0)) < len(tri) / 2.0:
+            tri, flipped = wf, True
+    elif len(tri) and float(np.sum(np.einsum("ij,ij->i", nrm, ctr))) < 0:
+        tri = wf  # 법선이 없으면 '메시 중심에서 바깥쪽'을 향하는 쪽을 고른다
         flipped = True
     out: Dict[str, np.ndarray] = {
         "verts": verts.astype(np.float32),
@@ -234,6 +246,11 @@ def to_blender(mesh: PskMesh, keep_bones: bool = True) -> Dict[str, np.ndarray]:
         "name": np.array(mesh.name),
         "flipped": np.array(flipped),
     }
+    if mesh.wedge_normal is not None:
+        nn = mesh.wedge_normal @ _T.T
+        ln = np.linalg.norm(nn, axis=1, keepdims=True)
+        nn = np.where(ln > 1e-6, nn / np.maximum(ln, 1e-12), np.array([0.0, 0.0, 1.0]))
+        out["wedge_normal"] = nn.astype(np.float32)
     if keep_bones and mesh.has_skeleton:
         rot, pos, _how = solve_skeleton(mesh)
         B = len(mesh.bone_names)
@@ -270,11 +287,15 @@ def write_obj(mesh: PskMesh, path: str) -> str:
             f.write("v %.6f %.6f %.6f\n" % tuple(v))
         for w in mesh.wedge_uv:
             f.write("vt %.6f %.6f\n" % (w[0], 1.0 - w[1]))
+        has_n = "wedge_normal" in p
+        if has_n:
+            for n_ in p["wedge_normal"]:
+                f.write("vn %.5f %.5f %.5f\n" % tuple(n_))
         wp = mesh.wedge_point
         last = -1
         for t, m in zip(tris, mesh.face_mat):
             if m != last:
                 f.write("usemtl %s\n" % mesh.materials[int(m)])
                 last = m
-            f.write("f " + " ".join("%d/%d" % (wp[w] + 1, w + 1) for w in t) + "\n")
+            f.write("f " + " ".join(("%d/%d/%d" % (wp[w] + 1, w + 1, w + 1)) if has_n else ("%d/%d" % (wp[w] + 1, w + 1)) for w in t) + "\n")
     return path

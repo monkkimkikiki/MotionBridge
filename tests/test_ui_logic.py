@@ -335,7 +335,7 @@ def test_extract_tab():
         mw.ex_out.setText(os.path.join(d, "ex"))
         mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
         mw._extract_selected()
-        assert mw.ex_files.count() == 2 and sorted(os.listdir(os.path.join(d, "ex"))) == ["AS_Run.psa", "AS_Walk.psa"]
+        assert mw.ex_files.count() == 2 and sorted(os.listdir(os.path.join(d, "ex", "Animations"))) == ["AS_Run.psa", "AS_Walk.psa"]
         # 추출하면 바로 화면에 바뀐 모션이 열린다 (여러 개면 첫 번째)
         assert mw.pr.src is not None and mw.pr.src.path.endswith(os.path.basename(mw.ex_files.first_path())), mw.pr.src and mw.pr.src.path
         before = mw.pr.src.path
@@ -378,7 +378,8 @@ def test_extract_tab():
 
         def fake_em(helper, root, ue_, aes_, usmap_, paths, out, fmts, variants, preset, blender, tex, keep_raw, ev, log):
             calls.append((paths, out, fmts, variants, preset, tex, keep_raw))
-            return [os.path.join(out, "SK_Hero_static.fbx"), os.path.join(out, "SK_Hero_static.obj"), os.path.join(out, "_raw", "SK_Hero.pskx")]
+            m = os.path.join(out, "Models")
+            return [os.path.join(m, "SK_Hero_static.fbx"), os.path.join(m, "SK_Hero_static.obj"), os.path.join(m, "_raw", "SK_Hero.pskx")]
 
         def fake_cm(src, out, fmts, variants, preset, blender, log):
             calls.append(("convert", src, out, fmts, variants, preset))
@@ -402,6 +403,15 @@ def test_extract_tab():
             assert calls[-1][0] == ["Game/Content/Chars/SK_Hero.uasset"] and calls[-1][1] == outd
             assert calls[-1][2:] == (["fbx", "obj"], ["static"], "maya", False, True), calls[-1]
             assert mw.ex_files.count() == 3
+            # 목록에 파일 종류 이름표가 붙는다
+            def texts(it):
+                out = [it.text(0)]
+                for i in range(it.childCount()):
+                    out += texts(it.child(i))
+                return out
+            alltxt = [x for i in range(mw.ex_files.topLevelItemCount()) for x in texts(mw.ex_files.topLevelItem(i))]
+            assert any(x.startswith("[모델링 · 리깅 없음]") and x.endswith("SK_Hero_static.fbx") for x in alltxt), alltxt
+            assert any(x.startswith("[모델링 원본]") for x in alltxt) and any("모델링 데이터" in x for x in alltxt), alltxt
             # 폴더 열기: 출력 폴더 링크 / 선택 항목 위치 / 폴더 줄 더블클릭
             mw._open_out_folder()
             assert opened[-1] == outd and os.path.isdir(outd)

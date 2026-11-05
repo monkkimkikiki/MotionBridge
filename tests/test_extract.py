@@ -110,13 +110,13 @@ def test_flow_unencrypted():
         out = os.path.join(d, "out")
         rc, txt = run_cli(["extract", "export", "--game", game, "--helper", fb, "--out", out, "--filter", "(?i)anim", "--usmap", __file__])
         assert rc == 0 and "건너뜀" in txt and "PSA 2개" in txt, txt
-        psas = sorted(f for f in os.listdir(out) if f.endswith(".psa"))
+        psas = sorted(f for f in os.listdir(os.path.join(out, "Animations")) if f.endswith(".psa"))
         assert psas == ["AS_Run.psa", "AS_Walk.psa"], psas
         calls = [json.loads(x) for x in open(os.path.join(d, "log.txt")).read().splitlines()]
         assert "--aes" not in calls[0], "암호화 안 된 게임에 키가 넘어가면 안 됨"
         # 추출한 PSA 를 소스 모션으로
         pr = Project()
-        m = pr.load_source(os.path.join(out, "AS_Walk.psa"))
+        m = pr.load_source(os.path.join(out, "Animations", "AS_Walk.psa"))
         assert m.animations[0].n_frames == 24 and len(pr.src_slots) > 15
     print("extract flow (unencrypted) OK")
 
@@ -188,7 +188,7 @@ def test_export_meshes():
         real = meshconv.convert_mesh
 
         def fake_convert(src, o, formats, variants, preset, blender=None, on_log=None):
-            seen.append((os.path.relpath(src, out), o, list(formats), list(variants), preset))
+            seen.append((os.path.relpath(src, os.path.join(out, "Models")), o, list(formats), list(variants), preset))
             if "bad" in src:
                 raise meshconv.MeshConvError("변환 실패")
             r = [os.path.join(o, os.path.basename(src).split(".")[0] + "_static.fbx")]
@@ -199,14 +199,15 @@ def test_export_meshes():
         try:
             files = extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, ["fbx"], ["static"], "max")
             a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
-            assert a[a.index("--format") + 1] == "psk" and "--textures" not in a and a[a.index("--out") + 1] == os.path.join(out, "_raw"), a
-            assert seen[-1] == (os.path.join("_raw", "SK_Hero.psk"), out, ["fbx"], ["static"], "max"), seen
-            assert sorted(os.path.relpath(f, out) for f in files) == sorted(["SK_Hero_static.fbx", os.path.join("_raw", "SK_Hero.psk")])
+            assert a[a.index("--format") + 1] == "psk" and "--textures" not in a and a[a.index("--out") + 1] == os.path.join(out, "Models", "_raw"), a
+            mo = os.path.join(out, "Models")
+            assert seen[-1] == (os.path.join("_raw", "SK_Hero.psk"), mo, ["fbx"], ["static"], "max"), seen
+            assert sorted(os.path.relpath(f, mo) for f in files) == sorted(["SK_Hero_static.fbx", os.path.join("_raw", "SK_Hero.psk")])
             # 텍스처가 필요하면 GLB 로 뽑아서 변환
             extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, ["fbx"], ["static"], "max", textures=True, keep_raw=False)
             a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
             assert a[a.index("--format") + 1] == "glb" and "--textures" in a
-            assert not os.path.exists(os.path.join(out, "_raw", "SK_Hero.glb")), "keep_raw=False 인데 원본이 남음"
+            assert not os.path.exists(os.path.join(out, "Models", "_raw", "SK_Hero.glb")), "keep_raw=False 인데 원본이 남음"
             # 변환이 전부 실패하면 이유와 함께 오류
             try:
                 extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_bad.uasset"], out, ["fbx"], ["static"], "max")

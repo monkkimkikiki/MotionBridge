@@ -116,6 +116,20 @@ def test_read_variants():
     print("psk read OK")
 
 
+def test_wedge_index_32bit():
+    """정점이 65536개를 넘는 메시: VTXW0000 이어도 점 번호가 32비트 (실제 SK_Dwarf 에서 발견된 문제)."""
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "big.pskx")
+        wed = [struct.pack("<I2f2Bh", 70000, 0.0, 0.0, 0, 0, 0), struct.pack("<I2f2Bh", 3, 0.5, 0.5, 0, 0, 0)]
+        open(f, "wb").write(b"".join([chunk("ACTRHEAD", 0, []), chunk("PNTS0000", 12, [struct.pack("<3f", 0, 0, 0)] * 3),
+                                      chunk("VTXW0000", 16, wed), chunk("FACE3200", 18, [struct.pack("<3IBBI", 0, 1, 1, 0, 0, 1)]),
+                                      chunk("VTXNORMS", 12, [struct.pack("<3f", 0, 0, 1)] * 2)]))
+        m = psk.read_psk(f)
+        assert list(m.wedge_point) == [70000, 3], m.wedge_point
+        assert m.wedge_normal is not None and m.wedge_normal.shape == (2, 3)
+    print("psk 32-bit wedge OK")
+
+
 def test_winding_and_axes():
     with tempfile.TemporaryDirectory() as d:
         for rev in (False, True):
@@ -124,8 +138,8 @@ def test_winding_and_axes():
             m = psk.read_psk(f)
             p = psk.to_blender(m)
             assert outward_ok(p), "삼각형이 안쪽을 향함 (reverse=%s)" % rev
-            # 단위/축: 언리얼 (0,50,0) cm -> (-50, 0, 0)*0.01 m  (p' = (-y,-x,z))
-            assert np.allclose(p["verts"][8:16].mean(0), [-0.5, 0.0, 0.0], atol=1e-4), p["verts"][8:16].mean(0)
+            # 단위: (0,50,0) cm -> (0, 0.5, 0) m (축은 그대로)
+            assert np.allclose(p["verts"][8:16].mean(0), [0.0, 0.5, 0.0], atol=1e-4), p["verts"][8:16].mean(0)
     print("psk winding/axes OK")
 
 
@@ -139,7 +153,7 @@ def test_skeleton_convention():
             assert np.allclose(pos, [[0, 0, 0], [0, 50, 0], [0, 100, 0]], atol=1e-3), (conj, pos, how)
             p = psk.to_blender(m)
             w = p["bone_world"]
-            assert np.allclose(w[2][:3, 3], [-1.0, 0.0, 0.0], atol=1e-4)  # (0,100,0)cm -> (-1,0,0)m
+            assert np.allclose(w[2][:3, 3], [0.0, 1.0, 0.0], atol=1e-4)  # (0,100,0)cm -> (0,1,0)m
             assert list(p["bone_parent"]) == [-1, 0, 1] and p["weights"].shape == (24, 3)
             assert np.allclose(np.linalg.det(w[1][:3, :3]), 1.0, atol=1e-4), "본 회전이 오른손계가 아님"
         assert "bone_names" not in psk.to_blender(m, keep_bones=False)
@@ -260,6 +274,7 @@ def test_osopen():
 
 if __name__ == "__main__":
     test_read_variants()
+    test_wedge_index_32bit()
     test_winding_and_axes()
     test_skeleton_convention()
     test_obj()
