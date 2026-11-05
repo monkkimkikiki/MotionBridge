@@ -14,7 +14,7 @@ a = Analysis(
     binaries=[],
     # Blender 안에서 실행되는 스크립트는 파일로 함께 배포해야 한다 (bridge.scripts_dir 이 찾는 위치)
     datas=[(os.path.join(ROOT, "blender_scripts"), "blender_scripts")] + _helper_datas,
-    hiddenimports=[],
+    hiddenimports=["imageio_ffmpeg"],  # frames.find_ffmpeg 가 try 안에서 불러오므로 명시
     excludes=["tkinter", "matplotlib", "PIL", "scipy", "pandas", "IPython", "pytest",
               "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore", "PySide6.QtQuick", "PySide6.QtQml"],
     noarchive=False,

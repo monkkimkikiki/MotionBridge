@@ -25,6 +25,7 @@ from ..core.pipeline import ExportOptions, Project
 from .help_text import EXTRACT_HELP
 from .viewer import MESH_MODES, Viewport
 from .viewer_math import QUALITY_NAMES, ViewData
+from .vidfind_tab import VidFindTab
 from .widgets import NumField, PathTree, Worker
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
@@ -108,6 +109,7 @@ class MainWindow(QMainWindow):
             ("탭", "tab2", "2. 리타깃 조절", "goto_tab:2", ("Ctrl+3",)),
             ("탭", "tab3", "3. 품질 검수", "goto_tab:3", ("Ctrl+4",)),
             ("탭", "tab4", "4. 내보내기", "goto_tab:4", ("Ctrl+5",)),
+            ("탭", "tab5", "영상으로 찾기", "goto_tab:5", ("Ctrl+6",)),
             ("도움말", "shortcuts", "단축키 목록", "show_shortcuts", ("F1",)),
             ("도움말", "about", "정보", "show_about", ()),
         ]
@@ -230,6 +232,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_retarget(), "2. 리타깃 조절")
         self.tabs.addTab(self._tab_quality(), "3. 품질 검수")
         self.tabs.addTab(self._tab_export(), "4. 내보내기")
+        self.vidfind = VidFindTab(self)
+        self.tabs.addTab(self.vidfind, "영상으로 찾기")
         self.tabs.addTab(self._tab_help(), "추출 도우미")
         self.tabs.setMinimumWidth(470)
         split.addWidget(self.tabs)

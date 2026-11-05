@@ -318,6 +318,7 @@ class QListWidget(QWidget):
     def __init__(self, *a):
         super().__init__()
         self._items = []
+        self._sel = []
 
     def addItem(self, it):
         self._items.append(it)
@@ -336,7 +337,10 @@ class QListWidget(QWidget):
         self._sel = list(self._items)
 
     def selectedItems(self):
-        return list(getattr(self, "_sel", []))
+        return list(self._sel)
+
+    def clearSelection(self):
+        self._sel = []
 
     def selectItems(self, idx):
         self._sel = [self._items[i] for i in idx]
@@ -458,6 +462,11 @@ class QFileDialog(Stub):
     open_ret = ("", "")
     save_ret = ("", "")
     dir_ret = ""
+    open_names_ret = ([], "")
+
+    @staticmethod
+    def getOpenFileNames(*a, **k):
+        return QFileDialog.open_names_ret
 
     @staticmethod
     def getOpenFileName(*a, **k):

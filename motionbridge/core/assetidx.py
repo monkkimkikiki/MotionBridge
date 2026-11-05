@@ -1,0 +1,352 @@
+"""게임 에셋 이름 색인과 후보 고르기 ('영상으로 찾기'의 두뇌). Qt/네트워크에 의존하지 않는다.
+
+  * 메시(SK_*) 경로 -> 캐릭터 이름/단어, 애니메이션(A_*) 경로 -> 단어
+  * 이미지 인식이 낸 추측("Dwarf Warrior" 같은 글)을 메시 후보로 순위 매기기
+  * 확정한 메시에 맞는 애니메이션 후보를 (이름 일치 + AnimRef 분류 + 타수) 점수로 정렬
+  * 검수자가 고친 결과를 기억해 다음 추측의 첫 후보로 올리기
+"""
+from __future__ import annotations
+
+import difflib
+import json
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+# 이름에서 의미 없는 단어 (접두사/폴더 잡음)
+STOP = {
+    "sk", "skm", "sm", "skel", "skeletal", "skeleton", "mesh", "meshes", "a", "am", "as", "anim", "anims", "animation",
+    "animations", "montage", "game", "content", "characters", "character", "enemies", "enemy", "monsters", "monster",
+    "models", "model", "assets", "asset", "art", "base", "lod", "physics", "physicsasset", "the", "of", "and", "mb",
+}
+DESC_STOP = {"with", "has", "wearing", "holding", "large", "small", "big", "tall", "very", "looks", "like", "some"}
+UNKNOWN_WORDS = {"", "unknown", "none", "n/a", "unidentified", "?", "모름", "알수없음"}
+
+# AnimRef 분류(한글) -> 내부 범주
+LABEL_CATEGORY = {
+    "타격": "attack", "공격": "attack", "강공격": "attack", "약공격": "attack", "콤보": "attack", "연속기": "attack",
+    "피격": "hit", "스킬": "skill", "연출": "cinematic", "회피": "evade", "사망": "death",
+    "걷기": "walk", "달리기": "run", "대기": "idle",
+}
+CATEGORY_KEYWORDS = {
+    "attack": ["attack", "atk", "slash", "swing", "strike", "combo", "melee", "slam", "swipe", "punch", "kick", "bite",
+               "claw", "stab", "thrust", "chop", "bash", "lunge", "light", "heavy"],
+    "hit": ["hitreact", "hit_react", "hurt", "damage", "stagger", "flinch", "knockback", "reaction", "react", "impact", "stun"],
+    "skill": ["skill", "ability", "cast", "special", "spell", "ultimate", "charge", "summon", "buff", "magic", "roar", "scream"],
+    "cinematic": ["cinematic", "intro", "spawn", "entrance", "execution", "finisher", "cutscene", "emerge", "taunt", "victory", "phase"],
+    "evade": ["dodge", "evade", "roll", "dash", "sidestep", "backstep", "retreat", "leap", "jump"],
+    "death": ["death", "die", "dead", "dying", "kill"],
+    "walk": ["walk"],
+    "run": ["run", "sprint"],
+    "idle": ["idle", "stand", "breath"],
+}
+CATEGORY_NAME = {"attack": "공격", "hit": "피격", "skill": "스킬", "cinematic": "연출", "evade": "회피", "death": "사망",
+                 "walk": "걷기", "run": "달리기", "idle": "대기"}
+KNOWN_LABELS = tuple(LABEL_CATEGORY)
+
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_PREFIX = re.compile(r"^(sk[a-z]{0,3}|sm)_", re.I)
+_SUFFIX = re.compile(r"(_lod\d+|_mesh|_skeletalmesh|_physicsasset)$", re.I)
+
+
+def tokens(text: str, drop_stop: bool = True) -> List[str]:
+    """영문/숫자 덩어리를 소문자 단어로. CamelCase, 밑줄, 폴더 구분을 모두 나눈다."""
+    out: List[str] = []
+    for chunk in re.split(r"[^A-Za-z0-9]+", text or ""):
+        if not chunk:
+            continue
+        for w in _CAMEL.sub(" ", chunk).split():
+            w = w.lower()
+            if len(w) < 2 or w.isdigit():
+                continue
+            if drop_stop and w in STOP:
+                continue
+            out.append(w)
+    return out
+
+
+def norm_key(text: str) -> str:
+    return " ".join(sorted(set(tokens(text))))
+
+
+def mesh_name(path: str) -> str:
+    """'/Game/.../SK_Dwarf_Warrior.SK_Dwarf_Warrior' -> 'Dwarf_Warrior'."""
+    base = os.path.basename(path.replace("\\", "/")).split(".")[0]
+    base = _PREFIX.sub("", base)
+    base = _SUFFIX.sub("", base)
+    return base or os.path.basename(path)
+
+
+def _dir_parts(path: str) -> List[str]:
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return [p.lower() for p in parts[:-1]]
+
+
+@dataclass
+class MeshEntry:
+    path: str
+    name: str
+    toks: frozenset
+    dirs: List[str] = field(default_factory=list)
+
+    @staticmethod
+    def of(path: str) -> "MeshEntry":
+        n = mesh_name(path)
+        return MeshEntry(path, n, frozenset(tokens(n)), _dir_parts(path))
+
+
+@dataclass
+class MeshCandidate:
+    path: str
+    name: str
+    score: float
+    why: str = ""
+
+
+@dataclass
+class AnimCandidate:
+    path: str
+    score: float
+    why: str = ""
+
+
+def hit_count(name: str) -> Optional[int]:
+    """'..._3Hit_Combo', 'Attack_Combo2' 같은 이름에서 타수를 읽는다."""
+    low = os.path.basename(name).lower()
+    for pat in (r"(\d)\s*_?hit", r"hit_?(\d)", r"combo_?(\d)", r"(\d)_?combo", r"attack_?(\d)\b", r"atk_?(\d)\b"):
+        m = re.search(pat, low)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def category_scores(name: str) -> Dict[str, float]:
+    low = os.path.basename(name.replace("\\", "/")).split(".")[0].lower()
+    ts = set(tokens(os.path.basename(name), drop_stop=False))
+    res: Dict[str, float] = {}
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        s = 0.0
+        for k in kws:
+            if k in ts:
+                s = max(s, 1.0)
+            elif k in low:
+                s = max(s, 0.6)
+        if s:
+            res[cat] = s
+    if re.search(r"\dhit|hit\d", low) and "attack" not in res:
+        res["attack"] = 0.7  # 3Hit_Combo 처럼 hit 이 타수를 뜻하는 경우
+    return res
+
+
+class MatchMemory:
+    """검수자가 확정한 '추측 -> 메시' 짝을 파일에 기억한다. 같은 추측이 다시 나오면 맨 앞 후보로 올린다."""
+
+    def __init__(self, path: Optional[str] = None) -> None:
+        self.path = path
+        self.data: Dict[str, Dict[str, int]] = {}
+        if path and os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                if isinstance(d, dict):
+                    self.data = {k: {a: int(c) for a, c in v.items()} for k, v in d.items() if isinstance(v, dict)}
+            except (OSError, ValueError, AttributeError):
+                self.data = {}
+
+    @staticmethod
+    def key(guess: str, description: str = "") -> str:
+        g = (guess or "").strip().lower()
+        if g in UNKNOWN_WORDS:
+            words = sorted({w for w in tokens(description) if w not in DESC_STOP})[:6]
+            return "desc:" + " ".join(words) if words else ""
+        return norm_key(guess)
+
+    def best(self, guess: str, description: str = "") -> Optional[str]:
+        k = self.key(guess, description)
+        d = self.data.get(k)
+        if not d:
+            return None
+        return max(d.items(), key=lambda kv: kv[1])[0]
+
+    def remember(self, guess: str, description: str, asset: str) -> None:
+        k = self.key(guess, description)
+        if not k or not asset:
+            return
+        d = self.data.setdefault(k, {})
+        d[asset] = d.get(asset, 0) + 1
+
+    def save(self) -> None:
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=1)
+        except OSError:
+            pass
+
+
+class AssetIndex:
+    def __init__(self, mesh_paths: Iterable[str] = (), anim_paths: Iterable[str] = ()) -> None:
+        self.meshes: List[MeshEntry] = [MeshEntry.of(p) for p in dict.fromkeys(mesh_paths)]
+        self.anims: List[str] = list(dict.fromkeys(anim_paths))
+        self._anim_toks: Dict[str, frozenset] = {}
+        self._by_path: Dict[str, MeshEntry] = {m.path: m for m in self.meshes}
+
+    def __bool__(self) -> bool:
+        return bool(self.meshes)
+
+    def mesh(self, path: str) -> Optional[MeshEntry]:
+        return self._by_path.get(path)
+
+    def names(self, limit: Optional[int] = None) -> List[str]:
+        """이미지 인식에 알려줄 캐릭터 이름 목록 (중복 제거, 정렬)."""
+        seen: Dict[str, str] = {}
+        for m in self.meshes:
+            seen.setdefault(m.name.lower(), m.name)
+        out = sorted(seen.values(), key=str.lower)
+        return out[:limit] if limit else out
+
+    # ------------------------------------------------------------------ 메시 후보
+    def rank_meshes(self, guess: str, description: str = "", limit: int = 8, memory: Optional[MatchMemory] = None) -> List[MeshCandidate]:
+        g = (guess or "").strip()
+        unknown = g.lower() in UNKNOWN_WORDS
+        gtoks = set() if unknown else set(tokens(g))
+        dtoks = set(tokens(description))
+        gnorm = "" if unknown else re.sub(r"[^a-z0-9]", "", g.lower())
+        remembered = memory.best(guess, description) if memory else None
+        scored: List[MeshCandidate] = []
+        for m in self.meshes:
+            s, why = 0.0, ""
+            if m.path == remembered:
+                s, why = 2.0, "이전에 확정한 매칭"
+            else:
+                mnorm = re.sub(r"[^a-z0-9]", "", m.name.lower())
+                if gnorm and mnorm == gnorm:
+                    s, why = 1.0, "이름 일치"
+                else:
+                    cov_g = (len(m.toks & gtoks) / len(m.toks)) if (m.toks and gtoks) else 0.0
+                    cov_d = (len(m.toks & dtoks) / len(m.toks)) if (m.toks and dtoks) else 0.0
+                    sim = difflib.SequenceMatcher(None, gnorm, mnorm).ratio() if gnorm else 0.0
+                    s = 0.55 * cov_g + 0.35 * sim + 0.10 * cov_d
+                    if gtoks and (m.toks & gtoks):
+                        why = "이름 단어 일치: " + ", ".join(sorted(m.toks & gtoks))
+                    elif sim >= 0.6:
+                        why = "이름이 비슷함"
+                    elif m.toks & dtoks:
+                        why = "설명에 나온 단어: " + ", ".join(sorted(m.toks & dtoks))
+            if s > 0.08:
+                scored.append(MeshCandidate(m.path, m.name, round(s, 3), why))
+        scored.sort(key=lambda c: (-c.score, len(c.name), c.name.lower()))
+        return scored[:limit]
+
+    def search(self, text: str, limit: int = 30) -> List[MeshCandidate]:
+        """검수 표에서 직접 검색: 부분 문자열 우선."""
+        q = (text or "").strip().lower()
+        if not q:
+            return [MeshCandidate(m.path, m.name, 0.0) for m in self.meshes[:limit]]
+        hits = [MeshCandidate(m.path, m.name, 1.0 if m.name.lower() == q else 0.5) for m in self.meshes if q in m.path.lower()]
+        hits.sort(key=lambda c: (-c.score, len(c.name), c.name.lower()))
+        return hits[:limit]
+
+    # ------------------------------------------------------------------ 애니메이션 후보
+    def _toks_of_anim(self, p: str) -> frozenset:
+        t = self._anim_toks.get(p)
+        if t is None:
+            t = frozenset(tokens(p.replace("\\", "/")))
+            self._anim_toks[p] = t
+        return t
+
+    def char_score(self, mesh: MeshEntry, anim_path: str) -> Tuple[float, str]:
+        at = self._toks_of_anim(anim_path)
+        overlap = (len(mesh.toks & at) / len(mesh.toks)) if mesh.toks else 0.0
+        ad = _dir_parts(anim_path)
+        common = 0
+        for a, b in zip(mesh.dirs, ad):
+            if a != b:
+                break
+            common += 1
+        dirscore = common / max(len(mesh.dirs), 1)
+        s = 0.7 * overlap + 0.3 * dirscore
+        why = ""
+        if overlap:
+            why = "이름 일치 %d%%" % round(overlap * 100)
+        elif dirscore >= 0.5:
+            why = "같은 폴더 계열"
+        return s, why
+
+    def rank_anims(self, mesh_path: str, label: Optional[str] = None, hits: Optional[int] = None, limit: int = 80,
+                   min_char: float = 0.3) -> List[AnimCandidate]:
+        m = self.mesh(mesh_path) or MeshEntry.of(mesh_path)
+        cat = LABEL_CATEGORY.get((label or "").strip()) if label else None
+        out: List[AnimCandidate] = []
+        for a in self.anims:
+            cs, why = self.char_score(m, a)
+            if cs < min_char:
+                continue
+            reasons = [why] if why else []
+            total = cs
+            if cat:
+                scores = category_scores(a)
+                top = max(scores.values()) if scores else 0.0
+                own = max(scores, key=scores.get) if scores else None
+                ls = 0.0
+                if scores.get(cat, 0.0) >= top and top > 0:  # 동점이면 둘 다 본래 분류로 본다
+                    ls = 1.0
+                elif cat in scores:
+                    ls = 0.5
+                elif scores:
+                    ls = -0.2  # 다른 분류로 읽히는 이름
+                total = 0.55 * cs + 0.45 * max(ls, 0.0) + (0.1 * ls if ls < 0 else 0.0)
+                if ls >= 1.0:
+                    reasons.append("분류 '%s' 단어 포함" % CATEGORY_NAME[cat])
+                elif ls > 0:
+                    reasons.append("분류 '%s' 단어가 섞임" % CATEGORY_NAME[cat])
+                elif ls < 0:
+                    reasons.append("다른 분류('%s')로 보임" % CATEGORY_NAME[own])
+            if hits:
+                n = hit_count(a)
+                if n is not None:
+                    if n == hits:
+                        total += 0.2
+                        reasons.append("%d타 일치" % hits)
+                    else:
+                        total -= 0.08
+            out.append(AnimCandidate(a, round(total, 3), ", ".join(reasons)))
+        out.sort(key=lambda c: (-c.score, c.path.lower()))
+        return out[:limit]
+
+    # ------------------------------------------------------------------ 캐시
+    def to_json(self, game_key: str = "") -> dict:
+        return {"game": game_key, "saved": int(time.time()), "meshes": [m.path for m in self.meshes], "anims": self.anims}
+
+    @staticmethod
+    def from_json(d: dict) -> "AssetIndex":
+        return AssetIndex(d.get("meshes") or [], d.get("anims") or [])
+
+
+def save_index(path: str, idx: AssetIndex, game_key: str = "") -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(idx.to_json(game_key), f, ensure_ascii=False)
+
+
+def load_index(path: str, game_key: str = "") -> Optional[AssetIndex]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict) or (game_key and d.get("game") != game_key):
+        return None
+    idx = AssetIndex.from_json(d)
+    return idx if idx.meshes or idx.anims else None
+
+
+def filter_paths(paths: Sequence[str], pattern: str) -> List[str]:
+    if not pattern.strip():
+        return list(paths)
+    rx = re.compile(pattern)
+    return [p for p in paths if rx.search(p)]
