@@ -5,7 +5,8 @@ MotionBridge 설치 파일에는 이 라이브러리들이 들어 있지 않다(
 JSON 한 줄씩 표준출력으로 받는다. 이 프로그램 쪽은 가볍게 유지된다.
 
 프로토콜 (worker.py):
-  요청  : 표준입력 첫 줄에 JSON {"fn", "params", "settings"}.  이후 "cancel\n" 한 줄이면 취소.
+  요청  : 표준입력 첫 줄에 JSON {"fn", "params", "settings", "cancel_file"} 후 입력을 닫는다.
+          취소는 cancel_file 이 생기면 취소 (표준입력을 계속 읽는 스레드를 두면 Windows 에서 numpy 같은 DLL 을 불러올 때 멈춘다).
   응답  : 표준출력 JSON 줄  {"t":"log","m"} {"t":"progress","f","m"} {"t":"done","result"} {"t":"error","m","cancelled"}
 """
 import collections
@@ -14,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -133,17 +135,17 @@ def run(py, fn, params, s, log=noop, progress=noop, cancel=None):
 
     threading.Thread(target=drain, daemon=True).start()
     done = threading.Event()
+    cancel_file = os.path.join(tempfile.gettempdir(), "animref_cancel_%d_%d" % (os.getpid(), int(time.time() * 1000)))
 
     def watch():
-        sent = False
+        flagged = False
         t_cancel = 0.0
         while not done.wait(0.2):
             if cancel is not None and cancel.is_set():
-                if not sent:
-                    sent, t_cancel = True, time.time()
+                if not flagged:
+                    flagged, t_cancel = True, time.time()
                     try:
-                        p.stdin.write(b"cancel\n")
-                        p.stdin.flush()
+                        open(cancel_file, "w").close()   # 작업자가 이 파일을 보고 멈춘다
                     except OSError:
                         pass
                 elif time.time() - t_cancel > 25:  # 정리하지 않으면 강제 종료
@@ -152,9 +154,10 @@ def run(py, fn, params, s, log=noop, progress=noop, cancel=None):
 
     threading.Thread(target=watch, daemon=True).start()
     try:
-        req = json.dumps({"fn": fn, "params": params, "settings": s}, ensure_ascii=False) + "\n"
+        req = json.dumps({"fn": fn, "params": params, "settings": s, "cancel_file": cancel_file}, ensure_ascii=False) + "\n"
         p.stdin.write(req.encode("utf-8"))
         p.stdin.flush()
+        p.stdin.close()
     except OSError as e:
         done.set()
         raise RuntimeError("분석 프로세스를 시작하지 못했어요: %s" % e)
@@ -181,7 +184,7 @@ def run(py, fn, params, s, log=noop, progress=noop, cancel=None):
     finally:
         done.set()
         try:
-            p.stdin.close()
+            os.remove(cancel_file)
         except OSError:
             pass
     if final is None:

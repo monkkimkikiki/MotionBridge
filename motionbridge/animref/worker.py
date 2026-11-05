@@ -31,10 +31,18 @@ def main():
     fn, params, s = req["fn"], req.get("params") or {}, req.get("settings") or {}
     cancel = threading.Event()
 
+    try:
+        sys.stdin.close()   # 입력을 붙잡고 있는 스레드를 두지 않는다 (Windows 에서 numpy 등 DLL 을 불러올 때 멈춘다)
+    except Exception:  # noqa: BLE001
+        pass
+    cfile = req.get("cancel_file") or ""
+
     def watch():
-        for line in sys.stdin:
-            if line.strip() == "cancel":
+        while not cancel.is_set():
+            if cfile and os.path.exists(cfile):
                 cancel.set()
+                return
+            time.sleep(0.25)
 
     threading.Thread(target=watch, daemon=True).start()
 
