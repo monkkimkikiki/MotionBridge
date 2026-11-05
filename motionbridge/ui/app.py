@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, bridge, extractor, gamescan, meshconv, osopen
+from ..core import animlink, bridge, extractor, gamescan, layout, meshconv, osopen
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -363,6 +363,13 @@ class MainWindow(QMainWindow):
         b.clicked.connect(self._scan_game)
         h.addWidget(b)
         v.addLayout(h)
+        h = QHBoxLayout()
+        h.addWidget(QLabel("게임 이름"))
+        self.ex_gname = QLineEdit(self.cfg.get("game_name", ""))
+        self.ex_gname.setPlaceholderText("검사하면 자동으로 채워집니다 (예: Mortal Shell 2) — 추출 폴더 이름이 됩니다")
+        self.ex_gname.setToolTip("추출 결과는 '출력 폴더 / 게임 이름 / 캐릭터 이름 / Animations 또는 Models' 에 정리됩니다")
+        h.addWidget(self.ex_gname, 1)
+        v.addLayout(h)
         self.ex_summary = QLabel("게임 설치 폴더를 고르고 [검사]를 누르면 암호화 여부를 확인합니다.")
         self.ex_summary.setWordWrap(True)
         v.addWidget(self.ex_summary)
@@ -690,6 +697,10 @@ class MainWindow(QMainWindow):
         self.ex_aes.setPlaceholderText("이 게임은 AES 키가 필요합니다 (0x + 64자리 16진수)" if sc.encrypted else "필요 없음 (암호화되지 않은 게임)")
         if sc.found:
             self.cfg["game_dir"] = sc.root
+            auto = layout.detect_game_name(sc.root)
+            if not self.ex_gname.text().strip() or self.ex_gname.text().strip() == self.cfg.get("game_name_auto", ""):
+                self.ex_gname.setText(auto)  # 직접 고친 이름은 덮어쓰지 않는다
+            self.cfg["game_name_auto"] = auto
             bridge.save_config(self.cfg)
 
     def _extract_args(self):
@@ -717,6 +728,12 @@ class MainWindow(QMainWindow):
         if sc.is_unreal5 and not usmap:
             self.statusBar().showMessage("참고: 언리얼 5 게임은 보통 mappings(.usmap) 가 필요합니다.")
         return helper, sc.root, ue, aes, usmap
+
+    def make_layout(self, force_char: Optional[str] = None) -> "layout.Layout":
+        """추출 폴더 규칙: 출력 폴더 / 게임 이름 / 캐릭터 이름 / Animations 또는 Models."""
+        name = self.ex_gname.text().strip() or layout.detect_game_name(self.ex_game.text().strip())
+        self.cfg["game_name"] = name
+        return layout.Layout(self.ex_out.text().strip(), name, force_char=force_char)
 
     def _search_anims(self) -> None:
         a = self._extract_args()
@@ -758,6 +775,7 @@ class MainWindow(QMainWindow):
             return
 
         self._ex_skips = []
+        lay = self.make_layout()
         key = self.ex_kind.currentData() or "anim"
         kind = "anim" if key == "anim" else "mesh"
         fmts, variants, preset = self._mesh_settings() if kind == "mesh" else ([], [], "max")
@@ -783,8 +801,8 @@ class MainWindow(QMainWindow):
                     n[0] += 1
                     w.progress.emit(n[0] - 1, len(paths), os.path.basename(e.get("path", "")))
             if kind == "mesh":
-                return extractor.export_meshes(*a, paths, out, fmts, variants, preset, self.pr.blender, tex, keep_raw, ev, self._ex_skips.append)
-            return extractor.export_assets(*a, paths, extractor.anim_dir(out), ev, kind="anim")
+                return extractor.export_meshes(*a, paths, out, fmts, variants, preset, self.pr.blender, tex, keep_raw, ev, self._ex_skips.append, lay=lay)
+            return extractor.export_assets(*a, paths, out, ev, kind="anim", lay=lay)
 
         self.run_async(job, self._after_extract, "추출 중")
 

@@ -319,6 +319,12 @@ class QTableWidget(QWidget):
     def cellWidget(self, r, c):
         return self._widgets.get((r, c))
 
+    def currentRow(self):
+        return getattr(self, "_cur", -1)
+
+    def selectRow(self, r):
+        self._cur = r
+
 
 class QListWidget(QWidget):
     def __init__(self, *a):

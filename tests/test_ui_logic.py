@@ -335,7 +335,9 @@ def test_extract_tab():
         mw.ex_out.setText(os.path.join(d, "ex"))
         mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
         mw._extract_selected()
-        assert mw.ex_files.count() == 2 and sorted(os.listdir(os.path.join(d, "ex", "Animations"))) == ["AS_Run.psa", "AS_Walk.psa"]
+        assert mw.ex_files.count() == 2
+        got = sorted((os.path.relpath(r, os.path.join(d, "ex")), f) for r, _ds, fs in os.walk(os.path.join(d, "ex")) for f in fs)
+        assert [f for _r, f in got] == ["AS_Run.psa", "AS_Walk.psa"] and all(len(r.split(os.sep)) == 3 and r.endswith("Animations") for r, _f in got), got
         # 추출하면 바로 화면에 바뀐 모션이 열린다 (여러 개면 첫 번째)
         assert mw.pr.src is not None and mw.pr.src.path.endswith(os.path.basename(mw.ex_files.first_path())), mw.pr.src and mw.pr.src.path
         before = mw.pr.src.path
@@ -376,7 +378,7 @@ def test_extract_tab():
         real_em, real_cm, real_open, real_find = A.extractor.export_meshes, A.meshconv.convert_mesh, A.osopen.open_in_explorer, A.bridge.find_blender
         outd = os.path.join(d, "meshout")
 
-        def fake_em(helper, root, ue_, aes_, usmap_, paths, out, fmts, variants, preset, blender, tex, keep_raw, ev, log):
+        def fake_em(helper, root, ue_, aes_, usmap_, paths, out, fmts, variants, preset, blender, tex, keep_raw, ev, log, lay=None):
             calls.append((paths, out, fmts, variants, preset, tex, keep_raw))
             m = os.path.join(out, "Models")
             return [os.path.join(m, "SK_Hero_static.fbx"), os.path.join(m, "SK_Hero_static.obj"), os.path.join(m, "_raw", "SK_Hero.pskx")]

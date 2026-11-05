@@ -110,13 +110,20 @@ def test_flow_unencrypted():
         out = os.path.join(d, "out")
         rc, txt = run_cli(["extract", "export", "--game", game, "--helper", fb, "--out", out, "--filter", "(?i)anim", "--usmap", __file__])
         assert rc == 0 and "건너뜀" in txt and "PSA 2개" in txt, txt
-        psas = sorted(f for f in os.listdir(os.path.join(out, "Animations")) if f.endswith(".psa"))
-        assert psas == ["AS_Run.psa", "AS_Walk.psa"], psas
+        found = {}
+        for r, _ds, fs in os.walk(out):
+            for f in fs:
+                if f.endswith(".psa"):
+                    found[f] = os.path.relpath(r, out)
+        assert sorted(found) == ["AS_Run.psa", "AS_Walk.psa"], found
+        # 출력 폴더 / 게임 이름 / 캐릭터 / Animations — 3단계만
+        assert found["AS_Walk.psa"] == os.path.join("game", "Walk", "Animations"), found
+        assert not [x for x in os.listdir(os.path.join(out, "game")) if x.startswith(".mb_stage")], "임시 폴더가 남음"
         calls = [json.loads(x) for x in open(os.path.join(d, "log.txt")).read().splitlines()]
         assert "--aes" not in calls[0], "암호화 안 된 게임에 키가 넘어가면 안 됨"
         # 추출한 PSA 를 소스 모션으로
         pr = Project()
-        m = pr.load_source(os.path.join(out, "Animations", "AS_Walk.psa"))
+        m = pr.load_source(os.path.join(out, "game", "Walk", "Animations", "AS_Walk.psa"))
         assert m.animations[0].n_frames == 24 and len(pr.src_slots) > 15
     print("extract flow (unencrypted) OK")
 

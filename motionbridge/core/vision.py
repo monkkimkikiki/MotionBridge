@@ -189,7 +189,14 @@ class Provider:
     def vocab_limit(self) -> int:
         return VOCAB_LIMIT[self.key]
 
-    def ask(self, image_path: str, prompt: str) -> str:  # pragma: no cover - 하위 클래스가 구현
+    def ask(self, image_path: str, prompt: str) -> str:
+        return self._send(prompt, image_path)
+
+    def ask_text(self, prompt: str) -> str:
+        """그림 없이 글로만 묻는다 (게임 속 이름 -> 비슷한 리소스 이름 고르기 등)."""
+        return self._send(prompt, None)
+
+    def _send(self, prompt: str, image_path: Optional[str]) -> str:  # pragma: no cover - 하위 클래스가 구현
         raise NotImplementedError
 
     def analyze(self, image_path: str, vocab: Sequence[str], game_hint: str = "") -> List[Detection]:
@@ -236,10 +243,11 @@ class OllamaProvider(Provider):
                            "아래 [모델 받기] 버튼을 누르세요 (약 6GB, 한 번만 받으면 됩니다). 직접 받으려면 명령 창에서 'ollama pull %s'.%s") % (self.model, self.model, have), names
         return True, "Ollama 준비 완료 (%s)" % self.model, names
 
-    def ask(self, image_path: str, prompt: str) -> str:
-        _, b64 = _b64(image_path)
-        payload = {"model": self.model, "stream": False, "format": "json", "options": {"temperature": 0},
-                   "messages": [{"role": "user", "content": prompt, "images": [b64]}]}
+    def _send(self, prompt: str, image_path: Optional[str]) -> str:
+        msg0 = {"role": "user", "content": prompt}
+        if image_path:
+            msg0["images"] = [_b64(image_path)[1]]
+        payload = {"model": self.model, "stream": False, "format": "json", "options": {"temperature": 0}, "messages": [msg0]}
         try:
             d = self.post(self.host + "/api/chat", payload, {"Content-Type": "application/json"}, self.timeout)
         except VisionError as e:
@@ -265,14 +273,15 @@ class ClaudeProvider(Provider):
             return False, "API 키 형식이 이상합니다 (보통 sk- 로 시작).", []
         return True, "Claude 사용 준비 (%s) — 호출한 만큼 요금이 듭니다." % self.model, []
 
-    def ask(self, image_path: str, prompt: str) -> str:
+    def _send(self, prompt: str, image_path: Optional[str]) -> str:
         if not self.api_key:
             raise VisionError("Claude API 키가 없습니다.")
-        mt, b64 = _b64(image_path)
-        payload = {"model": self.model, "max_tokens": 1024,
-                   "messages": [{"role": "user", "content": [
-                       {"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}},
-                       {"type": "text", "text": prompt}]}]}
+        content: List[dict] = []
+        if image_path:
+            mt, b64 = _b64(image_path)
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}})
+        content.append({"type": "text", "text": prompt})
+        payload = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": content}]}
         headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         try:
             d = self.post(ANTHROPIC_URL, payload, headers, self.timeout)
@@ -294,6 +303,46 @@ def make_provider(kind: str, cfg: dict, post: Callable = _http) -> Provider:
         key = (cfg.get("vf_claude_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         return ClaudeProvider(key, cfg.get("vf_claude_model") or CLAUDE_MODELS[0], post)
     return OllamaProvider(cfg.get("vf_ollama_model") or OLLAMA_MODELS[0], cfg.get("vf_ollama_host") or DEFAULT_OLLAMA_HOST, post)
+
+
+# ---------------------------------------------------------------------- 게임 속 이름 -> 리소스 이름 (글만)
+def build_name_prompt(in_game_name: str, vocab: Sequence[str], description: str = "") -> str:
+    return ("A video game shows a character whose in-game display name is: \"%s\"%s\n"
+            "The game files name the same character differently (internal asset names). Below is the closed list of internal "
+            "asset names. Pick up to 5 names from the list that are most likely this character, best first. Internal names often use "
+            "synonyms or different wording (e.g. 'captive' may be 'prisoner' or 'convict'; 'nameless' may be 'unnamed' or 'faceless'). "
+            "Use ONLY names exactly as written in the list. If none is plausible, answer with an empty list.\n"
+            "Answer with JSON only: {\"matches\": [{\"name\": \"<name from list>\", \"confidence\": 0.0-1.0, \"reason\": \"<short>\"}]}\n"
+            "List: %s") % (in_game_name, (" (" + description + ")") if description else "", ", ".join(vocab))
+
+
+def suggest_from_vocab(provider: "Provider", in_game_name: str, vocab: Sequence[str], description: str = "") -> List[Tuple[str, float, str]]:
+    """AI 에게 이름 목록 안에서 고르게 한다. 목록에 없는 이름은 버린다 (지어내기 방지). [(이름, 확신, 이유)]"""
+    names = list(vocab)[: provider.vocab_limit()]
+    if not names or not (in_game_name or "").strip():
+        return []
+    text = provider.ask_text(build_name_prompt(in_game_name.strip(), names, description))
+    obj = _extract_json(text)
+    if isinstance(obj, dict):
+        obj = obj.get("matches") or obj.get("results") or []
+    if not isinstance(obj, list):
+        raise VisionError("이름 추천 결과를 해석하지 못했습니다: " + (text or "")[:200])
+    lower = {n.lower(): n for n in names}
+    out: List[Tuple[str, float, str]] = []
+    for it in obj:
+        if isinstance(it, str):
+            it = {"name": it}
+        if not isinstance(it, dict):
+            continue
+        n = lower.get(str(it.get("name") or "").strip().lower())
+        if not n or any(n == o[0] for o in out):
+            continue
+        try:
+            c = float(it.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            c = 0.5
+        out.append((n, max(0.0, min(1.0, c / 100.0 if c > 1.0 else c)), str(it.get("reason") or "")[:120]))
+    return out[:5]
 
 
 # ---------------------------------------------------------------------- 여러 장면 묶기

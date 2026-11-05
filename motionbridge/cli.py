@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import List, Optional
 
 from . import __version__
-from .core import bridge, extractor, gamescan, meshconv
+from .core import bridge, extractor, gamescan, layout, meshconv
 from .core.export import PRESETS
 from .core.loader import load_model
 from .core.mapping import SLOT_ORDER, auto_map, detect_frame, slot_label
@@ -143,15 +144,15 @@ def cmd_extract(args) -> int:
         _p("%d개" % len(paths))
         return 0
     _p("대상 %d개 내보내는 중…" % len(paths))
+    lay = layout.Layout(args.out, layout.detect_game_name(args.game))  # 출력 폴더 / 게임 이름 / 캐릭터 / Animations|Models
     if args.kind == "mesh" and args.to:
         variants = {"both": ["rigged", "static"], "rigged": ["rigged"], "static": ["static"]}[args.rig]
         files = extractor.export_meshes(helper, args.game, args.ue, args.aes, args.usmap, paths, args.out, args.to, variants,
-                                        args.target, args.blender, args.textures, True, on_ev, lambda m: _p("  ", m))
-        _p("완료: 메시 파일 %d개 -> %s" % (len(files), args.out))
+                                        args.target, args.blender, args.textures, True, on_ev, lambda m: _p("  ", m), lay=lay)
+        _p("완료: 메시 파일 %d개 -> %s" % (len(files), os.path.join(args.out, lay.game)))
         return 0
-    dest = extractor.anim_dir(args.out) if args.kind == "anim" else extractor.models_dir(args.out)
-    files = extractor.export_assets(helper, args.game, args.ue, args.aes, args.usmap, paths, dest, on_ev,
-                                    kind=args.kind, mesh_format=args.format, textures=args.textures)
+    files = extractor.export_assets(helper, args.game, args.ue, args.aes, args.usmap, paths, args.out, on_ev,
+                                    kind=args.kind, mesh_format=args.format, textures=args.textures, lay=lay)
     _p("완료: %s %d개 -> %s" % ("PSA" if args.kind == "anim" else args.format.upper(), len(files), args.out))
     return 0
 

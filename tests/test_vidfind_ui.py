@@ -139,12 +139,12 @@ def main():
         # 추출: 선택한 것만, 형식 설정은 0번 탭 것을 씀
         calls = []
 
-        def fake_em(helper, root, ue, aes, usmap, paths, out, fmts, variants, preset, blender, tex, keep_raw, ev, log):
-            calls.append(("mesh", list(paths), out, fmts, variants, preset))
+        def fake_em(helper, root, ue, aes, usmap, paths, out, fmts, variants, preset, blender, tex, keep_raw, ev, log, lay=None):
+            calls.append(("mesh", list(paths), lay.model_dest(paths[0]), fmts, variants, preset))
             return [os.path.join(out, "Models", "SK_Dwarf_static.fbx")]
 
         def fake_ea(helper, root, ue, aes, usmap, paths, out, on_event=None, kind="anim", **k):
-            calls.append(("anim", list(paths), out, kind))
+            calls.append(("anim", list(paths), k["lay"].anim_dest(paths[0]), kind))
             return [os.path.join(out, "A_Dwarf_Attack_3Hit_Combo_1.psa")]
 
         V.extractor.export_meshes, V.extractor.export_assets = fake_em, fake_ea
@@ -159,7 +159,9 @@ def main():
             vt.extract()
             check(len(calls) == 2, "메시+애니 둘 다 호출: %s" % calls)
             check(calls[0][0] == "mesh" and calls[0][1] == [MESHES[0]] and calls[0][5] == "maya", "선택한 메시와 대상 설정: %s" % (calls[0],))
-            check(calls[1][0] == "anim" and len(calls[1][1]) == 1 and calls[1][2].endswith("Animations"), "선택한 애니메이션: %s" % (calls[1],))
+            check(calls[1][0] == "anim" and len(calls[1][1]) == 1 and calls[1][2].endswith(os.path.join("Dwarf", "Animations")), "선택한 애니메이션: %s" % (calls[1],))
+            check(calls[0][2].endswith(os.path.join("Dwarf", "Models")) and calls[0][2].startswith(os.path.join(d, "out")), "메시도 게임/캐릭터/Models: %s" % (calls[0][2],))
+            check(len(os.path.relpath(calls[1][2], os.path.join(d, "out")).split(os.sep)) == 3, "출력 폴더 아래 3단계만: %s" % (calls[1][2],))
             check(mw.ex_files.count() == 2, "결과가 추출 탭 목록에 올라감: %d" % mw.ex_files.count())
             # 아무것도 안 고르면 안내
             vt.mesh_list.selectItems([])
@@ -171,6 +173,61 @@ def main():
         finally:
             A.bridge.find_blender = real_find
 
+
+        # ---------------- 게임 속 이름으로 찾기 (리소스 이름이 화면 이름과 다를 때)
+        import test_locres as TL
+        from motionbridge.core import gamenames
+        pris = "Sparta/Content/Characters/Enemies/Prisoner/Meshes/SK_Prisoner"
+        vt.index = assetidx.AssetIndex(MESHES + [pris], ANIMS)
+        vt.cfg["game_dir"] = "G:/game"
+        V.NAMES_CACHE = os.path.join(d, "names.json")
+        vt.rows = []
+        vt.table.setRowCount(0)
+        vt.add_blank_row()
+        vt.table.selectRow(0)
+        vt.ingame.setText("The Nameless Captive")
+        vt.ingame_ai.setChecked(False)
+        vt.find_by_ingame_name()
+        check(vt.rows[0].chosen() == pris, "비슷한 말(captive~prisoner)로 찾아 선택: %s" % vt.rows[0].chosen())
+        check(vt.rows[0].group.name == "The Nameless Captive", "빈 줄에 게임 속 이름이 들어감")
+        check("글자 사전" in vt.ingame_note.text(), "사전이 없다는 안내: %s" % vt.ingame_note.text())
+        # 글자 사전이 있으면 그쪽이 우선
+        book = gamenames.NameBook([("en", "E", "Enemy_Dwarf_Name", "The Nameless Captive")])
+        book.save(V.NAMES_CACHE, "G:/game")
+        vt.find_by_ingame_name()
+        check(vt.rows[0].chosen() == MESHES[0] and "게임 글자" in vt.rows[0].combo.currentText() + vt.rows[0].base[0].why, "글자 사전 결과가 1순위: %s" % vt.rows[0].chosen())
+        # AI 를 켜면 이름 목록 안에서만 고른다
+        ai = TL.FakeAI('{"matches":[{"name":"StoneGolem","confidence":0.9,"reason":"x"}]}')
+        vt.provider = lambda: ai
+        vt.ingame.setText("Rock Titan")
+        vt.ingame_ai.setChecked(True)
+        vt.find_by_ingame_name()
+        check(vt.rows[0].chosen() == MESHES[2] and ai.prompts, "AI 추천이 후보로: %s" % vt.rows[0].chosen())
+        QMessageBox.calls.clear()
+        vt.ingame.setText("")
+        vt.find_by_ingame_name()
+        check(QMessageBox.calls, "이름 없이 누르면 안내")
+        del vt.provider  # 시험용으로 바꾼 것을 되돌림
+        # 글자 사전 만들기: 도우미가 꺼낸 .locres 를 읽어 저장
+        os.remove(V.NAMES_CACHE)
+        V.LOCRES_DIR = os.path.join(d, "locres")
+        real_el = V.extractor.export_locres
+
+        def fake_el(helper, root, ue, aes, usmap, out, on_event=None):
+            os.makedirs(out, exist_ok=True)
+            f = os.path.join(out, "Game_en_Game.locres")
+            open(f, "wb").write(TL.write_locres(3, TL.DATA))
+            return [f]
+        V.extractor.export_locres = fake_el
+        try:
+            vt.build_name_book()
+            nb = vt.name_book()
+            check(nb is not None and len(nb) == 7 and "글자 사전 완성" in vt.ingame_note.text(), "글자 사전 저장: %s" % vt.ingame_note.text())
+            V.extractor.export_locres = lambda *a, **k: []
+            vt.build_name_book()
+            check("찾지 못했습니다" in vt.ingame_note.text(), "locres 가 없으면 안내: %s" % vt.ingame_note.text())
+        finally:
+            V.extractor.export_locres = real_el
 
         # ---------------- 모델이 없으면 긴 작업 전에 바로 안내 + [모델 받기]
         state = {"have": False, "pulled": 0}
@@ -229,9 +286,10 @@ def main():
         exported = []
 
         def fake_ea2(helper, root, ue, aes, usmap, paths, out, on_event=None, kind="anim", **k):
-            os.makedirs(out, exist_ok=True)
             res = []
             for pth, an in zip(paths, (an1, an2, an1)):
+                out = k["lay"].anim_dest(pth)
+                os.makedirs(out, exist_ok=True)
                 f = os.path.join(out, os.path.basename(pth) + ".psa")
                 write_psa(f, sk_, [an])
                 res.append(f)

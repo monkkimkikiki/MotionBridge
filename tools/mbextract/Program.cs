@@ -1,5 +1,6 @@
 // MotionBridge 추출 도우미 (CUE4Parse 기반).
 //   mbextract list   --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] [--filter REGEX] [--limit N]
+//   mbextract locres --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR   (게임 안 글자 사전 .locres 를 꺼냄)
 //   (공통) --kind anim|mesh  --format glb|psk (mesh)  --textures (mesh, 텍스처 포함)
 //   mbextract export --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR --paths-file FILE
 // 표준 출력: 한 줄에 JSON 하나 (type = asset | exported | skip | log | done | error)
@@ -78,6 +79,27 @@ try
             Emit(new { type = "asset", path = key });
             if (++n >= limit) break;
         }
+        Emit(new { type = "done", count = n });
+    }
+    else if (cmd == "locres")
+    {
+        // 게임 안에 표시되는 글자(몬스터 이름 등)가 들어 있는 .locres 원본 파일을 그대로 저장한다. 해석은 파이썬 쪽에서 한다.
+        var outDir = Opt("--out") ?? Fail2("--out 이 필요합니다");
+        Directory.CreateDirectory(outDir);
+        int n = 0;
+        foreach (var key in provider.Files.Keys.Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase)).OrderBy(k => k, StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (!provider.TrySaveAsset(key, out var data) || data is null || data.Length == 0) continue;
+                var dest = Path.Combine(outDir, key.Replace('/', '_').Replace('\\', '_'));
+                File.WriteAllBytes(dest, data);
+                Emit(new { type = "exported", path = key, file = dest });
+                n++;
+            }
+            catch (Exception e) { Emit(new { type = "skip", path = key, reason = e.GetType().Name + ": " + e.Message }); }
+        }
+        if (n == 0) Emit(new { type = "log", message = "이 게임에서 .locres(글자 사전)를 찾지 못했습니다" });
         Emit(new { type = "done", count = n });
     }
     else if (cmd == "export")

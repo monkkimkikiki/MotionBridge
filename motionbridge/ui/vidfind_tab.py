@@ -21,11 +21,13 @@ from PySide6.QtWidgets import (
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, vision
 from .widgets import fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
 MEMORY_FILE = os.path.join(bridge.CONFIG_DIR, "matches.json")
+NAMES_CACHE = os.path.join(bridge.CONFIG_DIR, "names.json")
+LOCRES_DIR = os.path.join(bridge.CONFIG_DIR, "locres")
 FRAME_DIR = os.path.join(bridge.CONFIG_DIR, "vf_frames")
 MESH_RX = re.compile(r"(?i)/sk[a-z]*_[^/]*$")
 ANIM_RX = re.compile(r"(?i)anim")
@@ -220,6 +222,28 @@ class VidFindTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setStretchLastSection(False)
         v.addWidget(self.table)
+        # 게임 속 이름으로 찾기: 리소스 이름이 화면에 보이는 이름과 다를 때
+        h = QHBoxLayout()
+        h.addWidget(QLabel("게임 속 이름"))
+        self.ingame = QLineEdit()
+        self.ingame.setPlaceholderText("예: The Nameless Captive / 이름 없는 포로 — 위 표에서 줄을 고른 뒤")
+        self.ingame.setToolTip("화면에 보이는 이름과 파일 이름이 다를 때, 게임 글자 사전·비슷한 말·AI 로 메시를 찾아 선택한 줄에 채웁니다")
+        self.ingame.returnPressed.connect(self.find_by_ingame_name)
+        h.addWidget(self.ingame, 1)
+        self.ingame_ai = QCheckBox("AI도 사용")
+        self.ingame_ai.setChecked(True)
+        h.addWidget(self.ingame_ai)
+        b = QPushButton("이 이름으로 찾기")
+        b.clicked.connect(lambda *_a: self.find_by_ingame_name())
+        h.addWidget(b)
+        b = QPushButton("글자 사전 만들기")
+        b.setToolTip("게임 파일의 .locres(번역 글자)를 읽어 '표시 이름 → 내부 이름표'를 만듭니다. 한 번만 하면 됩니다.")
+        b.clicked.connect(lambda *_a: self.build_name_book())
+        h.addWidget(b)
+        v.addLayout(h)
+        self.ingame_note = QLabel("")
+        self.ingame_note.setWordWrap(True)
+        v.addWidget(self.ingame_note)
         h = QHBoxLayout()
         b = QPushButton("몬스터 줄 직접 추가")
         b.setToolTip("AI가 놓친 몬스터를 직접 넣습니다. 줄의 검색 칸에서 메시를 찾으세요.")
@@ -569,6 +593,82 @@ class VidFindTab(QWidget):
         idx = self.index
         self._fill_combo(row.combo, idx.search(text) if idx else [])
 
+    # ================================================================== 게임 속 이름으로 찾기
+    def _load_index_cached(self) -> Optional[assetidx.AssetIndex]:
+        if self.index is None:
+            idx = assetidx.load_index(INDEX_CACHE, self.cfg.get("game_dir", ""))
+            if idx is not None:
+                self.index = idx
+        return self.index
+
+    def name_book(self) -> Optional[gamenames.NameBook]:
+        return gamenames.NameBook.load(NAMES_CACHE, self.cfg.get("game_dir", ""))
+
+    def build_name_book(self) -> None:
+        a = self.win._extract_args()
+        if a is None:
+            return
+
+        def job(w):
+            w.progress.emit(0, 1, "게임 파일에서 글자 사전(.locres) 꺼내는 중")
+            shutil.rmtree(LOCRES_DIR, ignore_errors=True)
+            files = extractor.export_locres(*a, LOCRES_DIR)
+            book = gamenames.build_book(files)
+            if len(book):
+                book.save(NAMES_CACHE, self.cfg.get("game_dir", "") or a[1])
+            return len(files), len(book)
+
+        def done(res):
+            nfiles, n = res
+            if n:
+                msg = "글자 사전 완성: 글자 %d개 (파일 %d개)" % (n, nfiles)
+            elif nfiles:
+                msg = "글자 사전 파일은 있지만 읽을 수 있는 글자가 없었습니다 (%d개 파일)." % nfiles
+            else:
+                msg = "이 게임에서 .locres 를 찾지 못했습니다. 비슷한 말 사전과 AI 로만 찾습니다."
+            self.ingame_note.setText(msg)
+            self.win.statusBar().showMessage(msg)
+
+        self.win.run_async(job, done, "글자 사전 만드는 중")
+
+    def find_by_ingame_name(self) -> None:
+        name = self.ingame.text().strip()
+        if not name:
+            QMessageBox.warning(self, "게임 속 이름", "게임 속 이름을 입력하세요 (예: The Nameless Captive).")
+            return
+        idx = self._load_index_cached()
+        if idx is None:
+            QMessageBox.warning(self, "게임 속 이름", "에셋 이름 목록이 아직 없습니다. 한 번 '몬스터 추측 시작'을 실행하세요.")
+            return
+        if not self.rows:
+            self.add_blank_row()
+        cur = self.table.currentRow()
+        row = self.rows[cur] if 0 <= cur < len(self.rows) else self.rows[-1]
+        book = self.name_book()
+        use_ai = bool(self.ingame_ai.isChecked())
+        prov = self.provider() if use_ai else None
+        desc = row.group.description or ""
+
+        def job(w):
+            w.progress.emit(0, 1, "이름으로 찾는 중")
+            return gamenames.find_meshes(name, idx, book, prov, desc)
+
+        def done(res):
+            cands, notes = res
+            if cands:
+                row.base = cands
+                row.sure = True
+                self._fill_combo(row.combo, cands, pick_first=True)
+                if row.search.text():
+                    row.search.setText("")
+                if not row.group.name or row.group.name.lower() in assetidx.UNKNOWN_WORDS:
+                    row.group.name = name  # 확정하면 '이 이름 → 이 메시'로 기억된다
+            ri = self.rows.index(row)
+            self.table.setItem(ri, 1, QTableWidgetItem("게임 속 이름: %s\n%s" % (name, ("후보 %d개 — 맨 위가 가장 유력" % len(cands)) if cands else "후보 없음")))
+            self.ingame_note.setText(" ".join(notes) if notes else "후보 %d개를 선택한 줄에 채웠습니다. 맞는지 확인하세요." % len(cands))
+
+        self.win.run_async(job, done, "게임 속 이름으로 찾는 중")
+
     def add_blank_row(self) -> None:
         if self.index is None:
             idx = assetidx.load_index(INDEX_CACHE, self.cfg.get("game_dir", ""))
@@ -640,6 +740,11 @@ class VidFindTab(QWidget):
             msg += " 이름이 맞는 애니메이션을 못 찾은 몬스터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
         self.anim_note.setText(msg)
 
+    def _single_char(self) -> Optional[str]:
+        """고른 메시가 한 캐릭터뿐이면 애니메이션도 그 캐릭터 폴더에 모은다 (애니 경로가 달라도)."""
+        names = {layout.character_of(it.data(Qt.ItemDataRole.UserRole)) for it in self.mesh_list.selectedItems()}
+        return names.pop() if len(names) == 1 else None
+
     # ================================================================== 뷰포트로 열기
     def _anim_double_clicked(self, item, *_a) -> None:
         self.open_in_viewport([item.data(Qt.ItemDataRole.UserRole)])
@@ -657,6 +762,7 @@ class VidFindTab(QWidget):
         out = win.ex_out.text().strip()
         if not out:
             return
+        lay = win.make_layout(self._single_char())
         bridge.save_config(self.cfg)
         win._ex_skips = []
 
@@ -666,7 +772,7 @@ class VidFindTab(QWidget):
                     win._ex_skips.append("%s — %s" % (os.path.basename(e.get("path", "")), e.get("reason", "")))
                 if e.get("type") in ("exported", "skip"):
                     w.progress.emit(0, len(anims), os.path.basename(e.get("path", "")))
-            files = extractor.export_assets(*a, anims, extractor.anim_dir(out), ev, kind="anim")
+            files = extractor.export_assets(*a, anims, out, ev, kind="anim", lay=lay)
             psa = [f for f in files if f.lower().endswith(".psa")]
             if not psa:
                 raise RuntimeError("애니메이션을 뽑지 못했습니다. " + " / ".join(win._ex_skips[:3]))
@@ -709,6 +815,7 @@ class VidFindTab(QWidget):
                 return
             if not win._mesh_blender_ok(fmts):
                 return
+        lay = win.make_layout(self._single_char())
         bridge.save_config(self.cfg)
         win._ex_skips = []
         total = len(meshes) + len(anims)
@@ -726,9 +833,9 @@ class VidFindTab(QWidget):
                     w.progress.emit(min(done[0] - 1, total - 1), total, os.path.basename(e.get("path", "")))
             files: List[str] = []
             if meshes:
-                files += extractor.export_meshes(*a, meshes, out, fmts, variants, preset, win.pr.blender, tex, keep_raw, ev, win._ex_skips.append)
+                files += extractor.export_meshes(*a, meshes, out, fmts, variants, preset, win.pr.blender, tex, keep_raw, ev, win._ex_skips.append, lay=lay)
             if anims:
-                files += extractor.export_assets(*a, anims, extractor.anim_dir(out), ev, kind="anim")
+                files += extractor.export_assets(*a, anims, out, ev, kind="anim", lay=lay)
             return files
 
         win.run_async(job, self._after_extract, "추출 중")

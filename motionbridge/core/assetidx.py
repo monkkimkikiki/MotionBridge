@@ -46,6 +46,58 @@ CATEGORY_NAME = {"attack": "공격", "hit": "피격", "skill": "스킬", "cinema
                  "walk": "걷기", "run": "달리기", "idle": "대기"}
 KNOWN_LABELS = tuple(LABEL_CATEGORY)
 
+# 게임 안 표시 이름과 리소스 이름이 다를 때를 위한 비슷한 말 (같은 묶음끼리 같은 뜻으로 본다)
+SYNONYMS = [
+    {"captive", "prisoner", "convict", "inmate", "hostage", "detainee", "thrall", "slave", "jailed"},
+    {"nameless", "unnamed", "anonymous", "faceless", "nobody", "noname"},
+    {"skeleton", "skeletal", "skel", "bone", "bones", "revenant", "undead"},
+    {"zombie", "ghoul", "husk", "walker", "undead", "rotten"},
+    {"knight", "soldier", "warrior", "guard", "sentinel", "guardian", "footman"},
+    {"dwarf", "dwarven", "dwarves"},
+    {"golem", "construct", "colossus", "statue"},
+    {"spider", "arachnid", "crawler", "hexapod"},
+    {"wolf", "hound", "dog", "beast"},
+    {"demon", "fiend", "devil", "imp"},
+    {"giant", "titan", "ogre", "brute"},
+    {"priest", "cleric", "monk", "acolyte", "cultist"},
+    {"archer", "bowman", "ranger", "hunter"},
+    {"mage", "wizard", "sorcerer", "witch", "caster"},
+    {"king", "lord", "queen", "ruler"},
+]
+# 한국어 낱말 -> 영어 후보 (공백을 뺀 글자에서 찾는다)
+KO_TERMS = {
+    "이름없는": ["nameless", "unnamed"], "무명": ["nameless", "unnamed"], "포로": ["captive", "prisoner"], "죄수": ["prisoner", "convict"],
+    "수감자": ["prisoner", "inmate"], "해골": ["skeleton"], "스켈레톤": ["skeleton"], "좀비": ["zombie"], "구울": ["ghoul"],
+    "기사": ["knight"], "병사": ["soldier"], "전사": ["warrior"], "수호자": ["guardian"], "파수꾼": ["sentinel"],
+    "거미": ["spider"], "늑대": ["wolf"], "골렘": ["golem"], "드워프": ["dwarf"], "난쟁이": ["dwarf"], "악마": ["demon"],
+    "거인": ["giant"], "사제": ["priest"], "광신도": ["cultist"], "궁수": ["archer"], "마법사": ["mage"], "왕": ["king"],
+}
+# 이름 짓기에서 뜻이 없는 낱말 (찾을 때 무시)
+NAME_NOISE = {"the", "a", "an", "of", "boss", "elite", "minor", "major", "lesser", "greater", "old", "young", "new", "mini", "unique"}
+_SYN_OF: Dict[str, set] = {}
+for _g in SYNONYMS:
+    for _w in _g:
+        _SYN_OF.setdefault(_w, set()).update(_g - {_w})
+
+
+def name_words(text: str) -> Dict[str, float]:
+    """표시 이름 -> {단어: 가중치}. 원래 단어 1.0, 한국어 번역/비슷한 말은 0.75."""
+    out: Dict[str, float] = {}
+    for w in tokens(text or "", drop_stop=True):
+        if w not in NAME_NOISE:
+            out[w] = 1.0
+    ko = re.sub(r"[^\uac00-\ud7a3]", "", text or "")
+    for k in sorted(KO_TERMS, key=len, reverse=True):
+        if k in ko:
+            for w in KO_TERMS[k]:
+                out.setdefault(w, 0.9)
+            ko = ko.replace(k, "")
+    for w in list(out):
+        for syn in _SYN_OF.get(w, ()):
+            out.setdefault(syn, 0.75)
+    return out
+
+
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _PREFIX = re.compile(r"^(sk[a-z]{0,3}|sm)_", re.I)
 _SUFFIX = re.compile(r"(_lod\d+|_mesh|_skeletalmesh|_physicsasset)$", re.I)
@@ -243,13 +295,62 @@ class AssetIndex:
         return scored[:limit]
 
     def search(self, text: str, limit: int = 30) -> List[MeshCandidate]:
-        """검수 표에서 직접 검색: 부분 문자열 우선."""
+        """검수 표에서 직접 검색: 부분 문자열 우선, 없으면 낱말·비슷한 말로 찾는다."""
         q = (text or "").strip().lower()
         if not q:
             return [MeshCandidate(m.path, m.name, 0.0) for m in self.meshes[:limit]]
         hits = [MeshCandidate(m.path, m.name, 1.0 if m.name.lower() == q else 0.5) for m in self.meshes if q in m.path.lower()]
         hits.sort(key=lambda c: (-c.score, len(c.name), c.name.lower()))
-        return hits[:limit]
+        return hits[:limit] if hits else self.find_by_name(text, limit)
+
+    def find_by_name(self, text: str, limit: int = 8) -> List[MeshCandidate]:
+        """게임 속 표시 이름('The Nameless Captive', '이름 없는 포로')으로 메시 후보 찾기.
+
+        붙여 쓴 이름(NamelessCaptive), 낱말 일치, 비슷한 말(captive~prisoner), 오타(ratio>=0.85), 폴더 이름까지 본다.
+        """
+        qw = name_words(text)
+        compact = re.sub(r"[^a-z0-9]", "", re.sub(r"^\s*the\s+", "", (text or "").lower()))
+        if not qw and len(compact) < 4:
+            return []
+        orig = [w for w, v in qw.items() if v >= 1.0] or list(qw)
+        out: List[MeshCandidate] = []
+        for m in self.meshes:
+            mnorm = re.sub(r"[^a-z0-9]", "", m.name.lower())
+            toks = set(m.toks)
+            folder = {t for d in m.dirs[-2:] for t in tokens(d)} - toks
+            hit_w: Dict[str, float] = {}
+            for t in toks | folder:
+                best, via = 0.0, ""
+                for w, wt in qw.items():
+                    if t == w:
+                        v = wt
+                    elif len(t) >= 5 and len(w) >= 5 and difflib.SequenceMatcher(None, t, w).ratio() >= 0.8:
+                        v = 0.8 * wt
+                    else:
+                        continue
+                    if t in folder:
+                        v *= 0.7
+                    if v > best:
+                        best, via = v, w
+                if best:
+                    hit_w[t] = best
+            if not hit_w and not (len(compact) >= 5 and (compact in mnorm or (len(mnorm) >= 5 and mnorm in compact))):
+                continue
+            cov_m = sum(v for t, v in hit_w.items() if t in toks) / max(len(toks), 1)
+            matched_q = {w for w in orig if any(t == w or (t in _SYN_OF.get(w, ())) for t in hit_w)}
+            cov_q = len(matched_q) / max(len(orig), 1)
+            sc = 0.5 * cov_m + 0.5 * cov_q
+            why = "낱말 일치: " + ", ".join(sorted(hit_w))
+            if compact and mnorm == compact:
+                sc, why = 1.0, "이름 일치"
+            elif len(compact) >= 5 and (compact in mnorm or (len(mnorm) >= 5 and mnorm in compact)):
+                sc, why = max(sc, 0.95), "이름에 포함"
+            syn = sorted(t for t in hit_w if t not in qw or qw[t] < 1.0)
+            if syn and "이름 일치" not in why:
+                why += " (비슷한 말: %s)" % ", ".join(syn)
+            out.append(MeshCandidate(m.path, m.name, round(min(sc, 1.0), 3), why))
+        out.sort(key=lambda c: (-c.score, len(c.name), c.name.lower()))
+        return out[:limit]
 
     # ------------------------------------------------------------------ 애니메이션 후보
     def _toks_of_anim(self, p: str) -> frozenset:

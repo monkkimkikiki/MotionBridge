@@ -18,9 +18,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
-from . import bridge, meshconv
+from . import bridge, layout, meshconv
 from .gamescan import normalize_aes_key
 
 HELPER_NAMES = ["mbextract.exe", "mbextract"]
@@ -112,12 +112,7 @@ def list_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Opti
     return [e["path"] for e in run_helper(helper, args, on_event) if e.get("type") == "asset"]
 
 
-def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str,
-                  on_event=None, kind: str = "anim", mesh_format: str = "glb", textures: bool = False) -> List[str]:
-    """선택한 에셋을 out_dir 에 내보내고 만든 파일 경로 목록을 돌려준다.
-
-    kind="anim": 애니메이션 -> PSA.  kind="mesh": 스켈레탈 메시 -> mesh_format("glb" | "psk"), textures=True 면 머티리얼/텍스처도(glb).
-    """
+def _export_events(helper, game, ue, aes, usmap, paths, out_dir, on_event, kind, mesh_format, textures) -> List[dict]:
     if kind not in ("anim", "mesh"):
         raise ExtractError("알 수 없는 종류: " + kind)
     if mesh_format not in ("glb", "psk"):
@@ -132,14 +127,52 @@ def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
         args = ["export"] + _base_args(game, ue, aes, usmap) + ["--out", out_dir, "--paths-file", plist, "--kind", kind]
         if kind == "mesh":
             args += ["--format", mesh_format] + (["--textures"] if textures else [])
-        events = run_helper(helper, args, on_event)
+        return run_helper(helper, args, on_event)
     finally:
         try:
             os.remove(plist)
         except OSError:
             pass
-    files = [e["file"] for e in events if e.get("type") == "exported" and e.get("file")]
-    return files
+
+
+def _exported(events: List[dict]) -> List[Tuple[str, str]]:
+    """[(에셋 경로, 만든 파일)]"""
+    return [(e.get("path") or "", e["file"]) for e in events if e.get("type") == "exported" and e.get("file")]
+
+
+def _stage_dir(out_dir: str) -> str:
+    return tempfile.mkdtemp(prefix=".mb_stage_", dir=out_dir if os.path.isdir(out_dir) else None)
+
+
+def _move_into(src: str, dest_dir: str, taken: set) -> str:
+    os.makedirs(dest_dir, exist_ok=True)
+    dst = os.path.join(dest_dir, layout.unique_name(dest_dir, os.path.basename(src), taken))
+    os.replace(src, dst)
+    return dst
+
+
+def _drop_stage(stage: str) -> None:
+    shutil.rmtree(stage, ignore_errors=True)
+
+
+def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str,
+                  on_event=None, kind: str = "anim", mesh_format: str = "glb", textures: bool = False,
+                  lay: Optional["layout.Layout"] = None) -> List[str]:
+    """선택한 에셋을 내보내고 만든 파일 경로 목록을 돌려준다.
+
+    kind="anim": 애니메이션 -> PSA.  kind="mesh": 스켈레탈 메시 -> mesh_format("glb" | "psk"), textures=True 면 머티리얼/텍스처도(glb).
+    lay 를 주면 파일을 '게임/캐릭터/Animations|Models' 폴더로 옮겨 담는다 (이때 out_dir 은 임시 작업 위치의 부모).
+    """
+    if lay is None:
+        return [f for _p, f in _exported(_export_events(helper, game, ue, aes, usmap, paths, out_dir, on_event, kind, mesh_format, textures))]
+    os.makedirs(lay.out, exist_ok=True)
+    stage = _stage_dir(lay.out)
+    try:
+        ev = _exported(_export_events(helper, game, ue, aes, usmap, paths, stage, on_event, kind, mesh_format, textures))
+        taken: set = set()
+        return [_move_into(f, lay.dest(kind, p), taken) for p, f in ev if os.path.isfile(f)]
+    finally:
+        _drop_stage(stage)
 
 
 def anim_dir(out_dir: str) -> str:
@@ -154,37 +187,65 @@ def models_dir(out_dir: str) -> str:
 
 def export_meshes(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str,
                   formats: List[str], variants: List[str], preset: str = "max", blender: Optional[str] = None, textures: bool = False,
-                  keep_raw: bool = True, on_event=None, on_log: Optional[Callable[[str], None]] = None) -> List[str]:
+                  keep_raw: bool = True, on_event=None, on_log: Optional[Callable[[str], None]] = None,
+                  lay: Optional["layout.Layout"] = None) -> List[str]:
     """메시를 뽑아서 바로 쓸 수 있는 형식으로 바꾼다.
 
-    1) 도우미로 원본을 out_dir/Models/_raw 에 뽑는다 (기본 PSKX, textures=True 면 머티리얼/텍스처가 든 GLB).
-    2) formats(fbx/obj/glb) x variants(rigged/static) 로 변환해 out_dir/Models 에 놓는다.
+    1) 도우미로 원본을 뽑는다 (기본 PSKX, textures=True 면 머티리얼/텍스처가 든 GLB).
+    2) formats(fbx/obj/glb) x variants(rigged/static) 로 변환한다.
     formats 가 비어 있으면 원본만 돌려준다. keep_raw=False 면 변환이 성공한 뒤 원본을 지운다.
+    lay 가 없으면 out_dir/Models(원본은 Models/_raw), 있으면 '게임/캐릭터/Models' 에 모두 한 폴더로 놓는다.
     """
     log = on_log or (lambda m: None)
-    out_dir = models_dir(out_dir)
-    raw_dir = os.path.join(out_dir, "_raw")
-    raw = export_assets(helper, game, ue, aes, usmap, paths, raw_dir, on_event, kind="mesh",
-                        mesh_format="glb" if textures else "psk", textures=textures)
-    raw = [f for f in raw if meshconv.is_mesh_file(f)]
-    if not formats:
-        return raw
-    made: List[str] = []
-    errors: List[str] = []
-    for f in raw:
-        try:
-            made += meshconv.convert_mesh(f, out_dir, formats, variants, preset, blender, log)
-        except (meshconv.MeshConvError, bridge.BlenderError) as e:
-            errors.append(str(e))
-            log(str(e))
-    if not made and errors:
-        raise ExtractError(errors[0])
-    if keep_raw:
-        made += raw
+    kw = dict(kind="mesh", mesh_format="glb" if textures else "psk", textures=textures)
+    if lay is None:
+        out_dir = models_dir(out_dir)
+        raw_dir = os.path.join(out_dir, "_raw")
+        raw = export_assets(helper, game, ue, aes, usmap, paths, raw_dir, on_event, **kw)
+        raw_items = [(None, f) for f in raw if meshconv.is_mesh_file(f)]
+        stage = None
     else:
-        for f in raw:
+        os.makedirs(lay.out, exist_ok=True)
+        stage = _stage_dir(lay.out)
+        raw_items = [(p, f) for p, f in _exported(_export_events(helper, game, ue, aes, usmap, paths, stage, on_event, **kw))
+                     if meshconv.is_mesh_file(f)]
+    try:
+        if not formats:
+            if lay is None:
+                return [f for _p, f in raw_items]
+            taken: set = set()
+            return [_move_into(f, lay.model_dest(p), taken) for p, f in raw_items]
+        made: List[str] = []
+        errors: List[str] = []
+        taken = set()
+        for p, f in raw_items:
+            dest = out_dir if lay is None else lay.model_dest(p)
+            work = dest if lay is None else os.path.join(stage, "conv")
             try:
-                os.remove(f)
-            except OSError:
-                pass
-    return made
+                conv = meshconv.convert_mesh(f, work, formats, variants, preset, blender, log)
+            except (meshconv.MeshConvError, bridge.BlenderError) as e:
+                errors.append(str(e))
+                log(str(e))
+                continue
+            made += conv if lay is None else [_move_into(c, dest, taken) for c in conv]
+        if not made and errors:
+            raise ExtractError(errors[0])
+        if keep_raw:
+            made += [f for _p, f in raw_items] if lay is None else [_move_into(f, lay.model_dest(p), taken) for p, f in raw_items if os.path.isfile(f)]
+        elif lay is None:
+            for _p, f in raw_items:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        return made
+    finally:
+        if stage:
+            _drop_stage(stage)
+
+
+def export_locres(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], out_dir: str, on_event=None) -> List[str]:
+    """게임 안 글자 사전(.locres)을 out_dir 에 꺼낸다. 만든 파일 경로 목록."""
+    os.makedirs(out_dir, exist_ok=True)
+    args = ["locres"] + _base_args(game, ue, aes, usmap) + ["--out", out_dir]
+    return [e["file"] for e in run_helper(helper, args, on_event) if e.get("type") == "exported" and e.get("file")]
