@@ -62,17 +62,18 @@ from motionbridge.core import bridge  # noqa: E402
 with tempfile.TemporaryDirectory() as d:
     os.environ["HOME"] = d
     os.environ["USERPROFILE"] = d
+    os.environ["APPDATA"] = os.path.join(d, "appdata")
     bridge.CONFIG_PATH = os.path.join(d, "cfg.json")
     from motionbridge.ui import app as A  # noqa: E402
 
     mw = A.MainWindow()
     mw.show()
     app.processEvents()
-    check(mw.tabs.count() == 7, "메인 창 탭 7개")
+    check(mw.tabs.count() == 8, "메인 창 탭 8개")
     for i in range(mw.tabs.count()):
         mw.tabs.setCurrentIndex(i)
         app.processEvents()
-    check(mw.tabs.currentIndex() == 6, "모든 탭 순회")
+    check(mw.tabs.currentIndex() == 7, "모든 탭 순회")
     vt = mw.vidfind
     win = mw.tabs.hub.detach(vt, None)
     app.processEvents()
@@ -82,7 +83,35 @@ with tempfile.TemporaryDirectory() as d:
     win.close()
     app.processEvents()
     check(mw.tabs.pages.index(vt) == 5, "닫으면 원래 자리")
+    # AnimRef 탭: 열 때 AnimRef 화면이 만들어지고, '추출 툴로 보내기'가 같은 프로그램의 영상찾기 탭으로 바로 간다
+    ar = mw.animref
+    mw.tabs.setCurrentIndex(7)
+    app.processEvents()
+    check(ar.inner is not None, "AnimRef 화면 생성: %s" % (ar.error or "ok"))
+    if ar.inner is not None:
+        from motionbridge.animref.core import link as alink
+
+        check(ar.inner.embedded and ar.inner.tabs.count() == 3 and ar.inner.link_server is None, "내장 모드(자체 연결 창구 없음)")
+        check(alink.LOCAL_TOOL is not None, "추출 툴 직접 전달 연결")
+        qd = os.path.join(d, "handoff", "c1")
+        os.makedirs(qd)
+        qf = os.path.join(qd, "query.json")
+        import json
+
+        json.dump({"animref_handoff": 1, "clip": {"id": "c1", "label": "타격", "video": os.path.join(d, "v.mp4")}, "hits": [0.5],
+                   "result_path": os.path.join(qd, "result.json")}, open(qf, "w", encoding="utf-8"))
+        alink.LOCAL_TOOL(qf)
+        app.processEvents()
+        check(mw.vidfind.link_query and mw.vidfind.link_query["id"] == "c1", "AnimRef -> 영상찾기 직접 전달")
+        w3 = mw.tabs.hub.detach(ar, None)  # 분리해도 동작
+        app.processEvents()
+        check(w3 is not None and ar.inner.isVisible(), "AnimRef 탭 분리")
+        w3.close()
+        app.processEvents()
+        check(mw.tabs.pages.index(ar) == 7, "AnimRef 탭 합치기")
+        check(ar.can_close(), "닫기 허용")
     mw.close()
+    check(alink.LOCAL_TOOL is None if ar.inner is not None else True, "닫으면 직접 전달 해제")
 
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

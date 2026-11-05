@@ -8,14 +8,20 @@ ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 _helper_out = os.path.join(ROOT, "tools", "mbextract", "out")
 _helper_datas = [(_helper_out, "tools")] if os.path.isdir(_helper_out) else []
 
+# AnimRef 탭이 쓰는 파일 (아이콘, 모션 AI 스크립트). core/settings.py resource_path 가 animref 패키지 폴더 기준으로 찾는다.
+_ar = os.path.join(ROOT, "motionbridge", "animref")
+_animref_datas = [(os.path.join(_ar, "assets"), "motionbridge/animref/assets"),
+                  (os.path.join(_ar, "motion_ai"), "motionbridge/animref/motion_ai"),
+                  (os.path.join(_ar, "install_motion_ai.bat"), "motionbridge/animref")]
+
 a = Analysis(
     [os.path.join(ROOT, "MotionBridge.py")],
     pathex=[ROOT],
     binaries=[],
     # Blender 안에서 실행되는 스크립트는 파일로 함께 배포해야 한다 (bridge.scripts_dir 이 찾는 위치)
-    datas=[(os.path.join(ROOT, "blender_scripts"), "blender_scripts")] + _helper_datas,
-    hiddenimports=["imageio_ffmpeg"],  # frames.find_ffmpeg 가 try 안에서 불러오므로 명시
-    excludes=["tkinter", "matplotlib", "PIL", "scipy", "pandas", "IPython", "pytest",
+    datas=[(os.path.join(ROOT, "blender_scripts"), "blender_scripts")] + _helper_datas + _animref_datas,
+    hiddenimports=["imageio_ffmpeg", "cv2", "PIL", "obsws_python", "pynput"],  # 함수 안에서 불러오는 것들(frames.find_ffmpeg, AnimRef)
+    excludes=["tkinter", "matplotlib", "scipy", "pandas", "IPython", "pytest",
               "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore", "PySide6.QtQuick", "PySide6.QtQml"],
     noarchive=False,
 )

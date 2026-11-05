@@ -27,6 +27,7 @@ from .viewer import MESH_MODES, Viewport
 from .retimebar import RetimeBar
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
+from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
 from .widgets import EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
 
@@ -101,7 +102,13 @@ class MainWindow(QMainWindow):
             self.link = None
 
     def closeEvent(self, ev) -> None:  # noqa: N802
+        if not self.animref.can_close():  # OBS 녹화/분석이 진행 중이면 물어본다
+            ev.ignore()
+            return
+        self.animref.shutdown()
         self.stop_link()
+        for w in list(self.tabs.hub.floats):  # 분리된 창도 같이 닫는다
+            w.hide()
         super().closeEvent(ev)
 
     def import_animref(self) -> None:
@@ -294,6 +301,8 @@ class MainWindow(QMainWindow):
         self.vidfind = VidFindTab(self)
         self.tabs.addTab(self.vidfind, "영상찾기", "영상으로 찾기")
         self.tabs.addTab(self._tab_help(), "도우미", "추출 도우미")
+        self.animref = AnimRefTab(self)  # 처음 열 때 만들어진다 (시작이 느려지지 않게)
+        self.tabs.addTab(self.animref, "AnimRef", "AnimRef — 게임 영상에서 모션 클립 수집")
         self.tabs.setMinimumWidth(500)
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         split.addWidget(self.tabs)

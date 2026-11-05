@@ -501,6 +501,11 @@ def main():
         check("The Nameless Captive" in vt.known.toPlainText(), "AnimRef 캐릭터가 '아는 정보'에 들어감: %r" % vt.known.toPlainText())
         check("영상 파일이 없습니다" in vt.link_banner.text(), "영상 파일이 없으면 경고")
         vt.known.setPlainText("")
+        # AnimRef 탭 -> 같은 프로그램의 영상찾기 탭으로 바로 전달 (창구 없이)
+        vt.link_query = None
+        write_query("내장", "스킬", [1.0])
+        mw.animref._send_to_tool(qf)
+        check(vt.link_query and vt.link_query["id"] == "내장" and vt.label.currentData() == "스킬", "AnimRef 탭 -> 영상찾기 탭 직접 전달")
         mw.stop_link()
         check(mw.link is None and not os.path.exists(os.path.join(ldir, "animtool.json")), "종료 시 접속 정보 삭제")
 
@@ -524,7 +529,7 @@ def main():
         check(seen_start == [clips], "클립 폴더 대화상자 시작 위치: %s" % seen_start)
 
         # 탭: 크롬식 탭 줄 (번호 = 처음 추가된 순서)
-        check(mw.tabs.count() == 7 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5, "탭 7개")
+        check(mw.tabs.count() == 8 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AnimRef", "탭 8개 (AnimRef 포함)")
         mw.tabs.setCurrentIndex(5)
         check(mw.tabs.currentIndex() == 5 and mw.tabs.current_page() is vt, "탭 이동/표시")
         mw.tabs._bar_changed(2)  # 탭 줄을 눌렀을 때
