@@ -11,6 +11,8 @@ import test_extract as TE  # noqa: E402
 
 def test_character_of():
     c = layout.character_of
+    assert c("MortalShell2/Content/Sparta/Characters/Bosses/Swordman/Art/Mesh/SK_Swordman.uasset") == "Swordman", "Art 폴더는 캐릭터 이름이 아님"
+    assert c("/Game/Sparta/Characters/Bosses/Swordman/Animation/Attacks/AS_Swordman_SpinAttack_01") == "Swordman"
     assert c("Sparta/Content/Characters/Enemies/NamelessCaptive/Meshes/SK_NamelessCaptive.uasset") == "NamelessCaptive"
     assert c("Game/Content/Art/Monsters/Humanoid/Prisoner/Animations/Attack/A_Prisoner_Attack01") == "Prisoner"
     assert c("Game/Content/Anims/AM_Dwarf_Heavy_02") == "Dwarf"

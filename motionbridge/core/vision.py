@@ -391,3 +391,29 @@ def aggregate(dets: Sequence[Detection]) -> List[Group]:
     out = list(groups.values())
     out.sort(key=lambda g: (-g.seen, -g.confidence, g.name.lower()))
     return out
+
+
+def build_motion_prompt(description: str) -> str:
+    return ("A video game monster's attack or movement is described below (the text may be Korean or English). Convert it into short ENGLISH "
+            "keywords that would appear in an animation asset file name (single lowercase words such as spin, whirlwind, slam, slash, swing, "
+            "thrust, leap, charge, roar, combo, throw, summon, cast). Give 3 to 8 keywords, most important first. Do not invent monster names.\n"
+            "Answer with JSON only: {\"keywords\": [\"spin\", \"...\"]}\n"
+            "Description: %s") % description
+
+
+def motion_keywords(provider: "Provider", description: str) -> List[str]:
+    """동작 설명 -> 애니메이션 파일 이름에 나올 법한 영어 낱말 (AI 는 번역만 하고 에셋 이름은 만들지 않는다)."""
+    if not (description or "").strip():
+        return []
+    text = provider.ask_text(build_motion_prompt(description.strip()))
+    obj = _extract_json(text)
+    if isinstance(obj, dict):
+        obj = obj.get("keywords") or obj.get("words") or []
+    if not isinstance(obj, list):
+        raise VisionError("동작 키워드 결과를 해석하지 못했습니다: " + (text or "")[:200])
+    out: List[str] = []
+    for w in obj:
+        w = re.sub(r"[^a-z0-9]", "", str(w).lower())
+        if 2 <= len(w) <= 20 and w not in out:
+            out.append(w)
+    return out[:8]

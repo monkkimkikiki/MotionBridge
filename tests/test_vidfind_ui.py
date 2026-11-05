@@ -208,6 +208,49 @@ def main():
         vt.find_by_ingame_name()
         check(QMessageBox.calls, "이름 없이 누르면 안내")
         del vt.provider  # 시험용으로 바꾼 것을 되돌림
+        # ---------------- 특징·패턴으로 몬스터 찾기: 이름이 다 틀려도 '스핀 공격' 애니메이션이 있는 몬스터를 거꾸로 찾는다
+        spin = "Sparta/Content/Characters/Bosses/Swordman/Animation/Attacks/AS_Swordman_SpinAttack_01"
+        sword = "Sparta/Content/Characters/Bosses/Swordman/Art/Mesh/SK_Swordman"
+        vt.index = assetidx.AssetIndex(MESHES + [pris, sword], ANIMS + [spin, "Sparta/Content/Characters/Bosses/Swordman/Animation/AS_Swordman_Idle"])
+        vt.rows = []
+        vt.table.setRowCount(0)
+        vt.add_blank_row()
+        vt.table.selectRow(0)
+        vt.motion_text.setText("7연속 스핀 공격")
+        vt.motion_ai.setChecked(False)
+        vt.find_by_motion()
+        check(vt.rows[0].chosen() == sword, "스핀 애니메이션이 있는 Swordman 이 1순위: %s" % vt.rows[0].chosen())
+        check("spin" in vt.motion_note.text() and "Swordman" in vt.motion_note.text(), "안내: %s" % vt.motion_note.text())
+        kw = TL.FakeAI('{"keywords":["whirlwind","spin"]}')
+        vt.provider = lambda: kw
+        vt.motion_text.setText("빙글빙글 도는 공격")
+        vt.motion_ai.setChecked(True)
+        vt.find_by_motion()
+        check(kw.prompts and vt.rows[0].chosen() == sword and "AI" in vt.motion_note.text(), "AI 영어 낱말 보조: %s" % vt.motion_note.text())
+        del vt.provider
+        QMessageBox.calls.clear()
+        vt.motion_text.setText("")
+        vt.find_by_motion()
+        check(QMessageBox.calls, "빈 설명 안내")
+        # 애니메이션 설명 검색: 고른 몬스터 안 / 모든 몬스터
+        vt.confirmed = [sword]
+        vt.mesh_list.clear()
+        vt.mesh_list.addItem(V.QListWidgetItem("Swordman"))
+        vt.mesh_list.item(0).setData(A.Qt.ItemDataRole.UserRole, sword)
+        vt.mesh_list.selectAll()
+        vt.anim_q.setText("스핀")
+        vt.anim_all.setChecked(False)
+        vt.search_anims_by_text()
+        got = [vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in range(vt.anim_list.count())]
+        check(got == [spin], "고른 몬스터 안에서 스핀만: %s" % got)
+        vt.anim_q.setText("slam")
+        vt.search_anims_by_text()
+        check(vt.anim_list.count() == 0 and "모든 몬스터" in vt.anim_note.text(), "없으면 전체 검색 안내")
+        vt.anim_all.setChecked(True)
+        vt.search_anims_by_text()
+        check(vt.anim_list.count() == 1 and "StoneGolem" in vt.anim_list.item(0).text(), "전체에서 찾음: %s" % vt.anim_list.item(0).text() if vt.anim_list.count() else "없음")
+        vt.anim_q.setText("")
+        vt.search_anims_by_text()  # 비우면 기본 목록(분류/타수 기준)으로 돌아간다 — 오류 없이 지나가야 함
         # ---------------- 아는 정보: 영상에 나오는 몬스터를 미리 적으면 이름이 달라도 리소스를 먼저 찾아 AI 에게 알려 준다
         os.remove(V.NAMES_CACHE) if os.path.exists(V.NAMES_CACHE) else None
         vt.known.setPlainText("The Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior")
@@ -367,6 +410,23 @@ def main():
         vt._anim_double_clicked(vt.anim_list.item(2))
         check(len(mw.pr.src.animations) == 1 and exported[-1] == [vt.anim_list.item(2).data(A.Qt.ItemDataRole.UserRole)], "더블클릭은 하나만 열기")
 
+        # ---------------- 메시만 / 애니메이션만 추출
+        calls = {"mesh": 0, "anim": 0}
+        real_ea, real_em = V.extractor.export_assets, V.extractor.export_meshes
+        V.extractor.export_assets = lambda *a, **k: (calls.__setitem__("anim", calls["anim"] + 1), real_ea(*a, **k))[1]
+        V.extractor.export_meshes = lambda *a, **k: (calls.__setitem__("mesh", calls["mesh"] + 1), [])[1]
+        vt.mesh_list.selectAll()
+        vt.anim_list.selectItems([0])
+        QMessageBox.calls.clear()
+        vt.extract("mesh")
+        vt.extract("anim")
+        check(calls["mesh"] <= 1 and calls["anim"] == 1, "각각 해당 종류만 호출: %s" % calls)
+        vt.anim_list.selectItems([])
+        QMessageBox.calls.clear()
+        vt.extract("anim")
+        check(QMessageBox.calls and "애니메이션" in QMessageBox.calls[-1][2], "애니 없이 애니만 누르면 안내")
+        V.extractor.export_assets, V.extractor.export_meshes = real_ea, real_em
+        vt.anim_list.selectItems([0])
         # ---------------- 추출 + 가공(늘리기/압축): 원본 PSA 옆에 _edit.psa 가 생긴다
         from motionbridge.core.io_psa import read_psa_exact
         vt.mesh_list.clearSelection() if hasattr(vt.mesh_list, "clearSelection") else None

@@ -21,7 +21,9 @@ MARKERS = {"characters", "character", "enemies", "enemy", "monsters", "monster",
 # 캐릭터 폴더 '안쪽'의 하위 폴더 이름 (여기부터는 캐릭터 이름이 아니다)
 SUBFOLDERS = {"meshes", "mesh", "animations", "animation", "anims", "anim", "montages", "montage", "materials", "textures",
               "skeleton", "skeletons", "rig", "rigs", "physics", "locomotion", "combat", "attacks", "attack", "common",
-              "shared", "blueprints", "bp", "vfx", "sounds", "audio", "models", "model", "skeletalmeshes", "lods"}
+              "shared", "blueprints", "bp", "vfx", "sounds", "audio", "models", "model", "skeletalmeshes", "lods",
+              "art", "asset", "assets", "resources", "gameplay", "ai", "fx", "effects", "sfx", "weapons", "weapon", "equipment",
+              "props", "data", "sequences", "clips", "poses", "ragdoll", "cloth", "hair", "rigging", "animbp", "animblueprints"}
 PROJECT_DIRS = {"game", "content", "engine", "plugins"}
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _PREFIX = re.compile(r"^(sk[a-z]{0,3}|sm|am|as|a|abp|bp)_", re.I)
