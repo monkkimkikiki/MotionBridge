@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, bridge, extractor, gamescan, layout, meshconv, osopen
+from ..core import animlink, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -952,7 +952,21 @@ class MainWindow(QMainWindow):
         g = QGroupBox("크기 · 위치 · 방향")
         f = QFormLayout(g)
         f.addRow(self._chk("auto_scale", "자동 스케일 (다리 길이 기준)", "소스 대비 타깃의 체형 비율로 이동량을 맞춥니다"))
-        f.addRow("스케일 배율", self._num("scale_mult", 0.3, 2.5, 0.01, 2, tip="자동 스케일에 곱하는 값. 보폭/이동 거리를 키우거나 줄입니다"))
+        f.addRow("스케일 배율", self._num("scale_mult", 0.05, 5.0, 0.01, 2, tip="자동 스케일에 곱하는 값. 보폭/이동 거리를 키우거나 줄입니다"))
+        self.scale_basis = QComboBox()
+        for key, text in scalefit.BASES:
+            self.scale_basis.addItem(text, key)
+        self.scale_basis.setToolTip("모션 크기를 모델에 맞출 때 무엇의 비율을 기준으로 할지.\n골반 높이=걸음 폭/접지에 가장 안정적, 전체 키=겉보기 크기, 다리 길이=보폭 기준")
+        self.btn_fit_scale = QPushButton("모델에 맞춰 스케일 자동 맞춤")
+        self.btn_fit_scale.setToolTip("소스 모션과 타깃 모델의 크기를 재서, 모션 스케일이 모델에 맞도록 '스케일 배율'을 자동으로 정합니다.")
+        self.btn_fit_scale.clicked.connect(lambda *_a: self.fit_scale())
+        row = QHBoxLayout()
+        row.addWidget(self.scale_basis, 1)
+        row.addWidget(self.btn_fit_scale)
+        f.addRow("크기 기준", row)
+        self.scale_note = QLabel("")
+        self.scale_note.setWordWrap(True)
+        f.addRow(self.scale_note)
         self.manual_scale = self._num("manual_scale", 0.0001, 1000.0, 0.0001, 4, slider=False, tip="자동 스케일을 끄면 이 값을 씁니다")
         f.addRow("수동 스케일", self.manual_scale)
         self.hip_fields = []
@@ -1314,6 +1328,22 @@ class MainWindow(QMainWindow):
         if self._syncing:
             return
         setattr(self.pr.settings, key, value)
+        self.schedule()
+
+    def fit_scale(self) -> None:
+        """소스와 타깃의 크기를 재서 스케일 배율을 정한다 (자동 스케일을 켜고 배율만 바꿈)."""
+        if not self.pr.ready():
+            QMessageBox.warning(self, "스케일 맞춤", "소스 모션, 타깃 모델, 본 매핑이 모두 있어야 합니다.")
+            return
+        rep = scalefit.measure(self.pr, self.scale_basis.currentData() or "hip")
+        if rep.chosen is None:
+            self.scale_note.setText(rep.text())
+            return
+        self.pr.settings.auto_scale = True
+        self.pr.settings.scale_mult = float(min(max(rep.mult, 0.05), 5.0))
+        self._sync_settings_ui()
+        self.scale_note.setText(rep.text())
+        self.statusBar().showMessage("스케일 자동 맞춤: 최종 x%.3g" % rep.chosen.ratio)
         self.schedule()
 
     def _hip_changed(self, axis: int, value: float) -> None:

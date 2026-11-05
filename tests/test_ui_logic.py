@@ -92,6 +92,16 @@ def test_full_flow():
         assert mw.rot_combo.currentData() is not None and mw.pr.settings.rot_offsets
         assert mw.hip_fields[1].value() == 2.0 and mw.com_combo.currentData() == mw.pr.tgt_slots["Hips"]
         assert cb.isChecked() and mw.pr.settings.transfer_root_motion is False
+        # 모델에 맞춰 스케일 자동 맞춤: 기준을 바꾸면 최종 스케일이 그 기준의 비율이 된다
+        mw._reset_settings()
+        mw.scale_basis.setCurrentIndex(mw.scale_basis.findData("height"))
+        mw.fit_scale()
+        from motionbridge.core import scalefit as _sf
+        rep = _sf.measure(mw.pr, "height")
+        assert abs(mw.pr.settings.scale_mult - rep.mult) < 0.02 and mw.pr.settings.auto_scale
+        assert abs(nf.value() - mw.pr.settings.scale_mult) < 1e-9, "배율 칸에도 반영"
+        assert "전체 키" in mw.scale_note.text() and abs(mw.pr.run(analyze_quality=False).k - rep.chosen.ratio) < 0.02 * rep.chosen.ratio
+        mw._reset_settings()
         # 타임라인 / 뷰포트 그리기
         mw.frame_slider.setValue(12)
         assert "13 / 40" in mw.frame_label.text()
