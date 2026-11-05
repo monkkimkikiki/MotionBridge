@@ -371,6 +371,66 @@ def test_extract_tab():
         mw.ex_filter.setText("(?i)anim")
         mw._search_anims()
         assert mw.ex_list.count() == 3
+        # 메시: 형식/리깅/대상 프로그램 설정이 변환 호출로 넘어가고, 결과는 목록에 오르며, 폴더를 열 수 있다
+        calls, opened = [], []
+        real_em, real_cm, real_open, real_find = A.extractor.export_meshes, A.meshconv.convert_mesh, A.osopen.open_in_explorer, A.bridge.find_blender
+        outd = os.path.join(d, "meshout")
+
+        def fake_em(helper, root, ue_, aes_, usmap_, paths, out, fmts, variants, preset, blender, tex, keep_raw, ev, log):
+            calls.append((paths, out, fmts, variants, preset, tex, keep_raw))
+            return [os.path.join(out, "SK_Hero_static.fbx"), os.path.join(out, "SK_Hero_static.obj"), os.path.join(out, "_raw", "SK_Hero.pskx")]
+
+        def fake_cm(src, out, fmts, variants, preset, blender, log):
+            calls.append(("convert", src, out, fmts, variants, preset))
+            return [os.path.join(out, "SK_Old_rigged.fbx")]
+        try:
+            A.extractor.export_meshes, A.meshconv.convert_mesh, A.osopen.open_in_explorer = fake_em, fake_cm, lambda p: opened.append(p) or True
+            mw.ex_kind.setCurrentIndex(1)
+            mw.ex_out.setText(outd)
+            assert outd in mw.ex_dir_label._text and "href" in mw.ex_dir_label._text
+            mw.ex_list.set_paths(["Game/Content/Chars/SK_Hero.uasset"])
+            mw.ex_list.select_where(lambda it: it.data(0, mw.ex_list.ROLE) is not None)
+            A.bridge.find_blender = lambda *a, **k: None
+            QMessageBox.calls.clear()
+            mw._extract_selected()
+            assert QMessageBox.calls and "Blender" in QMessageBox.calls[-1][2] and not calls
+            A.bridge.find_blender = lambda *a, **k: "/b"
+            mw.ex_obj.setChecked(True)
+            mw.ex_rig.setCurrentIndex(2)
+            mw.ex_target.setCurrentIndex(mw.ex_target.findData("maya"))
+            mw._extract_selected()
+            assert calls[-1][0] == ["Game/Content/Chars/SK_Hero.uasset"] and calls[-1][1] == outd
+            assert calls[-1][2:] == (["fbx", "obj"], ["static"], "maya", False, True), calls[-1]
+            assert mw.ex_files.count() == 3
+            # 폴더 열기: 출력 폴더 링크 / 선택 항목 위치 / 폴더 줄 더블클릭
+            mw._open_out_folder()
+            assert opened[-1] == outd and os.path.isdir(outd)
+            mw.ex_files.set_paths([os.path.join(outd, "a.fbx"), os.path.join(outd, "b.fbx")])
+            mw.ex_files.selectAll()
+            mw._open_selected_location()
+            assert opened[-1] == outd, opened
+            mw.ex_files._sel = []
+            mw._open_selected_location()
+            assert opened[-1] == outd
+            mw._ex_files_double_clicked(mw.ex_files.topLevelItem(0))
+            assert opened[-1] == outd
+            # 이미 뽑은 PSKX 변환: 변환된 결과물(_static/_rigged)과 비메시는 제외
+            mw.ex_files.set_paths([os.path.join(outd, "SK_Old.pskx"), os.path.join(outd, "SK_Old_static.glb"), os.path.join(outd, "AS_Walk.psa")])
+            mw.ex_files.selectAll()
+            n = len(calls)
+            mw._convert_selected_meshes()
+            assert calls[n][:2] == ("convert", os.path.join(outd, "SK_Old.pskx")) and len(calls) == n + 1, calls[n:]
+            assert calls[n][3:] == (["fbx", "obj"], ["static"], "maya")
+            assert any(x.endswith("SK_Old_rigged.fbx") for x in mw.ex_files.all_paths())
+            # 선택이 메시가 아니면 안내
+            mw.ex_files.set_paths([os.path.join(outd, "AS_Walk.psa")])
+            mw.ex_files.selectAll()
+            QMessageBox.calls.clear()
+            mw._convert_selected_meshes()
+            assert QMessageBox.calls and "PSKX" in QMessageBox.calls[-1][2]
+        finally:
+            A.extractor.export_meshes, A.meshconv.convert_mesh, A.osopen.open_in_explorer, A.bridge.find_blender = real_em, real_cm, real_open, real_find
+            mw.ex_kind.setCurrentIndex(0)
         # 도우미가 없으면 안내
         os.environ.pop("MOTIONBRIDGE_HELPER")
         os.environ["PATH"] = ""
@@ -378,12 +438,9 @@ def test_extract_tab():
         QMessageBox.calls.clear()
         mw._search_anims()
         assert QMessageBox.calls and "mbextract" in QMessageBox.calls[-1][2]
-        # 종류 전환: 메시(GLB)
+        # 종류 전환: 메시
         mw.ex_kind.setCurrentIndex(1)
-        assert mw.ex_filter.text() == A.MainWindow.KIND_FILTERS["mesh_glb"] and mw.ex_tex.isEnabled()
-        assert "GLB" in mw.btn_extract._text
-        mw.ex_kind.setCurrentIndex(2)
-        assert not mw.ex_tex.isEnabled() and "PSK" in mw.btn_extract._text
+        assert mw.ex_filter.text() == A.MainWindow.KIND_FILTERS["mesh"] and "변환" in mw.btn_extract._text
         mw.ex_kind.setCurrentIndex(0)
         assert mw.ex_filter.text() == "(?i)anim" and "PSA" in mw.btn_extract._text
         mw.ex_filter.setText("(?i)내가쓴식")  # 사용자가 바꾼 식은 종류를 바꿔도 유지

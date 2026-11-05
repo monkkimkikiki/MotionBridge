@@ -20,7 +20,7 @@ import sys
 import tempfile
 from typing import Callable, Dict, List, Optional
 
-from . import bridge
+from . import bridge, meshconv
 from .gamescan import normalize_aes_key
 
 HELPER_NAMES = ["mbextract.exe", "mbextract"]
@@ -140,3 +140,40 @@ def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
             pass
     files = [e["file"] for e in events if e.get("type") == "exported" and e.get("file")]
     return files
+
+
+def export_meshes(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str,
+                  formats: List[str], variants: List[str], preset: str = "max", blender: Optional[str] = None, textures: bool = False,
+                  keep_raw: bool = True, on_event=None, on_log: Optional[Callable[[str], None]] = None) -> List[str]:
+    """메시를 뽑아서 바로 쓸 수 있는 형식으로 바꾼다.
+
+    1) 도우미로 원본을 out_dir/_raw 에 뽑는다 (기본 PSKX, textures=True 면 머티리얼/텍스처가 든 GLB).
+    2) formats(fbx/obj/glb) x variants(rigged/static) 로 변환해 out_dir 에 놓는다.
+    formats 가 비어 있으면 원본만 돌려준다. keep_raw=False 면 변환이 성공한 뒤 원본을 지운다.
+    """
+    log = on_log or (lambda m: None)
+    raw_dir = os.path.join(out_dir, "_raw")
+    raw = export_assets(helper, game, ue, aes, usmap, paths, raw_dir, on_event, kind="mesh",
+                        mesh_format="glb" if textures else "psk", textures=textures)
+    raw = [f for f in raw if meshconv.is_mesh_file(f)]
+    if not formats:
+        return raw
+    made: List[str] = []
+    errors: List[str] = []
+    for f in raw:
+        try:
+            made += meshconv.convert_mesh(f, out_dir, formats, variants, preset, blender, log)
+        except (meshconv.MeshConvError, bridge.BlenderError) as e:
+            errors.append(str(e))
+            log(str(e))
+    if not made and errors:
+        raise ExtractError(errors[0])
+    if keep_raw:
+        made += raw
+    else:
+        for f in raw:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+    return made

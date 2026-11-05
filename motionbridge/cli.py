@@ -11,7 +11,7 @@ import sys
 from typing import List, Optional
 
 from . import __version__
-from .core import bridge, extractor, gamescan
+from .core import bridge, extractor, gamescan, meshconv
 from .core.export import PRESETS
 from .core.loader import load_model
 from .core.mapping import SLOT_ORDER, auto_map, detect_frame, slot_label
@@ -143,9 +143,31 @@ def cmd_extract(args) -> int:
         _p("%d개" % len(paths))
         return 0
     _p("대상 %d개 내보내는 중…" % len(paths))
+    if args.kind == "mesh" and args.to:
+        variants = {"both": ["rigged", "static"], "rigged": ["rigged"], "static": ["static"]}[args.rig]
+        files = extractor.export_meshes(helper, args.game, args.ue, args.aes, args.usmap, paths, args.out, args.to, variants,
+                                        args.target, args.blender, args.textures, True, on_ev, lambda m: _p("  ", m))
+        _p("완료: 메시 파일 %d개 -> %s" % (len(files), args.out))
+        return 0
     files = extractor.export_assets(helper, args.game, args.ue, args.aes, args.usmap, paths, args.out, on_ev,
                                     kind=args.kind, mesh_format=args.format, textures=args.textures)
     _p("완료: %s %d개 -> %s" % ("PSA" if args.kind == "anim" else args.format.upper(), len(files), args.out))
+    return 0
+
+
+def cmd_mesh(args) -> int:
+    variants = {"both": ["rigged", "static"], "rigged": ["rigged"], "static": ["static"]}[args.rig]
+    total = 0
+    for f in args.files:
+        try:
+            made = meshconv.convert_mesh(f, args.out, args.to, variants, args.target, args.blender, lambda m: _p("  ", m))
+        except (meshconv.MeshConvError, bridge.BlenderError) as e:
+            _p("실패:", f, "-", e)
+            return 1
+        for m in made:
+            _p("  ->", m)
+        total += len(made)
+    _p("완료: %d개" % total)
     return 0
 
 
@@ -167,6 +189,15 @@ def cmd_blender(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="motionbridge", description="MotionBridge %s — 모션 리타깃/내보내기" % __version__)
     sub = ap.add_subparsers(dest="cmd")
+
+    m = sub.add_parser("mesh", help="추출한 메시(.psk/.pskx/.glb)를 FBX/OBJ/GLB 로 변환 (리깅 포함/없음 선택)")
+    m.add_argument("files", nargs="+")
+    m.add_argument("--to", nargs="+", choices=["fbx", "obj", "glb"], default=["fbx"])
+    m.add_argument("--rig", choices=["both", "rigged", "static"], default="both")
+    m.add_argument("--target", choices=sorted(PRESETS), default="max")
+    m.add_argument("--out", default="meshes")
+    m.add_argument("--blender")
+    m.set_defaults(fn=cmd_mesh)
 
     a = sub.add_parser("info", help="파일의 본/클립/자동 매핑 확인")
     a.add_argument("file")
@@ -211,6 +242,10 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--kind", choices=["anim", "mesh"], default="anim", help="anim: 애니메이션(PSA), mesh: 스켈레탈 메시")
     x.add_argument("--format", choices=["glb", "psk"], default="glb", help="mesh 일 때 형식")
     x.add_argument("--textures", action="store_true", help="mesh(glb) 일 때 머티리얼/텍스처 포함")
+    x.add_argument("--to", nargs="+", choices=["fbx", "obj", "glb"], help="mesh 를 이 형식으로 변환 (Blender 필요, OBJ 는 PSK 면 불필요). 원본은 out/_raw 에 남음")
+    x.add_argument("--rig", choices=["both", "rigged", "static"], default="both", help="--to 와 함께: 리깅 포함/없음/둘 다")
+    x.add_argument("--target", choices=sorted(PRESETS), default="max", help="--to 와 함께: 대상 프로그램 축/단위")
+    x.add_argument("--blender", help="Blender 실행 파일 (--to 변환용)")
     x.set_defaults(fn=cmd_extract)
 
     b = sub.add_parser("blender", help="Blender 경로 확인/설정")

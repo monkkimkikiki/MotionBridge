@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import bridge, extractor, gamescan
+from ..core import bridge, extractor, gamescan, meshconv, osopen
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -350,13 +350,50 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout()
         h.addWidget(QLabel("종류"))
         self.ex_kind = QComboBox()
-        for label, key in (("애니메이션 (PSA)", "anim"), ("메시 (GLB, 스켈레톤+스킨)", "mesh_glb"), ("메시 (PSK)", "mesh_psk")):
+        for label, key in (("애니메이션 (PSA)", "anim"), ("메시 (FBX / OBJ / GLB 로 변환)", "mesh")):
             self.ex_kind.addItem(label, key)
         self.ex_kind.currentIndexChanged.connect(self._kind_changed)
         h.addWidget(self.ex_kind, 1)
-        self.ex_tex = QCheckBox("머티리얼/텍스처 포함 (GLB, 느림)")
-        h.addWidget(self.ex_tex)
         v.addLayout(h)
+
+        self.mesh_opts = QWidget()
+        mv = QVBoxLayout(self.mesh_opts)
+        mv.setContentsMargins(0, 0, 0, 0)
+        h = QHBoxLayout()
+        h.addWidget(QLabel("형식"))
+        self.ex_fbx = QCheckBox("FBX")
+        self.ex_fbx.setChecked(True)
+        self.ex_obj = QCheckBox("OBJ (리깅 없음만)")
+        self.ex_glb = QCheckBox("GLB")
+        for cb in (self.ex_fbx, self.ex_obj, self.ex_glb):
+            h.addWidget(cb)
+        h.addStretch(1)
+        mv.addLayout(h)
+        h = QHBoxLayout()
+        h.addWidget(QLabel("리깅"))
+        self.ex_rig = QComboBox()
+        for label, key in (("리깅 포함 + 리깅 없음 (둘 다)", "both"), ("리깅 포함만 (스켈레톤+스킨)", "rigged"), ("리깅 없음만 (메시만)", "static")):
+            self.ex_rig.addItem(label, key)
+        h.addWidget(self.ex_rig, 1)
+        h.addWidget(QLabel("대상 프로그램"))
+        self.ex_target = QComboBox()
+        for k, pr_ in PRESETS.items():
+            self.ex_target.addItem(pr_.label, k)
+        tgt = self.cfg.get("mesh_target", "max")
+        i = self.ex_target.findData(tgt)
+        self.ex_target.setCurrentIndex(i if i >= 0 else 0)
+        self.ex_target.setToolTip("축/단위 설정. 3ds Max: Z-up, Maya: Y-up")
+        h.addWidget(self.ex_target)
+        mv.addLayout(h)
+        h = QHBoxLayout()
+        self.ex_tex = QCheckBox("머티리얼/텍스처 포함 (GLB 경유, 느림)")
+        h.addWidget(self.ex_tex)
+        self.ex_keep_raw = QCheckBox("원본(PSKX/GLB)도 목록에 남기기")
+        self.ex_keep_raw.setChecked(True)
+        h.addWidget(self.ex_keep_raw)
+        h.addStretch(1)
+        mv.addLayout(h)
+        v.addWidget(self.mesh_opts)
         h = QHBoxLayout()
         self.ex_filter = QLineEdit(self.KIND_FILTERS["anim"])
         self.ex_filter.setToolTip("에셋 경로에 대한 정규식. 예: (?i)(walk|run|attack)")
@@ -399,10 +436,25 @@ class MainWindow(QMainWindow):
 
         g = QGroupBox("4) 추출된 파일 열기")
         v = QVBoxLayout(g)
+        self.ex_dir_label = QLabel("")
+        self.ex_dir_label.setTextFormat(Qt.TextFormat.RichText)
+        self.ex_dir_label.setToolTip("클릭하면 탐색기에서 이 폴더가 열립니다")
+        self.ex_dir_label.linkActivated.connect(lambda *_a: self._open_out_folder())
+        v.addWidget(self.ex_dir_label)
         self.ex_files = PathTree()
         self.ex_files.setMinimumHeight(130)
-        self.ex_files.itemDoubleClicked.connect(lambda it, c=0: it.childCount() == 0 and self._open_extracted())
+        self.ex_files.itemDoubleClicked.connect(self._ex_files_double_clicked)
         v.addWidget(self.ex_files)
+        h = QHBoxLayout()
+        b = QPushButton("선택 항목 위치 열기")
+        b.setToolTip("선택한 파일/폴더가 있는 폴더를 탐색기로 엽니다 (아무것도 안 골랐으면 출력 폴더)")
+        b.clicked.connect(self._open_selected_location)
+        h.addWidget(b)
+        b = QPushButton("출력 폴더 내용 불러오기")
+        b.setToolTip("출력 폴더에 이미 있는 PSA/PSK/GLB/FBX/OBJ 를 목록에 올립니다 (이전에 뽑은 PSKX 를 변환할 때)")
+        b.clicked.connect(self._load_out_folder)
+        h.addWidget(b)
+        v.addLayout(h)
         b = QPushButton("선택한 파일을 소스 모션으로 열기")
         b.clicked.connect(self._open_extracted)
         v.addWidget(b)
@@ -410,20 +462,131 @@ class MainWindow(QMainWindow):
         b.setToolTip("게임에서 뽑은 메시(GLB)를 타깃(내 모델) 자리에 불러옵니다. 소스 모션과 같은 캐릭터면 그대로 확인할 수 있습니다.")
         b.clicked.connect(self._open_extracted_as_target)
         v.addWidget(b)
+        self.btn_convert = QPushButton("선택한 메시(PSK/PSKX/GLB)를 위 형식으로 변환")
+        self.btn_convert.setToolTip("3) 에서 고른 형식/리깅/대상 프로그램 설정으로 변환합니다. 이미 뽑아 둔 PSKX 도 변환할 수 있습니다.")
+        self.btn_convert.clicked.connect(self._convert_selected_meshes)
+        v.addWidget(self.btn_convert)
         lay.addWidget(g)
+        self.ex_out.textChanged.connect(self._update_dir_label)
+        self._update_dir_label()
         lay.addStretch(1)
         return sc
 
     # ---- 추출 탭 동작
-    KIND_FILTERS = {"anim": "(?i)anim", "mesh_glb": r"(?i)/sk[a-z]*_", "mesh_psk": r"(?i)/sk[a-z]*_"}
+    KIND_FILTERS = {"anim": "(?i)anim", "mesh": r"(?i)/sk[a-z]*_"}
 
     def _kind_changed(self, *_a) -> None:
         key = self.ex_kind.currentData() or "anim"
         cur = self.ex_filter.text().strip()
         if cur in self.KIND_FILTERS.values() or not cur:
             self.ex_filter.setText(self.KIND_FILTERS[key])
-        self.ex_tex.setEnabled(key == "mesh_glb")
-        self.btn_extract.setText("선택한 애니메이션 추출 (PSA)" if key == "anim" else "선택한 메시 추출 (%s)" % ("GLB" if key == "mesh_glb" else "PSK"))
+        self.mesh_opts.setVisible(key == "mesh")
+        self.btn_extract.setText("선택한 애니메이션 추출 (PSA)" if key == "anim" else "선택한 메시 추출 + 변환")
+
+    # ---- 폴더 열기
+    def _update_dir_label(self, *_a) -> None:
+        d = self.ex_out.text().strip()
+        self.ex_dir_label.setText('출력 폴더: <a href="open">%s</a> (클릭하면 탐색기로 열림)' % d.replace("&", "&amp;").replace("<", "&lt;") if d else "")
+
+    def _open_out_folder(self) -> None:
+        d = self.ex_out.text().strip()
+        if not d:
+            return
+        os.makedirs(d, exist_ok=True)
+        if not osopen.open_in_explorer(d):
+            QMessageBox.warning(self, "폴더 열기", "폴더를 열지 못했습니다: " + d)
+
+    def _open_selected_location(self) -> None:
+        sel = self.ex_files.selected_paths()
+        if not sel:
+            self._open_out_folder()
+            return
+        target = sel[0] if len(sel) == 1 else os.path.commonpath([os.path.dirname(x) for x in sel])
+        if not osopen.open_in_explorer(target):
+            QMessageBox.warning(self, "폴더 열기", "열지 못했습니다: " + target)
+
+    def _ex_files_double_clicked(self, it, col=0) -> None:
+        if it.childCount() > 0:
+            # 폴더 줄을 더블클릭하면 그 폴더를 연다 (펼침/접힘은 화살표로)
+            leaves = self.ex_files._leaves(it)
+            if leaves:
+                osopen.open_in_explorer(os.path.commonpath([os.path.dirname(x) for x in leaves]))
+            return
+        p = it.data(0, self.ex_files.ROLE)
+        if p and p.lower().endswith(".psa"):
+            self._open_extracted()
+        elif p and p.lower().endswith((".glb", ".gltf")):
+            self._open_extracted_as_target()
+        elif p:
+            osopen.open_in_explorer(p)
+
+    def _load_out_folder(self) -> None:
+        d = self.ex_out.text().strip()
+        if not os.path.isdir(d):
+            QMessageBox.information(self, "불러오기", "출력 폴더가 아직 없습니다: " + d)
+            return
+        exts = (".psa", ".psk", ".pskx", ".glb", ".fbx", ".obj")
+        found = []
+        for root, _dirs, names in os.walk(d):
+            found += [os.path.join(root, n) for n in names if n.lower().endswith(exts)]
+        self.ex_files.set_paths(sorted(found))
+        self.statusBar().showMessage("출력 폴더에서 %d개를 불러왔습니다" % len(found))
+
+    def _mesh_settings(self):
+        fmts = [k for k, cb in (("fbx", self.ex_fbx), ("obj", self.ex_obj), ("glb", self.ex_glb)) if cb.isChecked()]
+        rig = self.ex_rig.currentData() or "both"
+        variants = {"both": ["rigged", "static"], "rigged": ["rigged"], "static": ["static"]}[rig]
+        preset = self.ex_target.currentData() or "max"
+        self.cfg["mesh_target"] = preset
+        return fmts, variants, preset
+
+    def _mesh_blender_ok(self, fmts) -> bool:
+        if any(f in ("fbx", "glb") for f in fmts) and not bridge.find_blender(self.pr.blender):
+            QMessageBox.warning(self, "Blender 필요", "FBX / GLB 로 변환하려면 Blender 가 필요합니다.\n'파일 → Blender 경로 지정…' 에서 blender 실행 파일을 지정하세요.\n(OBJ 만 고르면 PSK/PSKX 는 Blender 없이 변환됩니다.)")
+            return False
+        return True
+
+    def _convert_selected_meshes(self) -> None:
+        sel = [p for p in (self.ex_files.selected_paths() or self.ex_files.all_paths()) if meshconv.is_mesh_file(p)]
+        # 이미 변환된 결과(_rigged/_static)는 원본이 아니다
+        sel = [p for p in sel if not os.path.splitext(os.path.basename(p))[0].endswith(("_rigged", "_static"))]
+        if not sel:
+            QMessageBox.warning(self, "변환", "변환할 메시(PSK/PSKX/GLB)를 목록에서 고르세요. 이전에 뽑은 파일은 '출력 폴더 내용 불러오기'로 올릴 수 있습니다.")
+            return
+        fmts, variants, preset = self._mesh_settings()
+        if not fmts:
+            QMessageBox.warning(self, "변환", "형식(FBX / OBJ / GLB)을 하나 이상 고르세요.")
+            return
+        if not self._mesh_blender_ok(fmts):
+            return
+        out = self.ex_out.text().strip()
+        if not out:
+            return
+        self._ex_skips = []
+
+        def job(w: Worker):
+            made = []
+            for i, f in enumerate(sel):
+                w.progress.emit(i, len(sel), os.path.basename(f))
+                try:
+                    made += meshconv.convert_mesh(f, out, fmts, variants, preset, self.pr.blender, self._ex_skips.append)
+                except (meshconv.MeshConvError, bridge.BlenderError) as e:
+                    self._ex_skips.append(str(e))
+            return made
+
+        self.run_async(job, self._after_convert, "메시 변환 중")
+
+    def _after_convert(self, made) -> None:
+        if not made:
+            why = [x for x in self._ex_skips if x][:6]
+            self.statusBar().showMessage("변환된 파일이 없습니다")
+            QMessageBox.warning(self, "변환", "변환된 파일이 없습니다.\n\n" + "\n".join(why))
+            return
+        have = self.ex_files.all_paths()
+        self.ex_files.set_paths(list(dict.fromkeys(have + list(made))))
+        self.statusBar().showMessage("변환 완료: %d개 — 위 '출력 폴더' 링크로 폴더를 열 수 있습니다" % len(made))
+        if self._ex_skips:
+            QMessageBox.information(self, "변환", "일부 안내:\n" + "\n".join(x for x in self._ex_skips if x)[:800])
 
     def _pick_dir_into(self, edit) -> None:
         d = QFileDialog.getExistingDirectory(self, "폴더 선택", edit.text())
@@ -539,6 +702,18 @@ class MainWindow(QMainWindow):
             return
 
         self._ex_skips = []
+        key = self.ex_kind.currentData() or "anim"
+        kind = "anim" if key == "anim" else "mesh"
+        fmts, variants, preset = self._mesh_settings() if kind == "mesh" else ([], [], "max")
+        tex = bool(self.ex_tex.isChecked()) and kind == "mesh"
+        keep_raw = bool(self.ex_keep_raw.isChecked())
+        if kind == "mesh":
+            if not fmts:
+                QMessageBox.warning(self, "추출", "형식(FBX / OBJ / GLB)을 하나 이상 고르세요.")
+                return
+            if not self._mesh_blender_ok(fmts):
+                return
+            bridge.save_config(self.cfg)
 
         def job(w: Worker):
             n = [0]
@@ -551,12 +726,10 @@ class MainWindow(QMainWindow):
                 if e.get("type") in ("exported", "skip"):
                     n[0] += 1
                     w.progress.emit(n[0] - 1, len(paths), os.path.basename(e.get("path", "")))
-            return extractor.export_assets(*a, paths, out, ev, kind=kind, mesh_format=fmt, textures=tex)
+            if kind == "mesh":
+                return extractor.export_meshes(*a, paths, out, fmts, variants, preset, self.pr.blender, tex, keep_raw, ev, self._ex_skips.append)
+            return extractor.export_assets(*a, paths, out, ev, kind="anim")
 
-        key = self.ex_kind.currentData() or "anim"
-        kind = "anim" if key == "anim" else "mesh"
-        fmt = "psk" if key == "mesh_psk" else "glb"
-        tex = bool(self.ex_tex.isChecked()) and key == "mesh_glb"
         self.run_async(job, self._after_extract, "추출 중")
 
     def _after_extract(self, files) -> None:
@@ -566,17 +739,17 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("추출된 파일이 없습니다")
             QMessageBox.warning(self, "추출", "추출된 파일이 없습니다. 화면의 모션은 바뀌지 않습니다.\n\n" + ("\n".join(why) if why else "도우미가 이유를 알려주지 않았습니다. 종류(애니메이션/메시)와 선택한 에셋을 확인하세요."))
             return
-        # 방금 추출한 것을 바로 화면에 보여준다 (여러 개면 첫 번째. 나머지는 아래 목록에서 더블클릭)
-        first = files[0]
-        msg = "추출 완료: %d개" % len(files)
-        if len(files) > 1:
-            msg += " — 첫 번째 파일을 열었습니다. 다른 것은 '4) 추출된 파일 열기' 목록에서 더블클릭"
+        msg = "추출 완료: %d개 — 위 '출력 폴더' 링크를 누르면 폴더가 열립니다" % len(files)
+        # 방금 추출한 모션/메시를 바로 화면에 보여준다 (여러 개면 첫 번째. 나머지는 아래 목록에서 더블클릭)
+        psa = next((f for f in files if f.lower().endswith(".psa")), None)
+        glb = next((f for f in files if f.lower().endswith(".glb") and "_static" not in f), None) or next((f for f in files if f.lower().endswith(".glb")), None)
         self.statusBar().showMessage(msg)
-        low = first.lower()
-        if low.endswith(".psa"):
-            self._open_path(first)
-        elif low.endswith(".glb"):
-            self._open_path_as_target(first)
+        if psa:
+            if len(files) > 1:
+                self.statusBar().showMessage(msg + " (첫 번째 모션을 열었습니다)")
+            self._open_path(psa)
+        elif glb:
+            self._open_path_as_target(glb)
 
     def _open_extracted(self) -> None:
         sel = self.ex_files.selected_paths() or ([self.ex_files.first_path()] if self.ex_files.count() else [])

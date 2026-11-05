@@ -8,7 +8,7 @@ import types
 
 SIGNAL_NAMES = {
     "valueChanged", "currentIndexChanged", "toggled", "clicked", "timeout", "itemClicked", "triggered", "textChanged",
-    "stateChanged", "finished", "started", "returnPressed", "itemDoubleClicked", "itemSelectionChanged",
+    "stateChanged", "finished", "started", "returnPressed", "itemDoubleClicked", "itemSelectionChanged", "linkActivated",
 }
 
 
@@ -160,7 +160,11 @@ class QLabel(QWidget):
 
 
 class QLineEdit(QLabel):
-    pass
+    def setText(self, t):
+        changed = t != self._text
+        self._text = t
+        if changed:
+            _sig(self, "textChanged").emit(t)
 
 
 class QPlainTextEdit(QWidget):

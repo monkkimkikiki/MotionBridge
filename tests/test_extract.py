@@ -176,8 +176,55 @@ def test_no_helper():
     print("no helper OK")
 
 
+def test_export_meshes():
+    if os.name == "nt":
+        print("test_export_meshes: Windows 에서는 건너뜀 (셔뱅 가짜 실행파일 사용)")
+        return
+    from motionbridge.core import meshconv
+    with tempfile.TemporaryDirectory() as d:
+        fb = make_helper(d)
+        out = os.path.join(d, "o")
+        seen = []
+        real = meshconv.convert_mesh
+
+        def fake_convert(src, o, formats, variants, preset, blender=None, on_log=None):
+            seen.append((os.path.relpath(src, out), o, list(formats), list(variants), preset))
+            if "bad" in src:
+                raise meshconv.MeshConvError("변환 실패")
+            r = [os.path.join(o, os.path.basename(src).split(".")[0] + "_static.fbx")]
+            for x in r:
+                open(x, "wb").write(b"x")
+            return r
+        meshconv.convert_mesh = fake_convert
+        try:
+            files = extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, ["fbx"], ["static"], "max")
+            a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
+            assert a[a.index("--format") + 1] == "psk" and "--textures" not in a and a[a.index("--out") + 1] == os.path.join(out, "_raw"), a
+            assert seen[-1] == (os.path.join("_raw", "SK_Hero.psk"), out, ["fbx"], ["static"], "max"), seen
+            assert sorted(os.path.relpath(f, out) for f in files) == sorted(["SK_Hero_static.fbx", os.path.join("_raw", "SK_Hero.psk")])
+            # 텍스처가 필요하면 GLB 로 뽑아서 변환
+            extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, ["fbx"], ["static"], "max", textures=True, keep_raw=False)
+            a = json.loads(open(os.environ["FAKE_LOG"]).read().strip().split("\n")[-1])
+            assert a[a.index("--format") + 1] == "glb" and "--textures" in a
+            assert not os.path.exists(os.path.join(out, "_raw", "SK_Hero.glb")), "keep_raw=False 인데 원본이 남음"
+            # 변환이 전부 실패하면 이유와 함께 오류
+            try:
+                extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_bad.uasset"], out, ["fbx"], ["static"], "max")
+            except extractor.ExtractError as e:
+                assert "변환 실패" in str(e)
+            else:
+                raise AssertionError("실패가 숨겨짐")
+            # 형식이 없으면 원본만
+            files = extractor.export_meshes(fb, d, "GAME_UE5_6", None, None, ["Game/SK_Hero.uasset"], out, [], [], "max")
+            assert [os.path.basename(f) for f in files] == ["SK_Hero.psk"]
+        finally:
+            meshconv.convert_mesh = real
+    print("export_meshes OK")
+
+
 if __name__ == "__main__":
     test_mesh_args()
+    test_export_meshes()
     test_flow_unencrypted()
     test_flow_encrypted()
     test_no_helper()

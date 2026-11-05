@@ -36,11 +36,16 @@ GitHub 에 올리면 `.github/workflows/build-windows.yml` 이 같은 일을 자
 1. **게임 폴더** 지정 → **검사**: `Content/Paks` 의 `.pak` / `.utoc` 를 읽어 암호화 여부, 형식, 크기를 보여 줍니다(수십 GB 파일은 열지 않고 헤더만 읽음).
 2. **암호화 안 된 게임**: AES 키 칸이 비활성화되고 바로 진행. **암호화된 게임**: 키가 없으면 진행을 막고, 있으면 형식(0x+64자리 16진수 / Base64)을 검증해서 사용. AES 키는 프로그램이 구해 주지 않습니다 — 게임/빌드마다 달라서 모딩 커뮤니티 자료 등에서 직접 찾아 넣어야 합니다.
 3. **UE 버전**, **mappings(.usmap)** 지정(언리얼 5 는 보통 필요). usmap 은 게임을 실행해서 UE4SS / Dumper-7 로 만드는 파일이라 프로그램이 대신 만들 수 없습니다.
-4. **종류**를 고르고(애니메이션 PSA / 메시 GLB / 메시 PSK) 검색식(정규식)으로 에셋을 찾아 → 고른 것을 추출 → 추출된 파일을 열기.
+4. **종류**를 고르고(애니메이션 PSA / 메시) 검색식(정규식)으로 에셋을 찾아 → 고른 것을 추출 → 추출된 파일을 열기.
+   - **메시**는 바로 쓸 수 있게 **FBX / OBJ / GLB** 로 변환해 줍니다. 형식을 체크하고, **리깅 포함**(스켈레톤+스킨) / **리깅 없음**(메시만) / **둘 다**를 고르고, 대상 프로그램(3ds Max / Maya / Blender)에 맞는 축·단위로 나옵니다. 결과 이름은 `이름_rigged.fbx`, `이름_static.fbx`. 원본 PSKX 는 출력 폴더의 `_raw` 에 남습니다.
+   - FBX/GLB 변환에는 Blender 가 필요합니다. **OBJ(리깅 없음)** 는 PSK/PSKX 라면 Blender 없이 됩니다. 텍스처가 필요하면 '머티리얼/텍스처 포함'(GLB 경유).
+   - 이미 뽑아 둔 PSKX 는 '출력 폴더 내용 불러오기' → 고르고 → '선택한 메시를 위 형식으로 변환'.
+   - '출력 폴더' 링크, '선택 항목 위치 열기' 버튼, 목록의 폴더 줄 더블클릭으로 탐색기에서 폴더가 열립니다.
    애니메이션은 **소스 모션으로**, 메시(GLB)는 **타깃 모델로** 열 수 있습니다(스켈레톤+스킨 포함, 체크하면 머티리얼/텍스처도). 메시 기본 검색식은 `/SK…_` 로 시작하는 이름입니다(게임마다 이름 규칙이 달라서 직접 바꿔야 할 수 있음).
    (PSA 한 파일에 스켈레톤과 모션이 함께 있어서 Blender 를 거치지 않고 바로 리타깃됩니다.)
 
-CLI: `python -m motionbridge extract scan --game "D:\...\Sparta"` / `extract list ...` / `extract export ... --out 폴더` (메시는 `--kind mesh --format glb|psk [--textures]`)
+CLI: `python -m motionbridge extract scan --game "D:\...\Sparta"` / `extract list ...` / `extract export ... --out 폴더` (메시는 `--kind mesh --format glb|psk [--textures]`, 변환까지 한 번에: `--kind mesh --to fbx obj --rig both|rigged|static --target max|maya|blender`)
+이미 뽑은 파일 변환: `python -m motionbridge mesh SK_Hero.pskx --to fbx --rig both --target max --out 폴더`
 
 실제 추출은 **추출 도우미 `mbextract`** (CUE4Parse = FModel 이 쓰는 라이브러리 기반, `tools/mbextract`)가 합니다.
 빌드: .NET 8 SDK + git 이 있는 Windows 에서 `packaging\build_windows.bat`(자동) 또는
@@ -135,6 +140,7 @@ python -m motionbridge retarget ... --profile 내모델.json --in-place --scale 
 **이 개발 환경에서 직접 실행하지 못한 것 — 처음 쓸 때 확인이 필요합니다**
 - **추출 도우미(`mbextract`, C#)**: 이 환경에 .NET/NuGet 이 없어 **컴파일도 못 해 봤습니다.** CUE4Parse API 는 버전마다 달라서 컴파일 오류가 날 수 있습니다(오류 메시지를 알려 주면 맞춰 고칠 수 있음). Python 쪽(검사, AES 입력 게이트, 호출/프로토콜, UI)은 가짜 도우미로 시험했습니다.
 - **PSA 읽기**: FModel/CUE4Parse 가 내보낸 PSA 형식(기준 포즈는 원본 값, 키는 Y 반전 + 비루트 켤레)을 소스 코드로 확인해 그대로 해석하고, 실제 Mortal Shell 2 PSA 한 개(구르기)로 사람 동작이 나오는 것까지 확인했습니다. 다른 도구가 만든 PSA 는 4가지 관례를 시험하는 대비책으로 읽습니다. 3D 뷰는 사람 슬롯에 매핑된 본만 그립니다. 게임 리그의 카메라·IK·워프·얼굴·천 보조 본은 몸에서 멀리 떨어져 있어 팔이 날아간 것처럼 보이기 때문입니다(데이터는 전부 유지, 오른쪽 아래 '보조 본' 체크로 전부 표시).
+- **메시 → FBX/OBJ/GLB 변환**: PSKX 읽기·좌표 변환(Y 반전, 캐릭터가 −Y 를 봄, 미터)·본 회전 켤레 자동 판별·OBJ 쓰기는 합성 데이터로 시험했습니다. 실제 Blender 에서 메시/아마추어/버텍스 그룹을 만드는 부분(`blender_mesh.py`)은 가짜 bpy 로 흐름만 시험했고 실제 실행은 미검증입니다. 삼각형 방향은 '바깥쪽을 향하는지'로 자동 판별해서, 열린 메시(옷감 등)는 뒤집혀 보일 수 있습니다.
 - **메시 추출(GLB/PSK)**: 도우미 코드는 컴파일만 확인했고 실제 게임 메시로는 아직 시험하지 못했습니다. CUE4Parse 의 GLB 를 이 프로그램이 타깃 모델로 읽는지도 실제 파일로는 미검증입니다.
 - 실제 **Qt 화면**(PySide6 설치 불가). 로직은 가짜 Qt 로 검증했지만 레이아웃/실제 렌더, 그리고 단축키가 위젯 포커스와 충돌하지 않는지(Space, 숫자키 등)는 실행해 봐야 합니다. 메시 표면 렌더링은 numpy 로 이미지를 만드는 부분만 시험했습니다.
 - 실제 **Blender** 에서의 FBX 읽기/내보내기 (`blender_scripts/`). 스크립트의 수학과 흐름은 시험했지만 실제 bpy 호출, Blender 버전별 옵션 이름 차이, FBX 축 옵션(`axis_forward/up`)이 Max/Maya 에서 의도대로 보이는지는 미검증입니다. 어긋나면 `core/export.py` 의 `PRESETS` 값만 바꾸면 됩니다.
@@ -154,7 +160,7 @@ python -m motionbridge retarget ... --profile 내모델.json --in-place --scale 
 motionbridge/core/   quat, model, io_bvh, io_gltf, mapping, retarget, quality, export, bridge(Blender), loader, pipeline
 motionbridge/ui/     app(메인 창), viewer(+viewer_math), widgets, help_text
 motionbridge/cli.py  명령줄
-blender_scripts/     Blender 안에서 실행되는 스크립트 (convert, apply)
+blender_scripts/     Blender 안에서 실행되는 스크립트 (convert, apply, mesh)
 packaging/           PyInstaller spec, Inno Setup, build_windows.bat
 tests/               run_all.py 로 전체 실행
 ```
