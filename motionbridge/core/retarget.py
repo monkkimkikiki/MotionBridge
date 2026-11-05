@@ -41,6 +41,9 @@ class RetargetSettings:
     hip_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # (좌우, 높이, 앞뒤) 타깃 단위
     root_yaw_deg: float = 0.0
     transfer_root_motion: bool = True  # False 면 제자리(수평 이동 제거)
+    # 게임 모션은 월드 좌표(원점에서 수 m 떨어진 곳)에서 시작하는 일이 많다. True 면 첫 프레임의 수평 위치를 타깃 바인드 위치에 맞추고
+    # 그 뒤의 이동량만 옮긴다(골반이 모델에서 멀리 떨어져 어긋나 보이는 것을 막는다). 높이는 바인드 기준 그대로.
+    start_at_origin: bool = True
     com_joint: int = -1  # 타깃 COM 관절. -1 이면 자동
     # 발 IK
     foot_ik: bool = True
@@ -283,6 +286,16 @@ def retarget(
     else:
         k = st.manual_scale
 
+    # ---- 수평 루트 이동 보정 (소스 표준 프레임, 원본 단위): 골반뿐 아니라 발 IK 목표에도 같은 값을 뺀다
+    rootoff = np.zeros((T, 3))
+    if com >= 0:
+        s0 = pair_of[com]
+        d0 = ps[:, s0] - bps[s0]
+        if not st.transfer_root_motion:
+            rootoff[:, [0, 2]] = d0[:, [0, 2]]  # 제자리: 수평 이동 전부 제거
+        elif st.start_at_origin:
+            rootoff[:, [0, 2]] = d0[0, [0, 2]]  # 시작 위치만 모델 원점으로
+
     # ---- 목표 월드 회전
     yaw_q = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
     rot_des: Dict[int, np.ndarray] = {}
@@ -306,9 +319,7 @@ def retarget(
     pos_world: Dict[int, np.ndarray] = {}
     for t in posdriven:
         s = pair_of[t]
-        delta = ps[:, s] - bps[s]
-        if not st.transfer_root_motion:
-            delta[:, [0, 2]] = 0.0
+        delta = ps[:, s] - bps[s] - rootoff
         pc = bpt[t] + Q.rotate(yaw_q, k * delta)
         if t == com:
             pc = pc + hip_off
@@ -371,7 +382,7 @@ def retarget(
             sp = np.linalg.norm(vel, axis=1)
             contact = clean_mask((sc[:, 1] - ymin < st.contact_height * Ls) & (sp < st.contact_speed * Ls))
             fkc = Q.rotate(Ft, Wp[:, ch.foot])
-            Dc = bpt[ch.foot] + k * Q.rotate(yaw_q, sc - bps[ch.src_foot])  # 스케일된 소스 발 위치
+            Dc = bpt[ch.foot] + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
             goal = Dc.copy()
             w = np.zeros(T)
             for a, b in _runs(contact):

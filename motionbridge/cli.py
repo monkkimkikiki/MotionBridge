@@ -67,6 +67,8 @@ def cmd_retarget(args) -> int:
         st.root_yaw_deg = args.yaw
     if args.in_place:
         st.transfer_root_motion = False
+    if getattr(args, "abs_start", False):
+        st.start_at_origin = False
     if args.no_ik:
         st.foot_ik = False
     if args.ground_offset is not None:
@@ -232,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--hip-offset", type=float, nargs=3, metavar=("X", "Y", "Z"))
     r.add_argument("--yaw", type=float, help="루트 회전(도)")
     r.add_argument("--in-place", action="store_true", help="제자리 모션으로 (수평 이동 제거)")
+    r.add_argument("--abs-start", action="store_true", help="원본의 절대 시작 위치를 그대로 사용 (기본: 첫 프레임을 모델 원점에 맞춤)")
     r.add_argument("--no-ik", action="store_true", help="발 IK 끄기")
     r.add_argument("--ground-offset", type=float)
     for k in ("src-up", "src-fwd", "tgt-up", "tgt-fwd"):

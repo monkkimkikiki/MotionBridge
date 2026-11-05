@@ -172,6 +172,46 @@ def test_in_place_not_locked():
     print("in-place OK")
 
 
+def test_start_at_origin():
+    """원본 모션이 월드 좌표(원점에서 멀리)에서 시작해도 골반과 발이 모델 옆에 놓인다 (발 IK 가 멀리 끌려가지 않음)."""
+    sc, tc = COMBOS[0]
+    ssk, smeta = synth.build_skeleton(**sc)
+    tsk, tmeta = synth.build_skeleton(**tc)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=60)
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    pairs, chains = pairs_from_slots(sm, tm), default_chains(sm, tm)
+    hips_s = ssk.parents.tolist().index(-1) if sm.get("Hips", -1) < 0 else sm["Hips"]
+    # 원본을 월드 좌표로 멀리 옮긴다 (루트 위치에 수평 오프셋 더하기)
+    far = type(an)(an.name, an.fps, an.rot.copy(), an.pos.copy())
+    F0 = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=True), chains, sm, tm).frame_src[0]
+    off = Q.rotate(Q.conj(F0), np.array([500.0, 0.0, 800.0]) * smeta.get("scale", 1.0))  # 표준 프레임 수평 (X,Z) 오프셋 -> 원본 프레임
+    for j in range(ssk.n):
+        if ssk.parents[j] < 0:
+            far.pos[:, j] += off
+    base = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=True), chains, sm, tm)
+    r_on = retarget(ssk, far, tsk, pairs, RetargetSettings(foot_ik=True), chains, sm, tm)
+    r_off = retarget(ssk, far, tsk, pairs, RetargetSettings(foot_ik=True, start_at_origin=False), chains, sm, tm)
+    F = base.frame_tgt[0]
+    pb, _ = canon(tsk, base.anim, F)
+    pon, _ = canon(tsk, r_on.anim, F)
+    poff, _ = canon(tsk, r_off.anim, F)
+    h = tm["Hips"]
+    height = np.ptp(pb[0, :, 1])
+    hb0 = pb[0, h, [0, 2]]
+    # 첫 프레임 골반 수평 위치 = 원본이 원점에서 시작했을 때(첫 프레임 기준)의 위치와 같다 (오프셋과 무관)
+    p_on_rel = pon[:, h, :][:, [0, 2]] - pon[0, h, [0, 2]]
+    p_base_rel = pb[:, h, :][:, [0, 2]] - pb[0, h, [0, 2]]
+    assert np.abs(p_on_rel - p_base_rel).max() < 0.02 * height, "이동량이 달라짐"
+    bwp = tsk.bind_world()[1]
+    bind_xz = Q.rotate(F, bwp)[h][[0, 2]]
+    assert np.linalg.norm(pon[0, h, [0, 2]] - bind_xz) < 0.02 * height, "시작 위치가 모델 바인드 위치와 다름"
+    assert np.linalg.norm(poff[0, h, [0, 2]] - bind_xz) > 3 * height, "끄면 원본 절대 위치가 그대로 옮겨져야 함(켜고 끈 차이 확인)"
+    # 발이 골반에서 멀리 떨어지지 않는다 (IK 목표도 같이 옮겨졌는지)
+    lf = tm["L_Foot"]
+    assert np.linalg.norm(pon[:, lf] - pon[:, h], axis=1).max() < 1.3 * height, "발이 골반에서 너무 멀다 (IK 목표가 멀리 끌려감)"
+    print("start at origin OK")
+
+
 def test_offsets():
     sc, tc = COMBOS[0]
     base = setup(sc, tc)
@@ -274,6 +314,7 @@ if __name__ == "__main__":
     test_ik()
     test_overreach()
     test_in_place_not_locked()
+    test_start_at_origin()
     test_offsets()
     test_partial_mapping()
     test_bvh_source_pipeline()
