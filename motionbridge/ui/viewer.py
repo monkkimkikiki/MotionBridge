@@ -11,7 +11,7 @@ from PySide6.QtCore import QLineF
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
-from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, render_surface,
+from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, drag_placement, render_surface,
                           skin_display, wire_segments)
 
 _POINT_RADIUS = {"pt_mesh": 0.0, "pt_target_joints": 2.0, "pt_plant": 6.0, "pt_bad": 6.0}
@@ -37,6 +37,7 @@ def decode_texture(data: bytes):
 class Viewport(QWidget):
     camera_moved = Signal()
     key_action = Signal(str)  # 뷰포트에 포커스가 있을 때의 키: prev next first last play
+    placement_dragged = Signal(float, float, float)  # 드래그로 바뀐 애니메이션 배치 (dx, dz, dyaw°)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,6 +48,7 @@ class Viewport(QWidget):
         self.vd: Optional[ViewData] = None
         self.frame = 0
         self.follow = True
+        self.drag_mode = "camera"  # 왼쪽 드래그: camera(회전) | move(애니메이션 이동) | rotate(애니메이션 회전). Shift=이동, Ctrl=회전 은 언제나 우선
         self.paused = False  # 백그라운드 작업 중에는 데이터를 건드리지 않는다
         self.show_ghost = True
         self.mesh_mode = "solid"
@@ -150,7 +152,7 @@ class Viewport(QWidget):
             p.end()
             return
         cam = self.cam
-        if self.follow:
+        if self.follow and getattr(self, "_drag", "camera") == "camera":  # 애니메이션을 끄는 동안은 카메라를 고정해야 손을 따라온다
             foc = self.vd.focus(self.frame)
             cam_t = cam.target.copy()
             cam.target = np.array([foc[0], cam_t[1], foc[2]])
@@ -201,7 +203,7 @@ class Viewport(QWidget):
             p.drawText(12, y0, "● " + text)
             y0 += 16
         p.setPen(QColor(120, 128, 145))
-        p.drawText(12, int(h) - 10, "좌클릭 드래그: 회전   우/휠클릭 드래그: 이동   휠: 확대/축소   F: 화면 맞추기   1~5: 메시 보기   B: 뼈대")
+        p.drawText(12, int(h) - 10, "좌클릭 드래그: 회전   우/휠클릭 드래그: 이동   휠: 확대/축소   Shift+드래그: 애니메이션 이동   Ctrl+드래그: 애니메이션 회전   F: 화면 맞추기")
         if note:
             p.setPen(QColor(230, 180, 90))
             p.drawText(12, int(h) - 28, note)
@@ -220,9 +222,20 @@ class Viewport(QWidget):
     def mousePressEvent(self, ev):
         self.setFocus()
         self._last = ev.position()
+        self._drag = self._left_mode(ev.button(), ev.modifiers())
+
+    def _left_mode(self, button, mods) -> str:
+        if button != Qt.MouseButton.LeftButton:
+            return "camera"
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            return "move"
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            return "rotate"
+        return self.drag_mode if self.drag_mode in ("move", "rotate") else "camera"
 
     def mouseReleaseEvent(self, ev):
         self._last = None
+        self._drag = "camera"
         self._mesh_ms = 0.0
         self.update()  # 드래그가 끝나면 전체 품질로 다시 그린다
 
@@ -233,6 +246,13 @@ class Viewport(QWidget):
         dx, dy = pos.x() - self._last.x(), pos.y() - self._last.y()
         self._last = pos
         btn = ev.buttons()
+        mode = getattr(self, "_drag", "camera")
+        if (btn & Qt.MouseButton.LeftButton) and mode in ("move", "rotate") and self.vd is not None:
+            vd = self.vd
+            ddx, ddz, dyaw = drag_placement(self.cam, mode, (pos.x() - dx, pos.y() - dy), (pos.x(), pos.y()), float(self.width()), float(self.height()), vd.ground_y, (vd.center[0], vd.center[2]))
+            if ddx or ddz or dyaw:
+                self.placement_dragged.emit(ddx, ddz, dyaw)
+            return
         if btn & Qt.MouseButton.LeftButton:
             self.cam.orbit(dx, dy)
         elif btn & (Qt.MouseButton.RightButton | Qt.MouseButton.MiddleButton):

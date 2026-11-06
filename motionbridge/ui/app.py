@@ -355,6 +355,23 @@ class MainWindow(QMainWindow):
         opts.addWidget(b)
         opts.addStretch(1)
         rl.addLayout(opts)
+        pl = QHBoxLayout()
+        pl.addWidget(QLabel("왼쪽 드래그"))
+        self.drag_combo = QComboBox()
+        for k, n in (("camera", "카메라 회전"), ("move", "애니메이션 이동"), ("rotate", "애니메이션 회전")):
+            self.drag_combo.addItem(n, k)
+        self.drag_combo.setToolTip("애니메이션 이동/회전: 바닥 위에서 모션 전체를 끌어 위치·방향을 맞춥니다.\n어느 모드든 Shift+드래그=이동, Ctrl+드래그=회전은 항상 됩니다.")
+        self.drag_combo.currentIndexChanged.connect(lambda *_a: setattr(self.viewport, "drag_mode", self.drag_combo.currentData() or "camera"))
+        pl.addWidget(self.drag_combo)
+        self.place_label = QLabel("")
+        self.place_label.setStyleSheet("color:#8a93a6")
+        pl.addWidget(self.place_label, 1)
+        b = QPushButton("배치 초기화")
+        b.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
+        b.clicked.connect(self._place_reset)
+        pl.addWidget(b)
+        rl.addLayout(pl)
+        self.viewport.placement_dragged.connect(self._placement_dragged)
         tl = QHBoxLayout()
         self.btn_play = QPushButton("▶ 재생")
         self.btn_play.setCheckable(True)
@@ -1000,6 +1017,13 @@ class MainWindow(QMainWindow):
             nf.changed.connect(lambda v, ax=i: self._hip_changed(ax, v))
             self.hip_fields.append(nf)
             f.addRow(lab, nf)
+        self.place_fields = []
+        for i, lab in enumerate(("배치 이동 좌우(X)", "배치 이동 앞뒤(Z)")):
+            nf = NumField(-100, 100, 0.1, 0.0, 2, slider=True)
+            nf.setToolTip("모션 전체(골반과 발)를 바닥 위에서 옮깁니다. 뷰포트에서 Shift+드래그로도 조절됩니다")
+            nf.changed.connect(lambda v, ax=i: self._place_changed(ax, v))
+            self.place_fields.append(nf)
+            f.addRow(lab, nf)
         f.addRow("루트 회전(Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
         f.addRow(self._chk("transfer_root_motion", "제자리(인플레이스) — 수평 이동 제거", "체크하면 캐릭터가 앞으로 나아가지 않고 제자리에서 움직입니다", invert=True))
         f.addRow(self._chk("start_at_origin", "시작 위치를 모델 원점에 맞춤", "게임 모션은 월드 좌표에서 시작하는 경우가 많습니다. 켜면 첫 프레임의 수평 위치를 모델이 서 있는 자리로 옮기고 이동량만 따라갑니다. 끄면 원본 절대 위치를 그대로 씁니다."))
@@ -1546,6 +1570,36 @@ class MainWindow(QMainWindow):
         self.pr.settings.hip_offset = tuple(h)
         self.schedule()
 
+    def _place_changed(self, axis: int, value: float) -> None:
+        if self._syncing:
+            return
+        p = list(self.pr.settings.place_offset)
+        p[axis] = value
+        self.pr.settings.place_offset = (p[0], p[1])
+        self._update_place_label()
+        self.schedule()
+
+    def _placement_dragged(self, dx: float, dz: float, dyaw: float) -> None:
+        """뷰포트에서 끌어 바꾼 애니메이션 배치를 설정에 더한다."""
+        st = self.pr.settings
+        st.place_offset = (st.place_offset[0] + dx, st.place_offset[1] + dz)
+        y = st.root_yaw_deg + dyaw
+        st.root_yaw_deg = float((y + 180.0) % 360.0 - 180.0)
+        self._sync_settings_ui()
+        self.schedule()
+
+    def _place_reset(self) -> None:
+        st = self.pr.settings
+        st.place_offset = (0.0, 0.0)
+        st.root_yaw_deg = 0.0
+        self._sync_settings_ui()
+        self.schedule()
+
+    def _update_place_label(self) -> None:
+        st = self.pr.settings
+        moved = abs(st.place_offset[0]) > 1e-9 or abs(st.place_offset[1]) > 1e-9 or abs(st.root_yaw_deg) > 1e-9
+        self.place_label.setText(("배치: 좌우 %.3g · 앞뒤 %.3g · 회전 %.1f°" % (st.place_offset[0], st.place_offset[1], st.root_yaw_deg)) if moved else "")
+
     def _update_hip_ranges(self) -> None:
         if self.pr.tgt is None:
             return
@@ -1554,6 +1608,8 @@ class MainWindow(QMainWindow):
         step = max(size / 400.0, 1e-4)
         for nf in self.hip_fields:
             nf.set_range(-size * 0.5, size * 0.5, step)
+        for nf in self.place_fields:
+            nf.set_range(-size * 3.0, size * 3.0, step)
         self.ground_field.set_range(-size * 0.2, size * 0.2, step)
 
     def _sync_settings_ui(self) -> None:
@@ -1574,6 +1630,9 @@ class MainWindow(QMainWindow):
                 wd.setCurrentIndex(max(i, 0))
         for i, nf in enumerate(self.hip_fields):
             nf.set_value(st.hip_offset[i])
+        for i, nf in enumerate(self.place_fields):
+            nf.set_value(st.place_offset[i])
+        self._update_place_label()
         self._fill_joint_combos()
         self._syncing = prev
 

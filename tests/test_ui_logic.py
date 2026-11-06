@@ -64,6 +64,20 @@ def test_full_flow():
         mw._fields["foot_ik"][0].setChecked(True)
         mw.hip_fields[1].spin.setValue(2.0)
         assert mw.pr.settings.hip_offset[1] == 2.0 and mw.pr.settings.hip_offset[0] == 0.0
+        # 뷰포트 드래그 배치: 값이 설정과 입력칸에 쌓이고, 초기화로 돌아온다
+        mw._placement_dragged(0.5, -0.25, 30.0)
+        mw._placement_dragged(0.5, 0.0, 170.0)
+        assert abs(mw.pr.settings.place_offset[0] - 1.0) < 1e-9 and abs(mw.pr.settings.place_offset[1] + 0.25) < 1e-9
+        assert abs(mw.pr.settings.root_yaw_deg - (-160.0)) < 1e-9, mw.pr.settings.root_yaw_deg  # 200° -> -160° 로 감김
+        assert abs(mw.place_fields[0].spin.value() - 1.0) < 1e-6 and mw.place_label.text()
+        mw.place_fields[1].spin.setValue(0.4)
+        assert abs(mw.pr.settings.place_offset[1] - 0.4) < 1e-9
+        mw._place_reset()
+        assert mw.pr.settings.place_offset == (0.0, 0.0) and mw.pr.settings.root_yaw_deg == 0.0 and mw.place_label.text() == ""
+        assert mw.viewport.drag_mode == "camera"
+        mw.drag_combo.setCurrentIndex(mw.drag_combo.findData("move"))
+        assert mw.viewport.drag_mode == "move"
+        mw.drag_combo.setCurrentIndex(0)
         axis_cb = mw._fields["src_up"][0]
         axis_cb.setCurrentIndex(axis_cb.findData("+Y"))
         assert mw.pr.settings.src_up == "+Y"

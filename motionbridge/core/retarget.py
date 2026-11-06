@@ -39,7 +39,8 @@ class RetargetSettings:
     scale_mult: float = 1.0  # 자동 스케일에 곱하는 배율
     manual_scale: float = 1.0  # auto_scale=False 일 때 사용하는 절대 스케일
     hip_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # (좌우, 높이, 앞뒤) 타깃 단위
-    root_yaw_deg: float = 0.0
+    root_yaw_deg: float = 0.0  # 모션 전체를 시작 위치 기준으로 돌린다
+    place_offset: Tuple[float, float] = (0.0, 0.0)  # 모션 전체의 바닥면 이동 (좌우 X, 앞뒤 Z; 타깃 단위). 몸 전체(골반+발 IK)가 같이 움직인다
     transfer_root_motion: bool = True  # False 면 제자리(수평 이동 제거)
     # 게임 모션은 월드 좌표(원점에서 수 m 떨어진 곳)에서 시작하는 일이 많다. True 면 첫 프레임의 수평 위치를 타깃 바인드 위치에 맞추고
     # 그 뒤의 이동량만 옮긴다(골반이 모델에서 멀리 떨어져 어긋나 보이는 것을 막는다). 높이는 바인드 기준 그대로.
@@ -90,6 +91,7 @@ class RetargetResult:
     chains: List["IKChain"] = field(default_factory=list)  # 실제로 쓰인 IK 체인
     primary: Dict[int, int] = field(default_factory=dict)  # 타깃 본 -> 방향 기준이 된 매핑된 자식
     ik_applied: bool = False
+    ghost_pos: Optional[np.ndarray] = None  # (T,Js,3) 타깃 표준 프레임·타깃 단위의 소스 고스트(타깃에 겹치도록 배치·회전 반영)
 
 
 # --------------------------------------------------------------------------- 유틸
@@ -316,11 +318,12 @@ def retarget(
 
     # ---- 목표 월드 위치 (위치 구동 관절)
     hip_off = np.array(st.hip_offset, dtype=float)
+    place = np.array([st.place_offset[0], 0.0, st.place_offset[1]], dtype=float)
     pos_world: Dict[int, np.ndarray] = {}
     for t in posdriven:
         s = pair_of[t]
         delta = ps[:, s] - bps[s] - rootoff
-        pc = bpt[t] + Q.rotate(yaw_q, k * delta)
+        pc = bpt[t] + Q.rotate(yaw_q, k * delta) + place
         if t == com:
             pc = pc + hip_off
         pos_world[t] = Q.rotate(FtI, pc)
@@ -382,7 +385,7 @@ def retarget(
             sp = np.linalg.norm(vel, axis=1)
             contact = clean_mask((sc[:, 1] - ymin < st.contact_height * Ls) & (sp < st.contact_speed * Ls))
             fkc = Q.rotate(Ft, Wp[:, ch.foot])
-            Dc = bpt[ch.foot] + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
+            Dc = bpt[ch.foot] + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
             goal = Dc.copy()
             w = np.zeros(T)
             for a, b in _runs(contact):
@@ -451,9 +454,18 @@ def retarget(
 
     Lr = Q.make_continuous(Q.normalize(Lr))
     anim = Animation(sanim.name, fps, Lr, Lp)
+
+    # ---- 소스 고스트: 소스 COM 의 바인드 위치를 타깃 COM 의 바인드 위치에 올려서 겹쳐 보이게 한다(루트 보정·회전·배치 포함). 높이는 소스 바닥 기준 그대로.
+    ghost = ps * k
+    if com >= 0 and com in pair_of:
+        g = Q.rotate(yaw_q, k * (ps - bps[pair_of[com]] - rootoff[:, None, :]))
+        g[..., 0] += bpt[com][0] + place[0] + hip_off[0]
+        g[..., 2] += bpt[com][2] + place[2] + hip_off[2]
+        g[..., 1] = ps[..., 1] * k
+        ghost = g
     return RetargetResult(
         anim, float(k), (Fs, desc_s), (Ft, desc_t), plans, drop, warnings, list(pairs), com, corr, ps,
-        chains=valid_chains, primary=primary, ik_applied=bool(st.foot_ik and valid_chains),
+        chains=valid_chains, primary=primary, ik_applied=bool(st.foot_ik and valid_chains), ghost_pos=ghost,
     )
 
 

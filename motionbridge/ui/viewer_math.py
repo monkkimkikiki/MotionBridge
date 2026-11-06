@@ -65,6 +65,19 @@ class OrbitCamera:
         xy = np.stack([w / 2 + s * x / zz, h / 2 - s * y / zz], axis=1)
         return xy, z
 
+    def ground_point(self, px: float, py: float, w: float, h: float, y: float = 0.0) -> Optional[np.ndarray]:
+        """화면 좌표 (px,py) 에서 나온 시선이 수평면 Y=y 와 만나는 점. 만나지 않으면(수평선 위쪽 등) None."""
+        r, u, f = self.basis()
+        s = (h / 2) / np.tan(self.fov / 2)
+        d = f + r * ((px - w / 2) / s) - u * ((py - h / 2) / s)
+        if abs(d[1]) < 1e-9:
+            return None
+        e = self.eye()
+        t = (y - e[1]) / d[1]
+        if t <= 0:
+            return None
+        return e + d * t
+
     def project_segments(self, seg: np.ndarray, w: float, h: float) -> np.ndarray:
         """(N,2,3) -> (M,4) [x0,y0,x1,y1]. 카메라 뒤쪽은 근평면에서 자른다."""
         if len(seg) == 0:
@@ -83,6 +96,24 @@ class OrbitCamera:
         pa, _ = self.project(a, w, h)
         pb, _ = self.project(b, w, h)
         return np.concatenate([pa, pb], axis=1)
+
+
+def drag_placement(cam: "OrbitCamera", mode: str, p0, p1, w: float, h: float, y: float, pivot_xz) -> Tuple[float, float, float]:
+    """마우스가 p0 -> p1 로 움직였을 때 애니메이션 배치 변화량 (dx, dz, dyaw_deg). 바닥면(Y=y) 위에서 계산한다.
+    mode 'move': 바닥 위 이동량 / 'rotate': pivot 주위로 돈 각도. 바닥을 못 맞히면 변화 없음."""
+    a = cam.ground_point(p0[0], p0[1], w, h, y)
+    b = cam.ground_point(p1[0], p1[1], w, h, y)
+    if a is None or b is None:
+        return 0.0, 0.0, 0.0
+    if mode == "move":
+        return float(b[0] - a[0]), float(b[2] - a[2]), 0.0
+    ax, az = a[0] - pivot_xz[0], a[2] - pivot_xz[1]
+    bx, bz = b[0] - pivot_xz[0], b[2] - pivot_xz[1]
+    if min(np.hypot(ax, az), np.hypot(bx, bz)) < 1e-9:
+        return 0.0, 0.0, 0.0
+    d = np.degrees(np.arctan2(az, ax) - np.arctan2(bz, bx))  # Y축 양의 회전은 (x,z) 평면 각도를 줄인다
+    d = (d + 180.0) % 360.0 - 180.0
+    return 0.0, 0.0, float(d)
 
 
 def bone_segments(skel_parents: np.ndarray, pos: np.ndarray, skip_zero: bool = True) -> np.ndarray:
@@ -169,7 +200,7 @@ class ViewData:
                 wr, wp = fk(tk, res.anim.rot, res.anim.pos)
                 Ft = res.frame_tgt[0]
                 vd.n_frames, vd.fps = res.anim.n_frames, res.anim.fps
-                vd.ghost_pos = res.src_canon_pos * res.k
+                vd.ghost_pos = res.ghost_pos if res.ghost_pos is not None else res.src_canon_pos * res.k
                 vd.ghost_parents = reduced_parents(pr.src.skeleton.parents, pr.src_slots, mf)
                 for p in res.plans:
                     vd.contact[p.label] = p.contact

@@ -309,7 +309,40 @@ def test_bvh_source_pipeline():
     print("bvh source pipeline OK (최대 오차 %.2f%% of height)" % (100 * err / height))
 
 
+def test_placement_and_ghost():
+    """배치 이동·회전은 몸 전체(골반+발)를 함께 옮기고, 고스트는 타깃 골반 위에 겹친다."""
+    sc, tc = COMBOS[0]
+    base = setup(sc, tc, st=RetargetSettings(foot_ik=True))
+    ssk, an, tsk, res0 = base[0], base[1], base[2], base[3]
+    sm, tm = base[4], base[5]
+    com = res0.com
+    pair_of = {t: s for s, t in res0.pairs}
+    pc0, _ = canon(tsk, res0.anim, res0.frame_tgt[0])
+    # 고스트: 소스 COM 의 수평 위치가 타깃 COM 과 모든 프레임에서 같다 (루트 모션까지 포함)
+    gh = res0.ghost_pos
+    assert gh.shape == res0.src_canon_pos.shape
+    assert np.allclose(gh[:, pair_of[com]][:, [0, 2]], pc0[:, com][:, [0, 2]], atol=1e-4), "고스트가 타깃 골반에 안 겹침"
+    # 이동: 모든 관절이 같은 벡터만큼 (IK 켠 상태에서도 발까지)
+    st = RetargetSettings(foot_ik=True, place_offset=(0.3, -0.2))
+    res1 = setup(sc, tc, st=st)[3]
+    pc1, _ = canon(tsk, res1.anim, res1.frame_tgt[0])
+    mapped = sorted(pair_of)  # 매핑 안 된 최상위 본(루트 등)은 원래 안 움직인다
+    d = (pc1 - pc0)[:, mapped]
+    assert np.allclose(d[..., 0], 0.3, atol=2e-2) and np.allclose(d[..., 2], -0.2, atol=2e-2), (d[..., 0].min(), d[..., 0].max())
+    assert np.allclose(res1.ghost_pos[..., [0, 2]] - gh[..., [0, 2]], [0.3, -0.2], atol=1e-6)
+    # 회전: 시작 위치를 축으로 돌고, 고스트도 같이 돈다
+    st = RetargetSettings(foot_ik=False, root_yaw_deg=90.0)
+    res2 = setup(sc, tc, st=st)[3]
+    pc2, _ = canon(tsk, res2.anim, res2.frame_tgt[0])
+    p0 = pc0[0, com]
+    a0, a2 = pc0[:, com] - p0, pc2[:, com] - p0
+    assert np.allclose(np.linalg.norm(a0[:, [0, 2]], axis=1), np.linalg.norm(a2[:, [0, 2]], axis=1), atol=1e-4)
+    assert np.allclose(res2.ghost_pos[:, pair_of[com]][:, [0, 2]], pc2[:, com][:, [0, 2]], atol=1e-4)
+    print("placement OK")
+
+
 if __name__ == "__main__":
+    test_placement_and_ghost()
     test_fk_invariants()
     test_ik()
     test_overreach()

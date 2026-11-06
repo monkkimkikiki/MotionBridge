@@ -8,6 +8,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
+from motionbridge.core import quat as Q  # noqa: E402
 from motionbridge.core.pipeline import Project  # noqa: E402
 from motionbridge.ui.viewer_math import COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_scene  # noqa: E402
 import test_pipeline as TP  # noqa: E402
@@ -37,6 +38,38 @@ def test_camera():
     cam.pan(10, 0, 600)
     assert abs((cam.target - t0) @ f) < 1e-9
     print("camera OK")
+
+
+def test_drag_placement():
+    from motionbridge.ui.viewer_math import drag_placement
+
+    cam = OrbitCamera()
+    cam.target = np.array([0.0, 0.0, 0.0])
+    cam.dist = 5.0
+    W, H = 800, 600
+    # 바닥 위 한 점을 투영했다가 되돌려 맞힌다
+    pt = np.array([0.7, 0.0, -0.4])
+    xy, _ = cam.project(np.array([pt]), W, H)
+    g = cam.ground_point(xy[0, 0], xy[0, 1], W, H, 0.0)
+    assert np.allclose(g, pt, atol=1e-6), g
+    # 수평선 위쪽(하늘)을 누르면 바닥을 못 맞힌다
+    assert cam.ground_point(W / 2, 0.0, W, H, 0.0) is None
+    # 이동: 바닥 점이 p0 -> p1 로 가도록 끈 만큼 dx,dz 가 나온다
+    a, b = np.array([0.2, 0.0, 0.1]), np.array([0.9, 0.0, -0.5])
+    pa, _ = cam.project(np.array([a]), W, H)
+    pb, _ = cam.project(np.array([b]), W, H)
+    dx, dz, dy = drag_placement(cam, "move", pa[0], pb[0], W, H, 0.0, (0.0, 0.0))
+    assert abs(dx - 0.7) < 1e-6 and abs(dz + 0.6) < 1e-6 and dy == 0.0
+    # 회전: pivot 주위로 +Z 에서 +X 쪽으로 가면 (Y축 양의 회전: z->x) +각도
+    a, b = np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])
+    pa, _ = cam.project(np.array([a]), W, H)
+    pb, _ = cam.project(np.array([b]), W, H)
+    dx, dz, dy = drag_placement(cam, "rotate", pa[0], pb[0], W, H, 0.0, (0.0, 0.0))
+    assert dx == 0.0 and dz == 0.0 and abs(dy - 90.0) < 1e-4, dy
+    # 같은 각도만큼 retarget 쪽 yaw 와 방향이 일치: (0,0,1) 을 Y축 +90° 돌리면 (1,0,0)
+    qy = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(90.0))
+    assert np.allclose(Q.rotate(qy, np.array([0.0, 0.0, 1.0])), [1.0, 0.0, 0.0], atol=1e-9)
+    print("drag placement OK")
 
 
 def render_png(vd, pr, frame, path, cam=None, size=(640, 520)):
@@ -83,6 +116,8 @@ def test_scene_and_render():
         assert abs(vd.ground_y) < 0.05 * vd.height or vd.ground_y < 0
         # 고스트는 같은 스케일: 키 비가 소스 키*k 와 맞는다
         gh = vd.ghost_pos[0]
+        # 고스트가 타깃 옆으로 멀리 떨어져 있지 않다 (골반이 서로 겹침)
+        assert np.linalg.norm(gh[:, [0, 2]].mean(axis=0) - vd.tgt_pos[0][:, [0, 2]].mean(axis=0)) < 0.6 * vd.height
         assert abs(np.ptp(gh[:, 1]) / np.ptp(vd.tgt_pos[0][:, 1]) - 1) < 0.35
         # 접지 표시가 어떤 프레임에는 있다
         assert any("pt_plant" in build_scene(vd, pr, f) for f in range(vd.n_frames))
@@ -338,6 +373,7 @@ if __name__ == "__main__":
     test_material_colors()
     test_heavy_mesh_performance()
     test_camera()
+    test_drag_placement()
     test_reduced_parents()
     test_display_mesh_render()
     test_gltf_material_roundtrip()

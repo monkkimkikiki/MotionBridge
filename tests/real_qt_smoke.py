@@ -151,6 +151,27 @@ with tempfile.TemporaryDirectory() as d:
     check(not bar.strip.grab().isNull() and len(bar.strip.blocks()) == 3, "편집 후 조각 3개 그리기")
     mw.frame_slider.setValue(3)
     check(bar.hold() and bar.undo() and bar.redo() and bar.reset() and mw.vd.n_frames == T0, "정지/되돌리기/다시/원본")
+    # 뷰포트 배치 드래그: Shift+왼쪽 드래그가 진짜 마우스 이벤트로 애니메이션 위치를 바꾼다
+    from PySide6.QtCore import QEvent, QPointF, Qt as _Qt  # noqa: E402
+    from PySide6.QtGui import QMouseEvent  # noqa: E402
+
+    vp = mw.viewport
+    vp.resize(800, 600)
+    app.processEvents()
+    shift = _Qt.KeyboardModifier.ShiftModifier
+    LB = _Qt.MouseButton.LeftButton
+
+    def _ev(kind, x, y, btn, btns):
+        return QMouseEvent(kind, QPointF(x, y), QPointF(x, y), btn, btns, shift)
+
+    before = tuple(mw.pr.settings.place_offset)
+    vp.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, 400, 480, LB, LB))
+    for i in range(1, 6):
+        vp.mouseMoveEvent(_ev(QEvent.Type.MouseMove, 400 + 20 * i, 480, _Qt.MouseButton.NoButton, LB))
+    vp.mouseReleaseEvent(_ev(QEvent.Type.MouseButtonRelease, 500, 480, LB, _Qt.MouseButton.NoButton))
+    after = tuple(mw.pr.settings.place_offset)
+    check(after != before and vp._drag == "camera", "Shift+드래그 -> 애니메이션 위치가 바뀜: %s -> %s" % (before, after))
+    mw._place_reset()
     # 진행 창(추측 중): X/취소/Esc = 취소 신호 한 번, 정상 종료는 신호 없음
     from motionbridge.ui.widgets import BusyDialog  # noqa: E402
 

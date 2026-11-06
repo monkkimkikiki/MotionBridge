@@ -246,7 +246,7 @@ class Project:
         base = dataclasses.asdict(RetargetSettings())
         for k, v in st.items():
             if k in fields and k not in ("rot_offsets", "com_joint"):
-                base[k] = tuple(v) if k == "hip_offset" else v
+                base[k] = tuple(v) if k in ("hip_offset", "place_offset") else v
         base["rot_offsets"] = {}
         for nm, v in ro.items():
             if nm in tidx:
