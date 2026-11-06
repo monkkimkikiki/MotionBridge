@@ -5,7 +5,7 @@ import threading
 import traceback
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QProgressBar, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..core import animops
@@ -336,3 +336,61 @@ class EditPanel(QGroupBox):
         self.compress.setChecked(bool(c.get(p + "_compress", False)))
         self.rot.setValue(float(c.get(p + "_rot", 0.5)))
         self.pos.setValue(float(c.get(p + "_pos", 0.1)))
+
+
+class BusyDialog(QDialog):
+    """오래 걸리는 작업(몬스터 추측 등) 동안 뜨는 작은 진행 창. 그동안 다른 조작은 못 하므로 모달이고,
+    오른쪽 위 X 나 [취소] 나 Esc 가 모두 '작업 취소'다 (cancelled 신호)."""
+
+    cancelled = Signal()
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(440)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
+                            | Qt.WindowType.WindowCloseButtonHint)
+        self._done = False
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 14)
+        v.setSpacing(10)
+        self.text = QLabel(title + " …")
+        self.text.setWordWrap(True)
+        v.addWidget(self.text)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 0)  # 몇 개 중 몇 번째인지 모르면 움직이는 막대
+        v.addWidget(self.bar)
+        row = QHBoxLayout()
+        self.hint = QLabel("오른쪽 위 ✕ 로도 취소할 수 있어요")
+        self.hint.setEnabled(False)
+        row.addWidget(self.hint, 1)
+        self.btn = QPushButton("✕ 취소")
+        self.btn.clicked.connect(lambda *_a: self.reject())
+        row.addWidget(self.btn)
+        v.addLayout(row)
+
+    def set_progress(self, i: int, n: int, name: str, label: str = "") -> None:
+        if n > 1:
+            self.bar.setRange(0, int(n))
+            self.bar.setValue(int(min(max(i, 0), n)))
+            head = "%s (%d/%d)" % (label, min(i + 1, n), n) if label else "%d/%d" % (min(i + 1, n), n)
+        else:
+            self.bar.setRange(0, 0)
+            head = label
+        self.text.setText((head + "\n" if head else "") + name)
+
+    def finish(self) -> None:
+        """작업이 끝났을 때 취소 신호 없이 닫는다."""
+        self._done = True
+        self.hide()
+
+    def reject(self) -> None:
+        if not self._done:
+            self._done = True
+            self.cancelled.emit()
+        super().reject()
+
+    def closeEvent(self, ev) -> None:
+        self.reject()
+        ev.accept()

@@ -29,7 +29,7 @@ from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
 from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
-from .widgets import EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
+from .widgets import BusyDialog, EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -78,11 +78,6 @@ class MainWindow(QMainWindow):
         self.status_progress.setMaximumWidth(220)
         self.status_progress.setVisible(False)
         self.statusBar().addPermanentWidget(self.status_progress)
-        self.btn_cancel_job = QPushButton("■ 취소")
-        self.btn_cancel_job.setToolTip("진행 중인 작업(몬스터 추측 등)을 멈춥니다. 이미 시작한 한 단계는 뒤에서 끝나도 결과는 버립니다.")
-        self.btn_cancel_job.setVisible(False)
-        self.btn_cancel_job.clicked.connect(lambda *_a: self.cancel_async())
-        self.statusBar().addPermanentWidget(self.btn_cancel_job)
         self._zombies: list = []  # 취소했지만 아직 끝나지 않은 작업 스레드 (끝날 때까지 붙들어 둔다)
 
     # ================================================================== AnimRef 연결
@@ -1184,7 +1179,11 @@ class MainWindow(QMainWindow):
             return
         self._set_busy(True, label)
         self._on_done, self._busy_label, self._on_cancel = on_done, label, on_cancel
-        self.btn_cancel_job.setVisible(bool(cancellable))
+        self._busy_dlg = None
+        if cancellable:  # 취소할 수 있는 작업은 작은 진행 창을 띄운다 (X 가 곧 취소)
+            self._busy_dlg = BusyDialog(label, self)
+            self._busy_dlg.cancelled.connect(self.cancel_async)
+            self._busy_dlg.show()
         wk = Worker(fn, self)
         self._worker = wk
         # 바인딩된 메서드로 연결해야 콜백이 GUI 스레드에서 실행된다
@@ -1227,6 +1226,8 @@ class MainWindow(QMainWindow):
         self.export_log.appendPlainText(msg)
 
     def _worker_progress(self, i: int, n: int, name: str) -> None:
+        if getattr(self, "_busy_dlg", None) is not None:
+            self._busy_dlg.set_progress(i, n, name, self._busy_label)
         self.statusBar().showMessage("%s (%d/%d) %s" % (self._busy_label, i + 1, n, name))
 
     def _set_busy(self, busy: bool, label: str = "") -> None:
@@ -1235,8 +1236,9 @@ class MainWindow(QMainWindow):
         self.viewport.paused = busy
         self.viewport.update()
         self.status_progress.setVisible(busy)
-        if not busy:
-            self.btn_cancel_job.setVisible(False)
+        if not busy and getattr(self, "_busy_dlg", None) is not None:
+            self._busy_dlg.finish()
+            self._busy_dlg = None
         if busy:
             self.status_progress.setRange(0, 0)
             self.statusBar().showMessage(label + " …")

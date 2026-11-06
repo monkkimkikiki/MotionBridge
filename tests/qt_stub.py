@@ -127,6 +127,14 @@ class QObject(Stub):
     pass
 
 
+class QDialog(QWidget):
+    def reject(self):  # super().reject() 를 부르는 하위 클래스용 (Stub.__getattr__ 은 super() 에는 안 통한다)
+        pass
+
+    def accept(self):
+        pass
+
+
 class QCheckBox(QWidget):
     def __init__(self, text="", *a):
         super().__init__()

@@ -145,6 +145,24 @@ with tempfile.TemporaryDirectory() as d:
     check(not bar.strip.grab().isNull() and len(bar.strip.blocks()) == 3, "편집 후 조각 3개 그리기")
     mw.frame_slider.setValue(3)
     check(bar.hold() and bar.undo() and bar.redo() and bar.reset() and mw.vd.n_frames == T0, "정지/되돌리기/다시/원본")
+    # 진행 창(추측 중): X/취소/Esc = 취소 신호 한 번, 정상 종료는 신호 없음
+    from motionbridge.ui.widgets import BusyDialog  # noqa: E402
+
+    got = []
+    bd = BusyDialog("몬스터 추측 중", mw)
+    bd.cancelled.connect(lambda: got.append(1))
+    bd.show()
+    bd.set_progress(1, 4, "장면 a.png", "몬스터 추측 중")
+    app.processEvents()
+    check(bd.bar.maximum() == 4 and bd.bar.value() == 1 and "2/4" in bd.text.text(), "진행 창 진행률 표시")
+    bd.close()  # 오른쪽 위 X
+    bd.reject()
+    check(got == [1], "X 로 닫으면 취소 신호 한 번: %s" % got)
+    bd2 = BusyDialog("x", mw)
+    bd2.cancelled.connect(lambda: got.append(2))
+    bd2.show()
+    bd2.finish()
+    check(got == [1] and not bd2.isVisible(), "정상 종료는 취소 신호 없음")
     mw.close()
     check(alink.LOCAL_TOOL is None if ar.inner is not None else True, "닫으면 직접 전달 해제")
 

@@ -238,6 +238,26 @@ def test_worker_failure():
     assert seen == [True] and not called and cancelled == [1] and mw._worker is None and mw.tabs.isEnabled()
     assert len(mw._zombies) == 1 and not mw.cancel_async(), "작업이 없으면 취소는 아무 일도 안 함"
     mw._zombies = []
+    # 취소할 수 있는 작업은 진행 창이 뜨고, 창의 X(reject)가 곧 취소다. 끝나면 창은 닫힌다
+    shown = []
+
+    def fn2(w):
+        dlg = mw._busy_dlg
+        shown.append(dlg is not None)
+        w.progress.emit(2, 5, "장면 c.png")
+        mw._worker_progress(2, 5, "장면 c.png")
+        assert "3/5" in dlg.text.text() and "시험3" in dlg.text.text(), dlg.text.text()
+        dlg.reject()  # 사용자가 X 를 누름
+        return 7
+
+    called.clear(); cancelled.clear()
+    mw.run_async(fn2, lambda r: called.append(r), "시험3", cancellable=True, on_cancel=lambda: cancelled.append(1))
+    assert shown == [True] and not called and cancelled == [1] and mw._worker is None and mw._busy_dlg is None
+    mw._zombies = []
+    mw.run_async(lambda w: 3, lambda r: called.append(r), "시험4", cancellable=True)
+    assert called == [3] and mw._busy_dlg is None, "정상 종료하면 진행 창이 닫힘"
+    mw.run_async(lambda w: 3, lambda r: None, "시험5")
+    assert mw._busy_dlg is None, "취소 못 하는 작업엔 진행 창 없음"
     # 존재하지 않는 파일
     QFileDialog.open_ret = ("/nonexistent/x.glb", "")
     QMessageBox.calls.clear()
