@@ -34,7 +34,7 @@ def norm_text(s: str) -> str:
 
 
 def key_words(ns: str, key: str) -> List[str]:
-    """키(와 네임스페이스)에서 몬스터를 가리키는 단어만 뽑는다. 해시/GUID 키는 빈 목록."""
+    """키(와 네임스페이스)에서 캐릭터를 가리키는 단어만 뽑는다. 해시/GUID 키는 빈 목록."""
     if _HEXLIKE.match(key or ""):
         return []
     out: List[str] = []
@@ -167,7 +167,7 @@ def _vocab_for_ai(index: AssetIndex, limit: int) -> List[str]:
     names = index.names()
     if len(names) <= limit:
         return names
-    keep = {m.name for m in index.meshes if set(m.dirs) & layout.MARKERS}  # 몬스터/캐릭터 폴더의 것만
+    keep = {m.name for m in index.meshes if set(m.dirs) & layout.MARKERS}  # 캐릭터/캐릭터 폴더의 것만
     narrowed = [n for n in names if n in keep]
     return (narrowed or names)[:limit]
 
@@ -225,7 +225,7 @@ def find_meshes(name: str, index: AssetIndex, book: Optional[NameBook] = None, p
 # ---------------------------------------------------------------------- 사용자가 아는 정보
 @dataclass
 class Known:
-    """사용자가 적어 준 '이 영상에 나오는 몬스터' 한 줄."""
+    """사용자가 적어 준 '이 영상에 나오는 캐릭터' 한 줄."""
     name: str                       # 게임 속 이름 (The Nameless Captive)
     note: str = ""                  # 메모 (보스, 쇠사슬에 묶임 …)
     cands: List[MeshCandidate] = field(default_factory=list)  # 이름으로 찾은 메시 후보
@@ -261,11 +261,11 @@ def resolve_known(known: Sequence[Known], index: AssetIndex, book: Optional[Name
 
 
 def merge_known(groups: List["vision.Group"], known: Sequence[Known]) -> List["vision.Group"]:
-    """AI 가 찾은 몬스터 목록에 사용자가 알려 준 몬스터를 합친다.
+    """AI 가 찾은 캐릭터 목록에 사용자가 알려 준 캐릭터를 합친다.
 
     * AI 가 같은 메시로 인식했으면 그 줄을 확신 높게 + 게임 속 이름 메모
-    * AI 가 '모름' 한 줄이 하나뿐이고 알려 준 것도 하나 남았으면 같은 몬스터로 보고 합친다
-    * 그 밖에는 '사용자 지정' 줄을 새로 추가 (AI 가 놓친 몬스터)
+    * AI 가 '모름' 한 줄이 하나뿐이고 알려 준 것도 하나 남았으면 같은 캐릭터로 보고 합친다
+    * 그 밖에는 '사용자 지정' 줄을 새로 추가 (AI 가 놓친 캐릭터)
     """
     groups = list(groups)
     unmatched: List[Known] = []

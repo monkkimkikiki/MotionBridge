@@ -346,7 +346,7 @@ class EditPanel(QGroupBox):
 
 
 class BusyDialog(QDialog):
-    """오래 걸리는 작업(몬스터 추측 등) 동안 뜨는 작은 진행 창. 그동안 다른 조작은 못 하므로 모달이고,
+    """오래 걸리는 작업(캐릭터 추측 등) 동안 뜨는 작은 진행 창. 그동안 다른 조작은 못 하므로 모달이고,
     오른쪽 위 X 나 [취소] 나 Esc 가 모두 '작업 취소'다 (cancelled 신호)."""
 
     cancelled = Signal()

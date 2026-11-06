@@ -1,7 +1,7 @@
-"""동작·패턴 설명으로 애니메이션을 찾고, 그 애니메이션이 속한 몬스터를 거꾸로 알아낸다.
+"""동작·패턴 설명으로 애니메이션을 찾고, 그 애니메이션이 속한 캐릭터를 거꾸로 알아낸다.
 
 예) "7연속 스핀 공격" -> spin 계열 낱말(spin/rotate/whirl…)이 들어간 애니메이션 이름을 전부 찾고,
-    그 애니메이션이 많이/정확히 걸리는 몬스터 폴더(Swordman 등)를 후보로 올린다.
+    그 애니메이션이 많이/정확히 걸리는 캐릭터 폴더(Swordman 등)를 후보로 올린다.
 이름만으로 안 풀릴 때, 사람이 하던 "특징을 떠올려 라이브러리에서 spin 으로 검색" 방식을 자동화한 것이다.
 Qt/네트워크에 의존하지 않는다 (AI 는 키워드를 영어로 바꿔 주는 데만 선택적으로 쓴다).
 """
@@ -166,7 +166,7 @@ def monster_of(path: str) -> str:
 
 def search_anims(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str] = (), restrict: Optional[Iterable[str]] = None,
                  limit: int = 120, min_score: float = 0.34) -> Tuple[List[MotionHit], MotionQuery]:
-    """설명과 이름이 맞는 애니메이션 목록(점수 순). restrict: 이 몬스터 폴더 이름들 안에서만(소문자 비교)."""
+    """설명과 이름이 맞는 애니메이션 목록(점수 순). restrict: 이 캐릭터 폴더 이름들 안에서만(소문자 비교)."""
     q = parse_motion(text, extra_words)
     allow = {r.lower() for r in restrict} if restrict else None
     out: List[MotionHit] = []
@@ -184,7 +184,7 @@ def search_anims(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str]
 
 
 def monsters_from_hits(hits: Sequence[MotionHit], limit: int = 8) -> List[MonsterHit]:
-    """맞는 애니메이션을 몬스터별로 묶어 순위를 매긴다 (가장 잘 맞는 것 + 맞는 개수가 많을수록)."""
+    """맞는 애니메이션을 캐릭터별로 묶어 순위를 매긴다 (가장 잘 맞는 것 + 맞는 개수가 많을수록)."""
     by: Dict[str, List[MotionHit]] = {}
     for h in hits:
         by.setdefault(h.monster, []).append(h)
@@ -201,7 +201,7 @@ def monsters_from_hits(hits: Sequence[MotionHit], limit: int = 8) -> List[Monste
 
 
 def meshes_for(idx: assetidx.AssetIndex, mh: MonsterHit) -> List[assetidx.MeshCandidate]:
-    """몬스터 폴더에 속한 메시들을 후보로. 이름이 폴더명과 같은 것(본체)을 먼저."""
+    """캐릭터 폴더에 속한 메시들을 후보로. 이름이 폴더명과 같은 것(본체)을 먼저."""
     out: List[assetidx.MeshCandidate] = []
     for e in idx.meshes:
         if monster_of(e.path).lower() != mh.name.lower():
@@ -214,11 +214,11 @@ def meshes_for(idx: assetidx.AssetIndex, mh: MonsterHit) -> List[assetidx.MeshCa
 
 
 def find_meshes_by_motion(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str] = (), limit: int = 8):
-    """(메시 후보, 몬스터 순위, 맞는 애니메이션, 질의). 메시 후보는 몬스터 순위대로 이어 붙인다."""
+    """(메시 후보, 캐릭터 순위, 맞는 애니메이션, 질의). 메시 후보는 캐릭터 순위대로 이어 붙인다."""
     hits, q = search_anims(idx, text, extra_words)
     mons = monsters_from_hits(hits, limit)
     cands: List[assetidx.MeshCandidate] = []
     for m in mons:
         cands += meshes_for(idx, m)
-    cands.sort(key=lambda c: -c.score)  # 동점이면 몬스터 순위 순서 유지(안정 정렬)
+    cands.sort(key=lambda c: -c.score)  # 동점이면 캐릭터 순위 순서 유지(안정 정렬)
     return cands[:limit * 2], mons, hits, q

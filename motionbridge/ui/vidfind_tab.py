@@ -1,10 +1,10 @@
-"""'영상으로 찾기' 탭: 영상 속 몬스터를 추측 -> 검수자가 고침 -> 메시/애니메이션 후보 -> 선택 추출.
+"""'영상으로 찾기' 탭: 영상 속 캐릭터를 추측 -> 검수자가 고침 -> 메시/애니메이션 후보 -> 선택 추출.
 
 흐름
   1) 영상/이미지(또는 AnimRef 클립 폴더)를 넣는다.
-  2) 인식 방식(Ollama / Claude)을 고르고 [몬스터 추측]. 게임 에셋 이름 목록 안에서 고르게 시킨다.
+  2) 인식 방식(Ollama / Claude)을 고르고 [캐릭터 추측]. 게임 에셋 이름 목록 안에서 고르게 시킨다.
   3) 검수 표: 장면 이미지와 추측 이름이 보이고, 틀리면 후보 목록/검색으로 메시를 바꾼다. 고친 결과는 기억한다.
-  4) [검수 확정]: 메시 목록과, 그 몬스터의 애니메이션 후보(이름 일치 + 분류 + 타수 점수)가 나온다.
+  4) [검수 확정]: 메시 목록과, 그 캐릭터의 애니메이션 후보(이름 일치 + 분류 + 타수 점수)가 나온다.
   5) 체크한 메시/애니메이션을 기존 추출 흐름(Models/, Animations/)으로 뽑는다.
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ class _Row:
 
 
 def _thumb(frame: str, box) -> Optional[object]:
-    """장면 이미지(몬스터 위치가 있으면 그 부분)를 작은 그림으로. 읽지 못하면 None."""
+    """장면 이미지(캐릭터 위치가 있으면 그 부분)를 작은 그림으로. 읽지 못하면 None."""
     if not frame or not os.path.isfile(frame):
         return None
     try:
@@ -93,7 +93,7 @@ class VidFindTab(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(sc)
 
-        intro = QLabel("영상(또는 장면 이미지)에 나온 몬스터를 AI가 추측하고, 검수자가 고친 뒤 그 몬스터의 메시와 애니메이션을 골라 추출합니다.\n"
+        intro = QLabel("영상(또는 장면 이미지)에 나온 캐릭터를 AI가 추측하고, 검수자가 고친 뒤 그 캐릭터의 메시와 애니메이션을 골라 추출합니다.\n"
                        "먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사해 두세요.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
@@ -202,10 +202,10 @@ class VidFindTab(QWidget):
         self.filter.setToolTip("AI에게 알려줄 후보 이름을 경로로 줄입니다. 무기/소품이 섞이면 정확도가 떨어집니다.")
         h.addWidget(self.filter, 1)
         v.addLayout(h)
-        v.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 몬스터를 한 줄에 하나씩: 게임 속 이름 — 메모"))
+        v.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모"))
         self.known = QPlainTextEdit()
         self.known.setPlainText(self.cfg.get("vf_known", ""))
-        self.known.setPlaceholderText("예)\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior\n(비워도 됩니다. 적으면 이름이 달라도 리소스를 먼저 찾아 AI에게 알려 주고, AI가 놓친 몬스터도 표에 넣어 줍니다)")
+        self.known.setPlaceholderText("예)\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior\n(비워도 됩니다. 적으면 이름이 달라도 리소스를 먼저 찾아 AI에게 알려 주고, AI가 놓친 캐릭터도 표에 넣어 줍니다)")
         self.known.setMaximumHeight(90)
         v.addWidget(self.known)
         self.engine_note = QLabel("")
@@ -215,15 +215,15 @@ class VidFindTab(QWidget):
         self._engine_changed()
 
         # 3) 추측
-        g = QGroupBox("3) 몬스터 추측")
+        g = QGroupBox("3) 캐릭터 추측")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         self.min_conf = QSpinBox()
         self.min_conf.setRange(0, 100)
         self.min_conf.setSuffix("%")
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
-        self.min_conf.setToolTip("AI 확신이 이 값보다 낮으면 메시를 자동으로 고르지 않고 '직접 고르세요'로 둡니다 (엉뚱한 몬스터로 넘어가는 것을 막음).")
-        self.btn_guess = QPushButton("몬스터 추측 시작")
+        self.min_conf.setToolTip("AI 확신이 이 값보다 낮으면 메시를 자동으로 고르지 않고 '직접 고르세요'로 둡니다 (엉뚱한 캐릭터로 넘어가는 것을 막음).")
+        self.btn_guess = QPushButton("캐릭터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.btn_guess, 1)
@@ -275,20 +275,20 @@ class VidFindTab(QWidget):
         self.ingame_note = QLabel("")
         self.ingame_note.setWordWrap(True)
         v.addWidget(self.ingame_note)
-        # 특징·패턴으로 찾기: 이름이 다 틀려도 "7연속 스핀 공격" 같은 동작으로 애니메이션 이름을 뒤져 몬스터를 거꾸로 찾는다
+        # 특징·패턴으로 찾기: 이름이 다 틀려도 "7연속 스핀 공격" 같은 동작으로 애니메이션 이름을 뒤져 캐릭터를 거꾸로 찾는다
         h = QHBoxLayout()
         h.addWidget(QLabel("특징·패턴"))
         self.motion_text = QLineEdit()
         self.motion_text.setPlaceholderText("예: 7연속 스핀 공격 / 땅 내려찍기 / 점프 후 돌진 — 위 표에서 줄을 고른 뒤")
-        self.motion_text.setToolTip("이름으로 못 찾을 때: 그 몬스터의 특징적인 동작을 적으면 spin·slam·charge 같은 낱말로 애니메이션 이름을 검색하고,\n"
-                                    "그 애니메이션이 속한 몬스터를 후보로 올립니다.")
+        self.motion_text.setToolTip("이름으로 못 찾을 때: 그 캐릭터의 특징적인 동작을 적으면 spin·slam·charge 같은 낱말로 애니메이션 이름을 검색하고,\n"
+                                    "그 애니메이션이 속한 캐릭터를 후보로 올립니다.")
         self.motion_text.returnPressed.connect(self.find_by_motion)
         h.addWidget(self.motion_text, 1)
         self.motion_ai = QCheckBox("AI도 사용")
         self.motion_ai.setToolTip("동작 설명을 영어 낱말로 바꾸는 데만 씁니다(에셋 이름은 만들지 않음). 끄면 내장 낱말표만 씁니다.")
         self.motion_ai.setChecked(True)
         h.addWidget(self.motion_ai)
-        b = QPushButton("특징으로 몬스터 찾기")
+        b = QPushButton("특징으로 캐릭터 찾기")
         b.clicked.connect(lambda *_a: self.find_by_motion())
         h.addWidget(b)
         v.addLayout(h)
@@ -296,8 +296,8 @@ class VidFindTab(QWidget):
         self.motion_note.setWordWrap(True)
         v.addWidget(self.motion_note)
         h = QHBoxLayout()
-        b = QPushButton("몬스터 줄 직접 추가")
-        b.setToolTip("AI가 놓친 몬스터를 직접 넣습니다. 줄의 검색 칸에서 메시를 찾으세요.")
+        b = QPushButton("캐릭터 줄 직접 추가")
+        b.setToolTip("AI가 놓친 캐릭터를 직접 넣습니다. 줄의 검색 칸에서 메시를 찾으세요.")
         b.clicked.connect(self.add_blank_row)
         h.addWidget(b)
         b = QPushButton("선택한 줄 삭제")
@@ -318,7 +318,7 @@ class VidFindTab(QWidget):
         # 5) 후보 / 추출
         g = QGroupBox("5) 후보에서 골라 추출")
         v = QVBoxLayout(g)
-        v.addWidget(QLabel("메시 (확정한 몬스터)"))
+        v.addWidget(QLabel("메시 (확정한 캐릭터)"))
         self.mesh_list = QListWidget()
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mesh_list.setMinimumHeight(70)
@@ -347,11 +347,11 @@ class VidFindTab(QWidget):
         h.addWidget(QLabel("설명으로 찾기"))
         self.anim_q = QLineEdit()
         self.anim_q.setPlaceholderText("예: 스핀 공격 / 내려찍기 / 점프 — 비우고 누르면 기본 목록으로")
-        self.anim_q.setToolTip("동작 설명을 애니메이션 이름 낱말(spin, slam…)로 바꿔 검색합니다. 메시를 고르면 그 몬스터 안에서, 안 고르면 전체에서 찾습니다.")
+        self.anim_q.setToolTip("동작 설명을 애니메이션 이름 낱말(spin, slam…)로 바꿔 검색합니다. 메시를 고르면 그 캐릭터 안에서, 안 고르면 전체에서 찾습니다.")
         self.anim_q.returnPressed.connect(self.search_anims_by_text)
         h.addWidget(self.anim_q, 1)
-        self.anim_all = QCheckBox("모든 몬스터에서")
-        self.anim_all.setToolTip("끄면 위에서 고른(확정한) 몬스터의 애니메이션 안에서만 찾습니다.")
+        self.anim_all = QCheckBox("모든 캐릭터에서")
+        self.anim_all.setToolTip("끄면 위에서 고른(확정한) 캐릭터의 애니메이션 안에서만 찾습니다.")
         h.addWidget(self.anim_all)
         b = QPushButton("검색")
         b.clicked.connect(lambda *_a: self.search_anims_by_text())
@@ -381,7 +381,7 @@ class VidFindTab(QWidget):
         self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타깃 작업)")
         self.btn_view.setMinimumHeight(34)
         self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 열고 '1. 파일·매핑' 탭으로 이동합니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
-                                 "같은 스켈레톤(같은 몬스터)의 애니메이션만 함께 열립니다.")
+                                 "같은 스켈레톤(같은 캐릭터)의 애니메이션만 함께 열립니다.")
         self.btn_view.clicked.connect(lambda *_a: self.open_in_viewport())
         v.addWidget(self.btn_view)
         self.anim_list.itemDoubleClicked.connect(self._anim_double_clicked)
@@ -604,7 +604,7 @@ class VidFindTab(QWidget):
             narrowed = assetidx.AssetIndex([p for p in meshes if MONSTER_DIRS.search(p)], []).names()
             if len(narrowed) >= 3:
                 names = narrowed
-                notes.append("메시가 많아 몬스터 폴더(monster/enemy/boss)만 후보로 썼습니다 (%d종)." % len(names))
+                notes.append("메시가 많아 캐릭터 폴더(monster/enemy/boss)만 후보로 썼습니다 (%d종)." % len(names))
         if len(names) > limit:
             notes.append("이름 %d종 중 %d종만 AI에게 알렸습니다. '이름 필터'로 줄이면 정확해집니다." % (len(names), limit))
         return names, notes
@@ -612,7 +612,7 @@ class VidFindTab(QWidget):
     def start_guess(self, force_index: bool = False) -> None:
         srcs = self.source_paths()
         if not srcs:
-            QMessageBox.warning(self, "몬스터 추측", "영상/이미지를 먼저 추가하세요.")
+            QMessageBox.warning(self, "캐릭터 추측", "영상/이미지를 먼저 추가하세요.")
             return
         a = self.win._extract_args()
         if a is None:
@@ -666,7 +666,7 @@ class VidFindTab(QWidget):
             errors: List[str] = []
             for i, f in enumerate(fr):
                 stop_check(w)  # 취소하면 다음 장면부터 안 한다
-                w.progress.emit(i, len(fr), "몬스터 인식 중 " + os.path.basename(f.path))
+                w.progress.emit(i, len(fr), "캐릭터 인식 중 " + os.path.basename(f.path))
                 try:
                     dets += prov.analyze(f.path, vocab, hint, klines)
                 except vision.VisionError as e:
@@ -675,21 +675,21 @@ class VidFindTab(QWidget):
                         break  # 계속 실패하면 멈춘다 (키/연결 문제)
             return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
 
-        self.win.run_async(job, self._after_guess, "몬스터 추측 중", cancellable=True,
-                           on_cancel=lambda: self.status.setText("몬스터 추측을 취소했습니다. 인식 방식을 바꾸고 다시 시작할 수 있어요."))
+        self.win.run_async(job, self._after_guess, "캐릭터 추측 중", cancellable=True,
+                           on_cancel=lambda: self.status.setText("캐릭터 추측을 취소했습니다. 인식 방식을 바꾸고 다시 시작할 수 있어요."))
 
     def _after_guess(self, res) -> None:
         self.index = res["idx"]
         groups: List[vision.Group] = res["groups"]
         self.fill_table(groups)
-        lines = ["장면 %d장 분석, 몬스터 %d종 추측 (AI에게 알린 이름 %d종, 에셋 메시 %d / 애니메이션 %d)" % (
+        lines = ["장면 %d장 분석, 캐릭터 %d종 추측 (AI에게 알린 이름 %d종, 에셋 메시 %d / 애니메이션 %d)" % (
             res["frames"], len(groups), res["vocab"], len(self.index.meshes), len(self.index.anims))]
         lines += res["notes"]
         if res["errors"]:
             lines.append("인식 오류 %d건: %s" % (len(res["errors"]), res["errors"][0][:200]))
         self.status.setText("\n".join(lines))
         if not groups:
-            QMessageBox.warning(self, "몬스터 추측", "몬스터를 찾지 못했습니다.\n\n" + ("\n".join(res["errors"][:3]) or "다른 장면이나 인식 방식을 시도하세요. '몬스터 줄 직접 추가'로 직접 넣을 수도 있습니다."))
+            QMessageBox.warning(self, "캐릭터 추측", "캐릭터를 찾지 못했습니다.\n\n" + ("\n".join(res["errors"][:3]) or "다른 장면이나 인식 방식을 시도하세요. '캐릭터 줄 직접 추가'로 직접 넣을 수도 있습니다."))
 
     # ================================================================== 검수 표
     def _cand_text(self, c: assetidx.MeshCandidate) -> str:
@@ -796,7 +796,7 @@ class VidFindTab(QWidget):
             return
         idx = self._load_index_cached()
         if idx is None:
-            QMessageBox.warning(self, "게임 속 이름", "에셋 이름 목록이 아직 없습니다. 한 번 '몬스터 추측 시작'을 실행하세요.")
+            QMessageBox.warning(self, "게임 속 이름", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
             return
         if not self.rows:
             self.add_blank_row()
@@ -842,11 +842,11 @@ class VidFindTab(QWidget):
     def find_by_motion(self) -> None:
         text = self.motion_text.text().strip()
         if not text:
-            QMessageBox.warning(self, "특징·패턴", "몬스터의 특징적인 동작을 적으세요 (예: 7연속 스핀 공격).")
+            QMessageBox.warning(self, "특징·패턴", "캐릭터의 특징적인 동작을 적으세요 (예: 7연속 스핀 공격).")
             return
         idx = self._motion_index()
         if idx is None:
-            QMessageBox.warning(self, "특징·패턴", "에셋 이름 목록이 아직 없습니다. 한 번 '몬스터 추측 시작'을 실행하세요.")
+            QMessageBox.warning(self, "특징·패턴", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
             return
         if not self.rows:
             self.add_blank_row()
@@ -869,7 +869,7 @@ class VidFindTab(QWidget):
                 if row.search.text():
                     row.search.setText("")
             ri = self.rows.index(row)
-            self.table.setItem(ri, 1, QTableWidgetItem("특징: %s\n%s" % (text, ("몬스터 후보 %d종 — 맨 위가 가장 유력" % len(mons)) if mons else "후보 없음")))
+            self.table.setItem(ri, 1, QTableWidgetItem("특징: %s\n%s" % (text, ("캐릭터 후보 %d종 — 맨 위가 가장 유력" % len(mons)) if mons else "후보 없음")))
             if mons:
                 top = ", ".join("%s(%d%%)" % (m.name, round(m.score * 100)) for m in mons[:4])
                 ex = ", ".join(os.path.basename(h.path).split(".")[0] for h in mons[0].anims[:3])
@@ -887,7 +887,7 @@ class VidFindTab(QWidget):
             return
         idx = self._motion_index()
         if idx is None:
-            QMessageBox.warning(self, "설명으로 찾기", "에셋 이름 목록이 아직 없습니다. 한 번 '몬스터 추측 시작'을 실행하세요.")
+            QMessageBox.warning(self, "설명으로 찾기", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
             return
         restrict = None
         if not self.anim_all.isChecked() and self._selected_mesh_paths():
@@ -908,10 +908,10 @@ class VidFindTab(QWidget):
                 it.setData(Qt.ItemDataRole.UserRole, h.path)
                 it.setToolTip(h.path)
                 self.anim_list.addItem(it)
-            where = "고른 몬스터 안" if restrict else "전체"
+            where = "고른 캐릭터 안" if restrict else "전체"
             msg = "'%s' → %s%s. %s에서 애니메이션 %d개." % (text, q.describe(), (" + AI: " + ", ".join(extra)) if extra else "", where, len(hits))
             if not hits and restrict:
-                msg += " '모든 몬스터에서'를 켜 보세요."
+                msg += " '모든 캐릭터에서'를 켜 보세요."
             self.anim_note.setText((msg + " " + warn).strip())
 
         self.win.run_async(job, done, "애니메이션 찾는 중")
@@ -925,7 +925,7 @@ class VidFindTab(QWidget):
         self.rows.pop(cur)
         if self.rows:  # 다음 줄을 이어서 지울 수 있게 선택을 옮긴다
             self.table.selectRow(min(cur, len(self.rows) - 1))
-        self.status.setText("줄 삭제: 남은 몬스터 %d종" % len(self.rows))
+        self.status.setText("줄 삭제: 남은 캐릭터 %d종" % len(self.rows))
 
     def clear_rows(self) -> None:
         if not self.rows:
@@ -941,7 +941,7 @@ class VidFindTab(QWidget):
         if self.index is None:
             idx = assetidx.load_index(INDEX_CACHE, self.cfg.get("game_dir", ""))
             if idx is None:
-                QMessageBox.warning(self, "몬스터 줄 추가", "에셋 이름 목록이 아직 없습니다. 한 번 '몬스터 추측 시작'을 실행하세요.")
+                QMessageBox.warning(self, "캐릭터 줄 추가", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
                 return
             self.index = idx
         n = len(self.rows)
@@ -960,7 +960,7 @@ class VidFindTab(QWidget):
     def confirm(self) -> None:
         meshes = self.chosen_meshes()
         if not meshes:
-            QMessageBox.warning(self, "검수 확정", "메시가 정해진 몬스터가 없습니다. 후보에서 고르거나 검색 칸에서 찾으세요.")
+            QMessageBox.warning(self, "검수 확정", "메시가 정해진 캐릭터가 없습니다. 후보에서 고르거나 검색 칸에서 찾으세요.")
             return
         for r in self.rows:  # 검수자가 확정한 짝을 기억 -> 다음에 같은 추측이 나오면 맨 앞 후보
             p = r.chosen()
@@ -1011,11 +1011,11 @@ class VidFindTab(QWidget):
         if players:
             msg += " 플레이어블 캐릭터(%s)는 몸이 아니라 player/pc/hero 이름이 든 공용 애니메이션을 보여줍니다." % ", ".join(players[:3])
         if empty:
-            msg += " 이름이 맞는 애니메이션을 못 찾은 몬스터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
+            msg += " 이름이 맞는 애니메이션을 못 찾은 캐릭터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
         self.anim_note.setText(msg)
 
     def _char_map(self, anims: List[str]) -> Dict[str, str]:
-        """고른 메시가 둘 이상일 때, 애니메이션마다 이름이 가장 어울리는 몬스터 폴더를 정한다 (못 정하면 경로로)."""
+        """고른 메시가 둘 이상일 때, 애니메이션마다 이름이 가장 어울리는 캐릭터 폴더를 정한다 (못 정하면 경로로)."""
         meshes = [it.data(Qt.ItemDataRole.UserRole) for it in self.mesh_list.selectedItems()]
         idx = self.index
         if len(meshes) < 2 or idx is None:
@@ -1249,8 +1249,8 @@ class VidFindTab(QWidget):
                                  % (" #%s" % q["id"] if q.get("id") else "", n, " · " + " · ".join(facts) if facts else ""))
         if missing:
             self.link_banner.setText(self.link_banner.text() + "\n⚠ 영상 파일이 없습니다: " + wrappable(missing[0]))
-        if n and not missing:  # 받기만 한다 — 몬스터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
+        if n and not missing:  # 받기만 한다 — 캐릭터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
             sc = self.win.scan
             ready = sc is not None and sc.found and sc.root == self.win.ex_game.text().strip()
-            self.link_banner.setText(self.link_banner.text() + ("\n(인식 방식을 확인하고 '몬스터 추측 시작'을 눌러 주세요.)" if ready else
-                                     "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '몬스터 추측 시작'을 누르세요.)"))
+            self.link_banner.setText(self.link_banner.text() + ("\n(인식 방식을 확인하고 '캐릭터 추측 시작'을 눌러 주세요.)" if ready else
+                                     "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '캐릭터 추측 시작'을 누르세요.)"))

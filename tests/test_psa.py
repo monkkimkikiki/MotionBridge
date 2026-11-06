@@ -157,7 +157,7 @@ def test_psa_as_source():
 
 
 def test_load_source_many():
-    """여러 PSA 를 한 소스로: 같은 스켈레톤은 클립으로 합치고, 다른 몬스터/깨진 파일은 건너뛴다."""
+    """여러 PSA 를 한 소스로: 같은 스켈레톤은 클립으로 합치고, 다른 캐릭터/깨진 파일은 건너뛴다."""
     sk, anims = make()
     sk2, meta2 = synth.build_skeleton("mixamo", "y_up_z", 1.0, "T", "aligned")
     an3, _ = synth.walk_animation(sk2, meta2, n_frames=20, name="other")

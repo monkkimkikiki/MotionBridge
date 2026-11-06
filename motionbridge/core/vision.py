@@ -1,4 +1,4 @@
-"""장면 속 몬스터를 알아보는 이미지 인식 연결부: Ollama(내 PC) 또는 Claude(API).
+"""장면 속 캐릭터를 알아보는 이미지 인식 연결부: Ollama(내 PC) 또는 Claude(API).
 
   * 두 방식 모두 같은 질문을 보내고 같은 JSON 형식으로 받는다.
   * 게임에 실제로 있는 캐릭터 이름 목록(vocab)을 함께 보내, 목록 안에서 고르게 한다.
@@ -46,7 +46,7 @@ class Detection:
 
 @dataclass
 class Group:
-    """여러 장면에서 같은 몬스터로 묶은 결과 (검수 표의 한 줄)."""
+    """여러 장면에서 같은 캐릭터로 묶은 결과 (검수 표의 한 줄)."""
     name: str
     description: str
     seen: int
@@ -445,7 +445,7 @@ def aggregate(dets: Sequence[Detection]) -> List[Group]:
             if not ds:
                 continue
             key = ""
-            for k, other in udesc.items():  # 설명 단어가 절반 이상 겹치면 같은 몬스터로 본다
+            for k, other in udesc.items():  # 설명 단어가 절반 이상 겹치면 같은 캐릭터로 본다
                 if len(ds & other) / len(ds | other) >= 0.5:
                     key = k
                     break

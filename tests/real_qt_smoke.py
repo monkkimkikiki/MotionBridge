@@ -182,10 +182,10 @@ with tempfile.TemporaryDirectory() as d:
     from motionbridge.ui.widgets import BusyDialog  # noqa: E402
 
     got = []
-    bd = BusyDialog("몬스터 추측 중", mw)
+    bd = BusyDialog("캐릭터 추측 중", mw)
     bd.cancelled.connect(lambda: got.append(1))
     bd.show()
-    bd.set_progress(1, 4, "장면 a.png", "몬스터 추측 중")
+    bd.set_progress(1, 4, "장면 a.png", "캐릭터 추측 중")
     app.processEvents()
     check(bd.bar.maximum() == 4 and bd.bar.value() == 1 and "2/4" in bd.text.text(), "진행 창 진행률 표시")
     bd.close()  # 오른쪽 위 X

@@ -91,7 +91,7 @@ class Project:
                 base.animations += m.animations
                 base.notes += m.notes
             else:
-                skipped.append("%s: 스켈레톤이 달라 함께 열 수 없습니다 (처음 파일과 다른 몬스터)" % nm)
+                skipped.append("%s: 스켈레톤이 달라 함께 열 수 없습니다 (처음 파일과 다른 캐릭터)" % nm)
         if base is None:
             raise ValueError("열 수 있는 모션이 없습니다.\n" + "\n".join(skipped))
         self.src = base

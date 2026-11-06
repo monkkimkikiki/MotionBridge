@@ -122,8 +122,8 @@ def main():
         check(len(prompts) == 2, "장면마다 호출: %d" % len(prompts))
         r0, r1 = vt.rows
         check(r0.group.name == "Dwarf" and r0.chosen() == MESHES[0], "Dwarf 는 자동으로 맞는 메시: %s" % r0.chosen())
-        check(r1.chosen() is None and r1.combo.currentData() is None, "모르는 몬스터는 후보 없음")
-        check("몬스터 2종" in vt.status.text(), "상태: %s" % vt.status.text())
+        check(r1.chosen() is None and r1.combo.currentData() is None, "모르는 캐릭터는 후보 없음")
+        check("캐릭터 2종" in vt.status.text(), "상태: %s" % vt.status.text())
 
         # 검수: 검색으로 StoneGolem 지정
         r1.search.setText("golem")
@@ -136,14 +136,14 @@ def main():
         vt.confirm()
         check(vt.mesh_list.count() == 2 and vt.confirmed == [MESHES[0], MESHES[2]], "확정 메시: %s" % vt.confirmed)
         check(vt.anim_list.count() == 5, "애니메이션 후보 5개 (Dwarf 4 + Golem 1): %d" % vt.anim_list.count())
-        check(not any("Hexapod" in vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in range(vt.anim_list.count())), "다른 몬스터 제외")
+        check(not any("Hexapod" in vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in range(vt.anim_list.count())), "다른 캐릭터 제외")
         vt.label.setCurrentIndex(vt.label.findData("타격"))
         top = vt.anim_list.item(0).data(A.Qt.ItemDataRole.UserRole)
         check("Attack" in top or "Slam" in top, "타격 분류 최상위: %s" % top)
         vt.hits.setValue(3)
         check(vt.anim_list.item(0).data(A.Qt.ItemDataRole.UserRole).endswith("3Hit_Combo_1"), "3타 우선")
 
-        # 기억: 다시 추측하면 모르던 몬스터가 StoneGolem 으로 바로 제안된다
+        # 기억: 다시 추측하면 모르던 캐릭터가 StoneGolem 으로 바로 제안된다
         mem = assetidx.MatchMemory(os.path.join(d, "matches.json"))
         check(mem.best("unknown", "tall grey stone brute") == MESHES[2], "기억 파일에 저장됨")
         script["i"] = 0
@@ -228,7 +228,7 @@ def main():
         vt.find_by_ingame_name()
         check(QMessageBox.calls, "이름 없이 누르면 안내")
         del vt.provider  # 시험용으로 바꾼 것을 되돌림
-        # ---------------- 특징·패턴으로 몬스터 찾기: 이름이 다 틀려도 '스핀 공격' 애니메이션이 있는 몬스터를 거꾸로 찾는다
+        # ---------------- 특징·패턴으로 캐릭터 찾기: 이름이 다 틀려도 '스핀 공격' 애니메이션이 있는 캐릭터를 거꾸로 찾는다
         spin = "Sparta/Content/Characters/Bosses/Swordman/Animation/Attacks/AS_Swordman_SpinAttack_01"
         sword = "Sparta/Content/Characters/Bosses/Swordman/Art/Mesh/SK_Swordman"
         vt.index = assetidx.AssetIndex(MESHES + [pris, sword], ANIMS + [spin, "Sparta/Content/Characters/Bosses/Swordman/Animation/AS_Swordman_Idle"])
@@ -252,7 +252,7 @@ def main():
         vt.motion_text.setText("")
         vt.find_by_motion()
         check(QMessageBox.calls, "빈 설명 안내")
-        # 애니메이션 설명 검색: 고른 몬스터 안 / 모든 몬스터
+        # 애니메이션 설명 검색: 고른 캐릭터 안 / 모든 캐릭터
         vt.confirmed = [sword]
         vt.mesh_list.clear()
         vt.mesh_list.addItem(V.QListWidgetItem("Swordman"))
@@ -262,16 +262,16 @@ def main():
         vt.anim_all.setChecked(False)
         vt.search_anims_by_text()
         got = [vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in range(vt.anim_list.count())]
-        check(got == [spin], "고른 몬스터 안에서 스핀만: %s" % got)
+        check(got == [spin], "고른 캐릭터 안에서 스핀만: %s" % got)
         vt.anim_q.setText("slam")
         vt.search_anims_by_text()
-        check(vt.anim_list.count() == 0 and "모든 몬스터" in vt.anim_note.text(), "없으면 전체 검색 안내")
+        check(vt.anim_list.count() == 0 and "모든 캐릭터" in vt.anim_note.text(), "없으면 전체 검색 안내")
         vt.anim_all.setChecked(True)
         vt.search_anims_by_text()
         check(vt.anim_list.count() == 1 and "StoneGolem" in vt.anim_list.item(0).text(), "전체에서 찾음: %s" % vt.anim_list.item(0).text() if vt.anim_list.count() else "없음")
         vt.anim_q.setText("")
         vt.search_anims_by_text()  # 비우면 기본 목록(분류/타수 기준)으로 돌아간다 — 오류 없이 지나가야 함
-        # ---------------- 아는 정보: 영상에 나오는 몬스터를 미리 적으면 이름이 달라도 리소스를 먼저 찾아 AI 에게 알려 준다
+        # ---------------- 아는 정보: 영상에 나오는 캐릭터를 미리 적으면 이름이 달라도 리소스를 먼저 찾아 AI 에게 알려 준다
         os.remove(V.NAMES_CACHE) if os.path.exists(V.NAMES_CACHE) else None
         vt.known.setPlainText("The Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior")
         script["i"] = 0
@@ -280,7 +280,7 @@ def main():
         check(prompts and "The Nameless Captive" in prompts[0] and "internal name probably: Prisoner" in prompts[0] and "쇠사슬" in prompts[0], "아는 정보가 AI 질문에 들어감")
         by = {r.group.name: r for r in vt.rows}
         check("Prisoner" in by and by["Prisoner"].chosen() == pris, "AI 가 '모름'이라 한 줄이 아는 정보와 합쳐져 Prisoner 로: %s" % list(by))
-        check(by["Dwarf"].chosen() == MESHES[0] and "게임 속 이름: Dwarf Warrior" in by["Dwarf"].group.description, "AI 가 알아본 몬스터는 확신이 올라감")
+        check(by["Dwarf"].chosen() == MESHES[0] and "게임 속 이름: Dwarf Warrior" in by["Dwarf"].group.description, "AI 가 알아본 캐릭터는 확신이 올라감")
         check("아는 정보: The Nameless Captive → Prisoner" in vt.status.text(), "상태에 해석 결과: %s" % vt.status.text())
         check(vt.cfg.get("vf_known", "").startswith("The Nameless"), "입력은 설정에 기억")
         vt.known.setPlainText("")
@@ -307,7 +307,7 @@ def main():
         vt.add_blank_row()
         check(len(vt.rows) == 1, "지운 뒤에도 줄 추가 가능")
 
-        # ---------------- 몬스터 둘을 함께 뽑으면 애니메이션이 각자 몬스터 폴더로
+        # ---------------- 캐릭터 둘을 함께 뽑으면 애니메이션이 각자 캐릭터 폴더로
         vt.index = assetidx.AssetIndex(MESHES, ANIMS)
         vt.mesh_list.clear()
         for m in (MESHES[0], MESHES[2]):
@@ -316,7 +316,7 @@ def main():
             vt.mesh_list.addItem(it)
         vt.mesh_list.selectAll()
         cm = vt._char_map([a for a in ANIMS if "Dwarf_Idle" in a or "StoneGolem" in a])
-        check(set(cm.values()) == {"Dwarf", "StoneGolem"}, "애니메이션마다 어울리는 몬스터 폴더: %s" % cm)
+        check(set(cm.values()) == {"Dwarf", "StoneGolem"}, "애니메이션마다 어울리는 캐릭터 폴더: %s" % cm)
 
         # 글자 사전 만들기: 도우미가 꺼낸 .locres 를 읽어 저장
         if os.path.exists(V.NAMES_CACHE):
@@ -368,7 +368,7 @@ def main():
         check(not vt.btn_pull._visible, "Claude 선택 시 받기 버튼 숨김")
 
 
-        # ---------------- 확신이 낮으면 자동으로 고르지 않음 (이름 없는 보스를 엉뚱한 몬스터로 확정하던 문제)
+        # ---------------- 확신이 낮으면 자동으로 고르지 않음 (이름 없는 보스를 엉뚱한 캐릭터로 확정하던 문제)
         vt.index = assetidx.AssetIndex(MESHES, ANIMS)
         vt.memory = assetidx.MatchMemory(os.path.join(d, "m2.json"))
         vt.min_conf.setValue(60)
@@ -584,7 +584,7 @@ def main():
               and c["vf_claude_key"] == "sk-ant-1", "provider() 가 입력값을 넘김: %s" % {k: v for k, v in c.items() if k.startswith("vf_oa") or k.endswith("key")})
         vt.engine.setCurrentIndex(vt.engine.findData("ollama"))
         check(vt.btn_pull.isVisible() and not vt.key_row.isVisible(), "Ollama 로 돌아오면 모델 받기")
-        # 영상을 받아도 몬스터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
+        # 영상을 받아도 캐릭터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
         called = []
         _orig_guess = vt.start_guess
         vt.start_guess = lambda *a, **k: called.append(1)
@@ -592,7 +592,7 @@ def main():
         QFileDialog.open_ret = (qf, "")
         mw.import_animref()
         check(vt.link_query and vt.link_query["id"] == "자동금지" and not called, "받기만 하고 추측은 자동 시작 안 함")
-        check("몬스터 추측 시작" in vt.link_banner.text(), "배너가 직접 시작하라고 안내: %s" % vt.link_banner.text())
+        check("캐릭터 추측 시작" in vt.link_banner.text(), "배너가 직접 시작하라고 안내: %s" % vt.link_banner.text())
         vt.start_guess = _orig_guess
         vt.link_query = None
 

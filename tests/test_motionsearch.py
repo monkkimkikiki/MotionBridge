@@ -1,4 +1,4 @@
-"""동작·패턴 설명 -> 애니메이션 -> 몬스터 거꾸로 찾기."""
+"""동작·패턴 설명 -> 애니메이션 -> 캐릭터 거꾸로 찾기."""
 import os
 import sys
 
@@ -43,7 +43,7 @@ def test_search():
     got = [base(h.path) for h in hits]
     assert got[0] == "AS_Swordman_SpinAttack_01", got
     assert "AS_Swordman_Idle" not in got and "AS_Dwarf_GroundSlam" not in got
-    # 몬스터 제한
+    # 캐릭터 제한
     hits, _ = M.search_anims(idx, "스핀", restrict=["swordman"])
     assert [h.monster for h in hits] == ["Swordman"]
     # 타수: 7연속이면 7Hit 가 위로
@@ -61,7 +61,7 @@ def test_monsters_and_meshes():
     # AI 영어 낱말이 한국어 신호 없이도 같은 결과
     cands2, mons2, _h, _q = M.find_meshes_by_motion(idx, "빙글빙글", ["spin"])
     assert mons2[0].name in ("Swordman", "Hexapod")
-    # 동작이 없는 몬스터(Dwarf: 슬램만)는 slam 으로
+    # 동작이 없는 캐릭터(Dwarf: 슬램만)는 slam 으로
     _c, mons3, _h, _q = M.find_meshes_by_motion(idx, "내려찍기")
     assert mons3[0].name == "Dwarf"
 
