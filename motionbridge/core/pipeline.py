@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import animops, bridge, biped, frameedit, export as X
+from . import animops, bridge, biped, frameedit, layout, export as X
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -35,6 +35,8 @@ class ExportOptions:
     blender: Optional[str] = None
     fbx_options: Dict = field(default_factory=dict)
     edit: Optional[animops.EditOptions] = None  # 자르기/늘리기/fps/루프/키 압축
+    organize: bool = False  # True: out_dir / 캐릭터 / Animations(모션 파일) · Models(메시·본 구조) 로 나눠 담는다
+    char_name: str = ""     # organize 일 때 캐릭터 폴더 이름 (비우면 소스 경로/클립 이름에서 자동)
 
 
 class Project:
@@ -259,6 +261,19 @@ class Project:
         return warns
 
     # ------------------------------------------------------------------ 내보내기
+    def export_char(self, ci: int, opt: Optional[ExportOptions] = None) -> str:
+        """내보낼 때 쓰는 캐릭터 폴더 이름: 직접 정한 이름 > 추출 폴더 규칙(…/캐릭터/Animations/파일)의 캐릭터 > 클립 이름 > 파일 경로."""
+        if opt is not None and (opt.char_name or "").strip():
+            return layout.safe_name(opt.char_name)
+        parts = [x for x in (self.src.path or "").replace("\\", "/").split("/") if x] if self.src else []
+        if len(parts) >= 3 and parts[-2].lower() == layout.ANIM_DIR.lower():
+            return layout.safe_name(parts[-3])
+        name = self.src.animations[ci].name if self.src and 0 <= ci < len(self.src.animations) else ""
+        c = layout.character_of(name) if name else layout.MISC
+        if c == layout.MISC and self.src:
+            c = layout.character_of(self.src.path or "")
+        return c
+
     def export(self, opt: ExportOptions, progress=None) -> Tuple[List[str], List[str]]:
         """(만든 파일 목록, 경고 목록)."""
         if not self.src:
@@ -294,23 +309,31 @@ class Project:
                 meshes = self.src.meshes if opt.include_mesh else None
                 model_path = self.src.path
             upm = X.guess_units_per_meter(skel, F)
+            char = self.export_char(ci, opt) if opt.organize else None
+            adir = os.path.join(opt.out_dir, char, layout.ANIM_DIR) if char else opt.out_dir
+            mdir = os.path.join(opt.out_dir, char, layout.MODEL_DIR) if char else opt.out_dir
+            os.makedirs(adir, exist_ok=True)
             keys = None
             if opt.edit is not None and opt.edit.active():
                 anim, keys, info = animops.apply_edit(anim, opt.edit, upm, skel.parents)
                 self.edit_info = info
                 warns += ["[%s] %s" % (anim_src.name, w) for w in info.notes]
-            files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys)
+            files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys, adir, mdir)
         if opt.write_skeleton_json:
             skel = self.tgt.skeleton if opt.what == "retargeted" else self.src.skeleton
-            p = os.path.join(opt.out_dir, _safe(skel.name) + "_skeleton.json")
+            sdir = os.path.join(opt.out_dir, self.export_char(clips[-1] if clips else self.clip, opt), layout.MODEL_DIR) if opt.organize else opt.out_dir
+            os.makedirs(sdir, exist_ok=True)
+            p = os.path.join(sdir, _safe(skel.name) + "_skeleton.json")
             X.write_json(p, X.skeleton_dict(skel))
             files.append(p)
         return files, warns
 
-    def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns, keys=None) -> List[str]:
+    def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns, keys=None, adir=None, mdir=None) -> List[str]:
         out: List[str] = []
+        adir = adir or opt.out_dir   # 모션 파일(BVH/FBX/Biped/커브)
+        mdir = mdir or opt.out_dir   # 메시가 든 GLB
         if not opt.include_skeleton:
-            p = os.path.join(opt.out_dir, base + "_curves.json")
+            p = os.path.join(adir, base + "_curves.json")
             X.write_json(p, X.curves_dict(skel, anim, keys))
             return [p]
         fmts = [f.lower() for f in opt.formats]
@@ -319,7 +342,7 @@ class Project:
         if "bip" in fmts:  # 3ds Max Biped: 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
             slots = self.tgt_slots if opt.what == "retargeted" else self.src_slots
             try:
-                files, w = biped.export_biped(opt.out_dir, base, skel, anim, slots, F, upm)
+                files, w = biped.export_biped(adir, base, skel, anim, slots, F, upm)
                 out += files
                 warns += w
             except ValueError as e:
@@ -327,14 +350,14 @@ class Project:
         for preset_key in opt.presets:
             preset = X.PRESETS[preset_key]
             if "bvh" in fmts:
-                p = os.path.join(opt.out_dir, "%s_%s.bvh" % (base, preset_key))
+                p = os.path.join(adir, "%s_%s.bvh" % (base, preset_key))
                 warns += X.export_bvh(p, skel, anim, F, preset, upm)
                 out.append(p)
             if "fbx" in fmts:
                 if opt.what != "retargeted":
                     warns.append("FBX 는 리타깃 결과(타깃 모델 파일 기준)에서만 지원합니다. 소스는 BVH/GLB 를 쓰세요.")
                 else:
-                    p = os.path.join(opt.out_dir, "%s_%s.fbx" % (base, preset_key))
+                    p = os.path.join(adir, "%s_%s.fbx" % (base, preset_key))
                     with tempfile.TemporaryDirectory(prefix="mb_") as d:
                         npz = os.path.join(d, "payload.npz")
                         X.write_blender_payload(npz, skel, anim, base)
@@ -347,7 +370,8 @@ class Project:
                     warns += r.warnings
                     out.append(p)
         if "glb" in fmts:
-            p = os.path.join(opt.out_dir, base + ".glb")
+            p = os.path.join(mdir if meshes else adir, base + ".glb")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
             X.export_glb(p, skel, anim, F, upm, meshes, keys)
             out.append(p)
         return out

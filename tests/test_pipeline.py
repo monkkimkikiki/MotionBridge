@@ -241,7 +241,37 @@ def test_multiclip_batch():
     print("multiclip OK")
 
 
+def test_organized_export():
+    """캐릭터별 폴더 정리: 출력/캐릭터/Animations(모션) · Models(메시가 든 GLB, 본 구조 JSON)."""
+    with tempfile.TemporaryDirectory() as d:
+        src, _s2, tgt, _, _ = make_inputs(d)
+        pr = Project()
+        pr.load_source(src)
+        pr.load_target(tgt)
+        pr.automap()
+        o = os.path.join(d, "o")
+        # 추출 폴더 규칙(…/캐릭터/Animations/파일)에 있던 모션이면 그 캐릭터 폴더
+        pr.src.path = "/out/Game/KnightLady/Animations/A_KnightLady_Attacks_Ability_Stab.psa"
+        assert pr.export_char(0) == "KnightLady"
+        files, _w = pr.export(ExportOptions(out_dir=o, presets=["blender"], formats=["bvh", "glb"], include_mesh=True, write_skeleton_json=True, organize=True))
+        rel = sorted(os.path.relpath(f, o).replace("\\", "/") for f in files)
+        assert any(r.startswith("KnightLady/Animations/") and r.endswith(".bvh") for r in rel), rel
+        assert any(r.startswith("KnightLady/Models/") and r.endswith("_skeleton.json") for r in rel), rel
+        assert all(r.startswith("KnightLady/") for r in rel), rel
+        # 이름을 직접 정하면 그 이름 / 정리를 끄면 예전처럼 한 폴더
+        files, _w = pr.export(ExportOptions(out_dir=o, presets=["blender"], formats=["bvh"], organize=True, char_name="내 캐릭터"))
+        assert os.path.relpath(files[0], o).replace("\\", "/").startswith("내 캐릭터/Animations/")
+        files, _w = pr.export(ExportOptions(out_dir=os.path.join(d, "flat"), presets=["blender"], formats=["bvh"]))
+        assert os.path.dirname(files[0]) == os.path.join(d, "flat")
+        # 경로에 규칙이 없으면 클립 이름에서
+        pr.src.path = "/x/mocap.bvh"
+        pr.src.animations[0].name = "A_ParasiteGolem_Locomotion_Walk_Rwd"
+        assert pr.export_char(0) == "ParasiteGolem"
+    print("organized export OK")
+
+
 if __name__ == "__main__":
+    test_organized_export()
     test_cli_end_to_end()
     test_curves_only_and_source()
     test_profile_roundtrip_and_settings()

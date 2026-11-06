@@ -111,7 +111,7 @@ def cmd_retarget(args) -> int:
     opt = ExportOptions(
         out_dir=args.out, presets=args.presets, formats=args.formats, include_skeleton=not args.no_skeleton,
         what=args.what, clips=clips, include_mesh=not args.no_mesh, write_skeleton_json=args.skeleton_json, blender=args.blender,
-        edit=edit if edit.active() else None,
+        edit=edit if edit.active() else None, organize=args.organize, char_name=args.char or "",
     )
     files, warns = pr.export(opt, progress=lambda i, n, nm: _p("[%d/%d] %s" % (i + 1, n, nm)))
     if opt.edit is not None and pr.edit_info is not None:
@@ -228,6 +228,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-skeleton", action="store_true", help="본 구조 없이 애니메이션 커브(JSON)만")
     r.add_argument("--no-mesh", action="store_true")
     r.add_argument("--skeleton-json", action="store_true", help="본 구조를 JSON 으로도 저장")
+    r.add_argument("--organize", action="store_true", help="출력을 '캐릭터 / Animations · Models' 폴더로 나눠 담기")
+    r.add_argument("--char", default="", help="--organize 일 때 캐릭터 폴더 이름 (생략하면 자동)")
     r.add_argument("--profile", help="저장해 둔 매핑/설정 프로필(JSON)")
     r.add_argument("--save-profile")
     r.add_argument("--scale", type=float, help="자동 스케일에 곱할 배율")

@@ -1176,6 +1176,19 @@ class MainWindow(QMainWindow):
         h.addWidget(b)
         lay.addWidget(g)
 
+        g = QGroupBox("폴더 정리")
+        h = QHBoxLayout(g)
+        self.cb_organize = QCheckBox("캐릭터별 폴더로 정리 (캐릭터 이름 / Animations · Models)")
+        self.cb_organize.setChecked(bool(self.cfg.get("export_organize", True)))
+        self.cb_organize.setToolTip("끄면 출력 폴더에 파일이 한꺼번에 쌓입니다. 켜면 '출력 폴더 / 캐릭터 이름 / Animations'(BVH·FBX·Biped 등 모션 파일), "
+                                    "'… / Models'(메시가 든 GLB, 본 구조 JSON) 로 나눠 담습니다.")
+        h.addWidget(self.cb_organize)
+        h.addWidget(QLabel("캐릭터 폴더 이름"))
+        self.char_edit = QLineEdit(self.cfg.get("export_char", ""))
+        self.char_edit.setPlaceholderText("비우면 자동 (추출 폴더의 캐릭터 / 클립 이름에서)")
+        h.addWidget(self.char_edit, 1)
+        lay.addWidget(g)
+
         g = QGroupBox("무엇을 내보낼까")
         v = QVBoxLayout(g)
         self.rb_retarget = QRadioButton("리타깃 결과 (내 모델용)")
@@ -1919,13 +1932,15 @@ class MainWindow(QMainWindow):
         if not out:
             return
         self.cfg["out_dir"] = out
+        self.cfg["export_organize"] = bool(self.cb_organize.isChecked())
+        self.cfg["export_char"] = self.char_edit.text().strip()
         bridge.save_config(self.cfg)
         n_clips = len(self.pr.src.animations)
         clips = list(range(n_clips)) if self.rb_clip_all.isChecked() else [self.pr.clip]
         opt = ExportOptions(
             out_dir=out, presets=presets or ["blender"], formats=fmts or ["bvh"], include_skeleton=skel, what=what, clips=clips,
             include_mesh=self.cb_mesh.isChecked(), write_skeleton_json=self.cb_skel_json.isChecked(), blender=self.pr.blender,
-            edit=self.edit_panel.options(),
+            edit=self.edit_panel.options(), organize=bool(self.cb_organize.isChecked()), char_name=self.char_edit.text().strip(),
         )
         self.edit_panel.save()
         bridge.save_config(self.cfg)
