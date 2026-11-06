@@ -115,6 +115,8 @@ def classify_name(name: str):
             return None, "Head", None
         return None
     # 좌/우가 있는 부위
+    if "hip" in tset and not (tset & {"shoulder", "clavicle", "collar"}):  # SMPL(AI 모캡) 'L_Hip' = 허벅지 시작
+        return side, "UpLeg", None
     if tset & {"shoulder", "clavicle", "collar"}:
         return side, "Shoulder", None
     if tset & {"lowerarm", "forearm", "elbow"} or ({"fore", "arm"} <= tset) or ({"lower", "arm"} <= tset):
@@ -170,6 +172,16 @@ def auto_map(skel: Skeleton) -> Dict[str, int]:
     for part in ("Neck", "Head"):
         if (None, part) in cands:
             out[part] = shallowest(cands[(None, part)])
+    # SMPL 처럼 쇄골이 Collar, 어깨(위팔)가 Shoulder 로 불리는 리그: Collar -> 쇄골, Shoulder -> 위팔
+    for side in ("L", "R"):
+        sh = cands.get((side, "Shoulder"), [])
+        if len(sh) >= 2 and (side, "UpperArm") not in cands:
+            tk = {j: set(_tokens(skel.names[j])) for j, _d in sh}
+            clav = [x for x in sh if tk[x[0]] & {"collar", "clavicle"}]
+            arm = [x for x in sh if "shoulder" in tk[x[0]] and not (tk[x[0]] & {"collar", "clavicle"})]
+            if clav and arm:
+                cands[(side, "Shoulder")] = clav
+                cands[(side, "UpperArm")] = arm
     for side in ("L", "R"):
         has_up = (side, "UpLeg") in cands
         for part in ("Shoulder", "UpperArm", "LowerArm", "Hand", "UpLeg", "LowLeg", "Foot", "Toe"):

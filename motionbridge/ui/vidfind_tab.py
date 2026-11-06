@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import tempfile
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QRect, QSize, Qt
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, motionsearch, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, textmatch, vision
 from .widgets import EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
@@ -66,6 +67,9 @@ def _thumb(frame: str, box) -> Optional[object]:
         return pm.scaled(QSize(168, 96), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
     except Exception:  # noqa: BLE001 - 썸네일은 없어도 된다
         return None
+
+
+MAX_MOTION_RANK = 40  # 동작 비교로 한 번에 임시로 뽑아 비교하는 최대 개수 (뽑는 데 시간이 든다)
 
 
 class VidFindTab(QWidget):
@@ -410,6 +414,11 @@ class VidFindTab(QWidget):
         h.addWidget(b)
         h.addStretch(1)
         v.addLayout(h)
+        self.btn_mrank = QPushButton("🎬 영상 속 동작과 비슷한 순으로 정렬…")
+        self.btn_mrank.setToolTip("영상에서 뽑은 3D 동작 파일(AnimRef 의 AI 모캡 .bvh 등)을 고르면, 지금 목록 위쪽 %d개를 임시로 뽑아서 팔다리 움직임이 얼마나 비슷한지로\n"
+                                  "다시 줄 세웁니다. 이름이 비슷해도 동작이 다른 것, 이름이 달라도 동작이 같은 것을 가려냅니다. 좌우 반전(거울) 동작도 같이 봅니다." % MAX_MOTION_RANK)
+        self.btn_mrank.clicked.connect(lambda *_a: self.rank_by_motion())
+        v.addWidget(self.btn_mrank)
         self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타깃 작업)")
         self.btn_view.setMinimumHeight(34)
         self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 열고 '1. 파일·매핑' 탭으로 이동합니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
@@ -1142,6 +1151,91 @@ class VidFindTab(QWidget):
         """고른 메시가 한 캐릭터뿐이면 애니메이션도 그 캐릭터 폴더에 모은다 (애니 경로가 달라도)."""
         names = {layout.character_of(it.data(Qt.ItemDataRole.UserRole)) for it in self.mesh_list.selectedItems()}
         return names.pop() if len(names) == 1 else None
+
+    # ================================================================== 동작으로 비교해 정렬
+    def rank_by_motion(self, query_path: Optional[str] = None) -> None:
+        """영상에서 뽑은 3D 동작(BVH 등)과 목록의 애니메이션을 실제 움직임으로 비교해 비슷한 순으로 다시 줄 세운다."""
+        rows = [i for i in range(self.anim_list.count()) if not self.anim_list.item(i).isHidden()][:MAX_MOTION_RANK]
+        if not rows:
+            QMessageBox.warning(self, "동작으로 정렬", "정렬할 애니메이션 목록이 비어 있습니다. 먼저 후보를 만들거나 검색하세요.")
+            return
+        win = self.win
+        if query_path is None:
+            start = self.cfg.get("vf_motion_dir", "") or ""
+            query_path, _f = QFileDialog.getOpenFileName(self, "영상에서 뽑은 3D 동작 파일 (AnimRef AI 모캡 .bvh 등)", start,
+                                                         "모션 (*.bvh *.glb *.gltf *.fbx *.psa);;모든 파일 (*)")
+        if not query_path:
+            return
+        self.cfg["vf_motion_dir"] = os.path.dirname(query_path)
+        a = win._extract_args()
+        if a is None:
+            return
+        paths = [self.anim_list.item(i).data(Qt.ItemDataRole.UserRole) for i in rows]
+        tmp = os.path.join(tempfile.gettempdir(), "motionbridge_motionrank")
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp, exist_ok=True)
+        lay = layout.Layout(tmp, "cmp", force_char=self._single_char())
+        lay.chars.update(self._char_map(paths))
+        total = self.anim_list.count()
+        skips: List[str] = []
+
+        def job(w):
+            w.progress.emit(0, 1, "영상 동작 파일 읽는 중")
+            q = loader.load_model(query_path)
+            if not q.animations:
+                raise RuntimeError("이 파일에는 동작(애니메이션)이 없습니다: " + os.path.basename(query_path))
+
+            def ev(e):
+                if e.get("type") == "skip":
+                    skips.append(os.path.basename(e.get("path", "")))
+                if e.get("type") in ("exported", "skip"):
+                    w.progress.emit(0, len(paths), "후보 뽑는 중 " + os.path.basename(e.get("path", "")))
+
+            files = extractor.export_assets(*a, paths, tmp, ev, kind="anim", lay=lay)
+            psa = [f for f in files if f.lower().endswith(".psa")]
+            cands = []
+            for i, f in enumerate(psa):
+                if w.cancel.is_set():
+                    return {}, len(psa)
+                w.progress.emit(i, len(psa), "동작 비교 중 " + os.path.basename(f))
+                try:
+                    m = loader.load_model(f)
+                except Exception as e:  # noqa: BLE001 - 읽지 못한 것은 건너뛴다
+                    skips.append("%s (%s)" % (os.path.basename(f), str(e)[:40]))
+                    continue
+                if m.animations:
+                    cands.append((os.path.splitext(os.path.basename(f))[0].lower(), m.skeleton, m.animations[0]))
+            ranked = motionmatch.rank((q.skeleton, q.animations[0]), cands)
+            if not ranked and cands:
+                raise RuntimeError("영상 동작 파일의 본 이름을 사람 몸으로 알아보지 못했습니다 (골반·허벅지·팔 본이 필요). AnimRef AI 모캡의 .bvh 를 쓰세요.")
+            return {k: sc for k, sc in ranked}, len(psa)
+
+        def done(out):
+            res, n = out
+            if not res:
+                self.anim_note.setText("동작 비교를 하지 못했습니다." + ((" 건너뜀: " + ", ".join(skips[:3])) if skips else ""))
+                return
+            keep = []
+            for i in range(self.anim_list.count()):
+                it = self.anim_list.item(i)
+                pth = it.data(Qt.ItemDataRole.UserRole)
+                sc = res.get(os.path.basename(str(pth)).split(".")[0].lower())
+                keep.append((sc, it.text(), pth, str(pth)))  # 항목 툴팁은 경로였다
+            keep.sort(key=lambda t: -(t[0].score if t[0] else -1.0))
+            self.anim_list.clear()
+            for sc, text, pth, tip in keep:
+                head = ("동작 %3d%%%s  " % (round(sc.score * 100), " ↔" if sc.mirrored else "")) if sc else "동작 비교 안 됨  "
+                it = QListWidgetItem(head + text)
+                it.setData(Qt.ItemDataRole.UserRole, pth)
+                it.setToolTip(tip + ("\n좌우 반전(거울)했을 때 더 비슷합니다 (평균 %.1f°)" % sc.deg if sc and sc.mirrored else ("\n평균 각도 차 %.1f°" % sc.deg if sc else "")))
+                self.anim_list.addItem(it)
+            top = max(res.values(), key=lambda s: s.score)
+            more = (" (위쪽 %d개만 비교, 나머지는 뒤에)" % len(paths)) if total > len(paths) else ""
+            self.anim_note.setText("영상 동작과 비슷한 순으로 정렬했습니다 — %d개 비교, 가장 비슷한 점수 %d%%%s. 점수는 팔다리·몸통 뼈 방향이 얼마나 같은지(시간 맞춤, 좌우 반전 포함)이고, ↔ 는 거울 반전입니다.%s"
+                                   % (len(res), round(top.score * 100), more, (" 건너뜀 %d" % len(skips)) if skips else ""))
+            self._apply_anim_filter()
+
+        win.run_async(job, done, "동작 비교 중", cancellable=True, on_cancel=lambda: self.anim_note.setText("동작 비교를 취소했습니다 (목록은 그대로)."))
 
     # ================================================================== 뷰포트로 열기
     def _anim_double_clicked(self, item, *_a) -> None:

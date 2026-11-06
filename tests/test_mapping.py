@@ -173,7 +173,23 @@ def test_diagnose_frame():
     assert ns and any("벗어나" in n or "기울" in n for n in ns), ns
 
 
+def test_smpl_names():
+    """AI 모캡(WHAM/SMPL) BVH: L_Hip=허벅지, L_Collar=쇄골, L_Shoulder=위팔 로 매핑된다."""
+    names = ["Pelvis", "L_Hip", "R_Hip", "Spine1", "L_Knee", "R_Knee", "Spine2", "L_Ankle", "R_Ankle", "Spine3", "L_Foot", "R_Foot", "Neck",
+             "L_Collar", "R_Collar", "Head", "L_Shoulder", "R_Shoulder", "L_Elbow", "R_Elbow", "L_Wrist", "R_Wrist", "L_Hand", "R_Hand"]
+    par = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]
+    sk = Skeleton(names, par, np.zeros((24, 3)))
+    m = auto_map(sk)
+    got = {k: names[v] for k, v in m.items()}
+    for slot, nm in (("Hips", "Pelvis"), ("L_UpLeg", "L_Hip"), ("R_UpLeg", "R_Hip"), ("L_LowLeg", "L_Knee"), ("L_Foot", "L_Ankle"), ("L_Shoulder", "L_Collar"),
+                     ("L_UpperArm", "L_Shoulder"), ("R_UpperArm", "R_Shoulder"), ("L_LowerArm", "L_Elbow"), ("L_Hand", "L_Wrist"), ("Head", "Head")):
+        assert got.get(slot) == nm, (slot, got.get(slot), nm)
+    # 일반 리그에는 영향 없음: 쇄골만 있는 Mixamo 이름은 그대로
+    assert classify_name("LeftShoulder") == ("L", "Shoulder", None) and classify_name("L_Hip") == ("L", "UpLeg", None)
+
+
 if __name__ == "__main__":
+    test_smpl_names()
     test_prefers_standard_names()
     test_hunched_character_frame()
     test_refine_frame()

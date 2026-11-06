@@ -306,6 +306,47 @@ def main():
         check(vt._kinds() == {"player"}, "플레이어만")
         vt.ck_k_monster.setChecked(True)
         vt.anim_filter.setText("")
+        # ---------------- 영상 속 동작과 비슷한 순으로 정렬 (뼈 방향 + DTW). 뽑기/읽기는 가짜로 바꿔서 흐름만 확인한다
+        import numpy as _np
+        import synth as _synth
+        from motionbridge.core.model import Animation as _An, Model as _Model
+
+        def _walk(cfg, **kw):
+            sk, meta = _synth.build_skeleton(**cfg)
+            return sk, _synth.walk_animation(sk, meta, **kw)[0]
+        QA = dict(style="mixamo", frame="y_up_z", scale=1.0, pose="T", local_axes="aligned")
+        QB = dict(style="ue", frame="z_up_x", scale=100.0, pose="T", local_axes="bone_x", height=1.1, leg_scale=1.15)
+        qsk, qan = _walk(QA, n_frames=60)
+        models = {"query.bvh": _Model("query.bvh", qsk, [qan])}
+        sk_b, an_b = _walk(QB, n_frames=60)
+        sk_r, _an_r = _walk(QA, n_frames=60)
+        stems = {"a_pc_rest": _Model("x", sk_r, [_An.rest(sk_r, 30)]), "a_pc_heavyattack": _Model("y", sk_b, [an_b]),
+                 "as_swordman_idle": _Model("z", sk_r, [_synth.walk_animation(sk_r, _synth.build_skeleton(**QA)[1], n_frames=60, stance=0.3, speed=1.6, hip_drop=0.2)[0]])}
+        real_load, real_ea3 = V.loader.load_model, V.extractor.export_assets
+        V.loader.load_model = lambda path, *a, **k: models["query.bvh"] if path.endswith("query.bvh") else stems[os.path.splitext(os.path.basename(path))[0].lower()]
+        V.extractor.export_assets = lambda helper, root, ue, aes, usmap, paths, out, on_event=None, kind="anim", **k: [os.path.join(out, os.path.basename(p).split(".")[0] + ".psa") for p in paths]
+        try:
+            vt.anim_list.clear()
+            for nm, pth in (("90%  idle", "X/Monsters/Swordman/AS_Swordman_Idle"), ("80%  rest", "X/Player/Animations/A_PC_Rest"), ("70%  heavy", "X/Player/Animations/A_PC_HeavyAttack")):
+                it = V.QListWidgetItem(nm)
+                it.setData(A.Qt.ItemDataRole.UserRole, pth)
+                it.setToolTip(pth)
+                vt.anim_list.addItem(it)
+            QMessageBox.calls.clear()
+            vt.rank_by_motion(os.path.join(d, "query.bvh"))
+            check(vt.anim_list.count() == 3, "동작 정렬 후에도 3개: %s %s" % (vt.anim_note.text()[:80], QMessageBox.calls[-1:]))
+            order = [vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in range(3)]
+            texts = [vt.anim_list.item(i).text() for i in range(3)]
+            check(order[0] == "X/Player/Animations/A_PC_HeavyAttack" and order[-1] == "X/Player/Animations/A_PC_Rest", "동작이 같은 것이 맨 위, 정지 자세가 맨 아래: %s" % order)
+            check(texts[0].startswith("동작 ") and "%" in texts[0] and "비슷한 순으로 정렬했습니다" in vt.anim_note.text(), "점수 표시: %s | %s" % (texts[0], vt.anim_note.text()[:40]))
+            check(vt.cfg.get("vf_motion_dir") == d, "마지막 동작 파일 폴더 기억")
+            # 빈 목록이면 안내
+            vt.anim_list.clear()
+            QMessageBox.calls.clear()
+            vt.rank_by_motion(os.path.join(d, "query.bvh"))
+            check(QMessageBox.calls and QMessageBox.calls[-1][0] == "warning", "빈 목록 안내")
+        finally:
+            V.loader.load_model, V.extractor.export_assets = real_load, real_ea3
         # ---------------- 아는 정보: 영상에 나오는 캐릭터를 미리 적으면 이름이 달라도 리소스를 먼저 찾아 AI 에게 알려 준다
         os.remove(V.NAMES_CACHE) if os.path.exists(V.NAMES_CACHE) else None
         vt.known.setPlainText("The Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior")
