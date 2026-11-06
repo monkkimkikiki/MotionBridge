@@ -305,6 +305,26 @@ class _Item(Stub):
     def data(self, role):
         return self._data.get(id(role))
 
+    _hidden = False
+    _owner = None
+
+    def setHidden(self, h):
+        self._hidden = bool(h)
+
+    def isHidden(self):
+        return self._hidden
+
+    def isSelected(self):
+        return self._owner is not None and self in self._owner._sel
+
+    def setSelected(self, v):
+        if self._owner is None:
+            return
+        if v and self not in self._owner._sel:
+            self._owner._sel.append(self)
+        elif not v and self in self._owner._sel:
+            self._owner._sel.remove(self)
+
 
 QTableWidgetItem = QListWidgetItem = _Item
 
@@ -361,6 +381,10 @@ class QListWidget(QWidget):
 
     def addItem(self, it):
         self._items.append(it)
+        try:
+            it._owner = self
+        except AttributeError:
+            pass
 
     def clear(self):
         self._items = []

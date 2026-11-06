@@ -137,6 +137,10 @@ check(rp2 and rp2[0].path == PA[0], "플레이어도 분류(타격)로 정렬: %
 rm = pidx.rank_anims(PM[1], None, None, 10)
 check([c.path for c in rm] == [PA[2]], "몬스터는 그대로 메시 이름으로")
 check({c.path for c in pidx.rank_anims(PM[1], None, None, 10, player=True)} == {PA[0], PA[1], PA[3]}, "강제로 플레이어 모드")
+# 종류(몬스터/플레이어) 거르기: 점수 계산 전에 경로만으로 나눈다
+check(ai.path_kind(PA[0]) == "player" and ai.path_kind(PA[2]) == "monster" and pidx.kind(PA[3]) == "player", "경로 종류 판별")
+check(set(pidx.anims_of_kinds({"player"})) == {PA[0], PA[1], PA[3]} and pidx.anims_of_kinds({"monster"}) == [PA[2]], "종류별 애니메이션")
+check(pidx.anims_of_kinds(None) == PA and pidx.anims_of_kinds({"player", "monster"}) == PA and pidx.anims_of_kinds(set()) == PA, "종류 없음/둘 다 = 전체")
 big = ai.AssetIndex(PM + ["X/SK_M%d.SK_M%d" % (i, i) for i in range(50)], [])
 check("Player_Shell_Tiel" in big.names(10) and len(big.names(10)) == 10, "이름 목록을 줄여도 플레이어 이름은 남김")
 check(pidx.rank_meshes("Player")[0].name == "Player_Shell_Tiel", "AI 가 'Player' 라고 하면 플레이어 메시")

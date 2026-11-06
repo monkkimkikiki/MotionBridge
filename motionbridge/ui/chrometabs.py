@@ -148,6 +148,9 @@ class ChromeTabs(QWidget):
         changed = page is not self._cur
         self._cur = page
         self.stack.setCurrentWidget(page)
+        for p in self.pages:  # 현재 탭 하나만 보이게 확실히 한다 (남은 화면이 기본 크기로 왼쪽 위에 겹쳐 보이는 것 방지)
+            if p is not page:
+                p.hide()  # isVisible() 로 거르지 않는다: 창이 아직 안 보일 때도 '숨김' 표시를 남겨야 나중에 같이 나타나지 않는다
         self._sync = True
         try:
             self.bar.setCurrentIndex(self.pages.index(page))

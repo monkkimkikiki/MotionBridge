@@ -165,14 +165,15 @@ def monster_of(path: str) -> str:
 
 
 def search_anims(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str] = (), restrict: Optional[Iterable[str]] = None,
-                 limit: int = 120, min_score: float = 0.34) -> Tuple[List[MotionHit], MotionQuery]:
-    """설명과 이름이 맞는 애니메이션 목록(점수 순). restrict: 이 캐릭터 폴더 이름들 안에서만(소문자 비교)."""
+                 limit: int = 120, min_score: float = 0.34, kinds: Optional[Iterable[str]] = None) -> Tuple[List[MotionHit], MotionQuery]:
+    """설명과 이름이 맞는 애니메이션 목록(점수 순). restrict: 이 캐릭터 폴더 이름들 안에서만(소문자 비교).
+    kinds: {'monster'} / {'player'} 로 종류를 좁히면 점수 계산 전에 걸러서 더 빠르다 (None 이나 둘 다면 전체)."""
     q = parse_motion(text, extra_words)
     allow = {r.lower() for r in restrict} if restrict else None
     out: List[MotionHit] = []
     if not q.concepts:
         return out, q
-    for a in idx.anims:
+    for a in idx.anims_of_kinds(kinds):
         mon = monster_of(a)
         if allow is not None and mon.lower() not in allow:
             continue
@@ -213,9 +214,9 @@ def meshes_for(idx: assetidx.AssetIndex, mh: MonsterHit) -> List[assetidx.MeshCa
     return out
 
 
-def find_meshes_by_motion(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str] = (), limit: int = 8):
+def find_meshes_by_motion(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str] = (), limit: int = 8, kinds: Optional[Iterable[str]] = None):
     """(메시 후보, 캐릭터 순위, 맞는 애니메이션, 질의). 메시 후보는 캐릭터 순위대로 이어 붙인다."""
-    hits, q = search_anims(idx, text, extra_words)
+    hits, q = search_anims(idx, text, extra_words, kinds=kinds)
     mons = monsters_from_hits(hits, limit)
     cands: List[assetidx.MeshCandidate] = []
     for m in mons:

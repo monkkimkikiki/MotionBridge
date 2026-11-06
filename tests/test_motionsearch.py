@@ -52,6 +52,21 @@ def test_search():
     assert M.search_anims(idx, "")[0] == []
 
 
+def test_kinds():
+    plist = ["Sparta/Content/Characters/Player/Animations/A_PC_SpinAttack_01", "Sparta/Content/Characters/Player/Animations/A_PC_Roll"]
+    idx = assetidx.AssetIndex(MESHES, ANIMS + plist)
+    allh, _ = M.search_anims(idx, "스핀")
+    assert any("A_PC_SpinAttack" in h.path for h in allh) and any("Swordman" in h.path for h in allh)
+    ph, _ = M.search_anims(idx, "스핀", kinds={"player"})
+    assert [base(h.path) for h in ph] == ["A_PC_SpinAttack_01"], [base(h.path) for h in ph]
+    mh, _ = M.search_anims(idx, "스핀", kinds={"monster"})
+    assert mh and not any("A_PC_" in h.path for h in mh)
+    bh, _ = M.search_anims(idx, "스핀", kinds={"monster", "player"})
+    assert [h.path for h in bh] == [h.path for h in allh]
+    _c, mons, _h, _q = M.find_meshes_by_motion(idx, "스핀", kinds={"monster"})
+    assert mons and mons[0].name in ("Swordman", "Hexapod")
+
+
 def test_monsters_and_meshes():
     idx = assetidx.AssetIndex(MESHES, ANIMS)
     cands, mons, hits, q = M.find_meshes_by_motion(idx, "스핀 공격")
@@ -67,6 +82,7 @@ def test_monsters_and_meshes():
 
 
 if __name__ == "__main__":
+    test_kinds()
     test_parse()
     test_search()
     test_monsters_and_meshes()

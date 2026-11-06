@@ -271,6 +271,37 @@ def main():
         check(vt.anim_list.count() == 1 and "StoneGolem" in vt.anim_list.item(0).text(), "전체에서 찾음: %s" % vt.anim_list.item(0).text() if vt.anim_list.count() else "없음")
         vt.anim_q.setText("")
         vt.search_anims_by_text()  # 비우면 기본 목록(분류/타수 기준)으로 돌아간다 — 오류 없이 지나가야 함
+        # ---------------- 목록 안에서 글자로 거르기 + 종류(몬스터/플레이어) 체크
+        vt.anim_list.clear()
+        for nm, pth in (("90%  A · AS_Swordman_SpinAttack_01", "X/Monsters/Swordman/AS_Swordman_SpinAttack_01"),
+                        ("80%  A · AS_Swordman_Idle", "X/Monsters/Swordman/AS_Swordman_Idle"),
+                        ("70%  P · A_PC_HeavyAttack", "X/Player/Animations/A_PC_HeavyAttack")):
+            it = V.QListWidgetItem(nm)
+            it.setData(A.Qt.ItemDataRole.UserRole, pth)
+            vt.anim_list.addItem(it)
+        vt.anim_list.selectAll()
+        vt.anim_filter.setText("attack")
+        vis = [vt.anim_list.item(i).text() for i in range(3) if not vt.anim_list.item(i).isHidden()]
+        check(len(vis) == 2 and "Idle" not in " ".join(vis) and "2 / 3" in vt.anim_count.text(), "글자로 거르기: %s %s" % (vis, vt.anim_count.text()))
+        vt.anim_filter.setText("ATTACK heavy")  # 대소문자 무시, 띄어쓰기는 모두 포함
+        check(vt._picked_anims() == ["X/Player/Animations/A_PC_HeavyAttack"], "가려진 것은 선택에서 빠짐: %s" % vt._picked_anims())
+        vt.anim_filter.setText("zzz")
+        check(vt._picked_anims() == [] and "0 / 3" in vt.anim_count.text(), "없는 글자")
+        vt.anim_filter.setText("")
+        check(all(not vt.anim_list.item(i).isHidden() for i in range(3)) and "3개" in vt.anim_count.text(), "비우면 모두 표시")
+        vt._select_visible_anims()
+        vt.anim_filter.setText("idle")
+        vt._select_visible_anims()
+        check(vt._picked_anims() == ["X/Monsters/Swordman/AS_Swordman_Idle"], "전체 선택은 보이는 것만")
+        vt.anim_filter.setText("")
+        check(vt._kinds() is None, "종류: 둘 다 켜면 전체")
+        vt.ck_k_player.setChecked(False)
+        check(vt._kinds() == {"monster"} and vt.cfg.get("vf_kind_player") is False, "몬스터만")
+        vt.ck_k_player.setChecked(True)
+        vt.ck_k_monster.setChecked(False)
+        check(vt._kinds() == {"player"}, "플레이어만")
+        vt.ck_k_monster.setChecked(True)
+        vt.anim_filter.setText("")
         # ---------------- 아는 정보: 영상에 나오는 캐릭터를 미리 적으면 이름이 달라도 리소스를 먼저 찾아 AI 에게 알려 준다
         os.remove(V.NAMES_CACHE) if os.path.exists(V.NAMES_CACHE) else None
         vt.known.setPlainText("The Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior")

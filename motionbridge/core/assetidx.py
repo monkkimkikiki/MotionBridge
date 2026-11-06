@@ -55,6 +55,14 @@ def is_player_path(path: str) -> bool:
     """메시/애니메이션 경로가 플레이어블 캐릭터 것으로 보이는지 (폴더 이름 포함)."""
     return bool(set(tokens((path or "").replace("\\", "/"), drop_stop=False)) & PLAYER_WORDS)
 
+KIND_MONSTER, KIND_PLAYER = "monster", "player"
+
+
+def path_kind(path: str) -> str:
+    """'player'(플레이어블 캐릭터 것으로 보임) 또는 'monster'(그 밖의 몬스터·보스·NPC 등)."""
+    return KIND_PLAYER if is_player_path(path) else KIND_MONSTER
+
+
 # 게임 안 표시 이름과 리소스 이름이 다를 때를 위한 비슷한 말 (같은 묶음끼리 같은 뜻으로 본다)
 SYNONYMS = [
     {"captive", "prisoner", "convict", "inmate", "hostage", "detainee", "thrall", "slave", "jailed"},
@@ -257,6 +265,21 @@ class AssetIndex:
         self.anims: List[str] = list(dict.fromkeys(anim_paths))
         self._anim_toks: Dict[str, frozenset] = {}
         self._by_path: Dict[str, MeshEntry] = {m.path: m for m in self.meshes}
+        self._kind: Dict[str, str] = {}
+
+    def kind(self, path: str) -> str:
+        """경로의 종류(player/monster). 한 번 계산하면 기억해서 수만 개를 거를 때도 빠르다."""
+        k = self._kind.get(path)
+        if k is None:
+            k = self._kind[path] = path_kind(path)
+        return k
+
+    def anims_of_kinds(self, kinds) -> List[str]:
+        """kinds(예: {'player'}) 에 맞는 애니메이션 경로만. kinds 가 None/빈 값이거나 둘 다면 전체."""
+        ks = set(kinds or ())
+        if not ks or ks >= {KIND_MONSTER, KIND_PLAYER}:
+            return list(self.anims)
+        return [a for a in self.anims if self.kind(a) in ks]
 
     def __bool__(self) -> bool:
         return bool(self.meshes)

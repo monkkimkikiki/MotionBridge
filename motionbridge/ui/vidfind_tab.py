@@ -357,6 +357,29 @@ class VidFindTab(QWidget):
         b.clicked.connect(lambda *_a: self.search_anims_by_text())
         h.addWidget(b)
         v.addLayout(h)
+        h = QHBoxLayout()
+        h.addWidget(QLabel("찾는 종류"))
+        self.ck_k_monster = QCheckBox("몬스터·보스·NPC")
+        self.ck_k_player = QCheckBox("플레이어블 캐릭터")
+        for ck, key in ((self.ck_k_monster, "vf_kind_monster"), (self.ck_k_player, "vf_kind_player")):
+            ck.setChecked(bool(self.cfg.get(key, True)))
+            ck.toggled.connect(self._kinds_changed)
+            h.addWidget(ck)
+        self.ck_k_monster.setToolTip("경로에 player/pc/hero 같은 낱말이 없는 애니메이션. 끄면 몬스터 것은 검색·목록에서 빠집니다.")
+        self.ck_k_player.setToolTip("경로에 player/pc/hero/fallen 같은 낱말이 든 공용 애니메이션. 이것만 켜면 플레이어 것만 훑어서 더 빠릅니다.")
+        h.addStretch(1)
+        v.addLayout(h)
+        h = QHBoxLayout()
+        h.addWidget(QLabel("목록에서 거르기"))
+        self.anim_filter = QLineEdit()
+        self.anim_filter.setPlaceholderText("🔍 지금 목록 안에서 글자로 바로 거르기 (띄어쓰기 = 모두 포함, 예: attack heavy)")
+        self.anim_filter.setClearButtonEnabled(True)
+        self.anim_filter.textChanged.connect(lambda *_a: self._apply_anim_filter())
+        h.addWidget(self.anim_filter, 1)
+        self.anim_count = QLabel("")
+        self.anim_count.setStyleSheet("color:#8a93a6")
+        h.addWidget(self.anim_count)
+        v.addLayout(h)
         self.anim_list = QListWidget()
         self.anim_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.anim_list.setMinimumHeight(200)
@@ -371,7 +394,7 @@ class VidFindTab(QWidget):
         v.addWidget(self.anim_note)
         h = QHBoxLayout()
         b = QPushButton("전체 선택")
-        b.clicked.connect(lambda *_a: self.anim_list.selectAll())
+        b.clicked.connect(lambda *_a: self._select_visible_anims())
         h.addWidget(b)
         b = QPushButton("선택 해제")
         b.clicked.connect(lambda *_a: self.anim_list.clearSelection())
@@ -853,11 +876,12 @@ class VidFindTab(QWidget):
         cur = self.table.currentRow()
         row = self.rows[cur] if 0 <= cur < len(self.rows) else self.rows[-1]
         use_ai = bool(self.motion_ai.isChecked())
+        kinds = self._kinds()
 
         def job(w):
             w.progress.emit(0, 1, "동작으로 찾는 중")
             extra, warn = self._motion_extra(text, use_ai)
-            res = motionsearch.find_meshes_by_motion(idx, text, extra)
+            res = motionsearch.find_meshes_by_motion(idx, text, extra, kinds=kinds)
             return res, extra, warn
 
         def done(out):
@@ -893,11 +917,12 @@ class VidFindTab(QWidget):
         if not self.anim_all.isChecked() and self._selected_mesh_paths():
             restrict = [layout.character_of(p) for p in self._selected_mesh_paths()]
         use_ai = bool(self.motion_ai.isChecked())
+        kinds = self._kinds()
 
         def job(w):
             w.progress.emit(0, 1, "애니메이션 찾는 중")
             extra, warn = self._motion_extra(text, use_ai)
-            hits, q = motionsearch.search_anims(idx, text, extra, restrict)
+            hits, q = motionsearch.search_anims(idx, text, extra, restrict, kinds=kinds)
             return hits, q, extra, warn
 
         def done(out):
@@ -912,7 +937,10 @@ class VidFindTab(QWidget):
             msg = "'%s' → %s%s. %s에서 애니메이션 %d개." % (text, q.describe(), (" + AI: " + ", ".join(extra)) if extra else "", where, len(hits))
             if not hits and restrict:
                 msg += " '모든 캐릭터에서'를 켜 보세요."
+            if kinds is not None:
+                msg += " (종류: %s만)" % ("플레이어블" if kinds == {assetidx.KIND_PLAYER} else "몬스터·NPC")
             self.anim_note.setText((msg + " " + warn).strip())
+            self._apply_anim_filter()
 
         self.win.run_async(job, done, "애니메이션 찾는 중", cancellable=True, on_cancel=lambda: self.status.setText("애니메이션 검색을 취소했습니다."))
 
@@ -982,6 +1010,42 @@ class VidFindTab(QWidget):
         sel = self.mesh_list.selectedItems()
         return [it.data(Qt.ItemDataRole.UserRole) for it in sel] if sel else list(self.confirmed)
 
+    # ------------------------------------------------------------------ 종류 / 글자 거르기
+    def _kinds(self) -> Optional[set]:
+        """체크된 종류. 둘 다 켜져 있거나 둘 다 꺼져 있으면 None(전체)."""
+        m, p = self.ck_k_monster.isChecked(), self.ck_k_player.isChecked()
+        if m == p:
+            return None
+        return {assetidx.KIND_MONSTER} if m else {assetidx.KIND_PLAYER}
+
+    def _kinds_changed(self, *_a) -> None:
+        self.cfg["vf_kind_monster"] = bool(self.ck_k_monster.isChecked())
+        self.cfg["vf_kind_player"] = bool(self.ck_k_player.isChecked())
+        self._refill_anims()
+
+    def _apply_anim_filter(self, *_a) -> None:
+        terms = self.anim_filter.text().lower().split()
+        n = self.anim_list.count()
+        shown = 0
+        for i in range(n):
+            it = self.anim_list.item(i)
+            hay = (it.text() + " " + str(it.data(Qt.ItemDataRole.UserRole) or "")).lower()
+            ok = all(t in hay for t in terms)
+            it.setHidden(not ok)
+            if not ok and it.isSelected():
+                it.setSelected(False)  # 가려진 것은 선택에서도 뺀다 (모르는 사이에 추출되지 않게)
+            shown += 1 if ok else 0
+        self.anim_count.setText(("%d / %d개 표시" % (shown, n)) if terms else ("%d개" % n if n else ""))
+
+    def _select_visible_anims(self) -> None:
+        for i in range(self.anim_list.count()):
+            it = self.anim_list.item(i)
+            if not it.isHidden():
+                it.setSelected(True)
+
+    def _picked_anims(self) -> List[str]:
+        return [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems() if not it.isHidden()]
+
     def _refill_anims(self, *_a) -> None:
         self.anim_list.clear()
         idx = self.index
@@ -992,7 +1056,9 @@ class VidFindTab(QWidget):
         total = 0
         empty: List[str] = []
         players: List[str] = []
-        force = True if self.ck_player.isChecked() else None
+        kinds = self._kinds()
+        force = True if (self.ck_player.isChecked() or kinds == {assetidx.KIND_PLAYER}) else None
+        hidden_kind = 0
         for p in self._selected_mesh_paths():
             m = idx.mesh(p)
             nm = m.name if m else assetidx.mesh_name(p)
@@ -1002,6 +1068,9 @@ class VidFindTab(QWidget):
             if not cands:
                 empty.append(nm)
             for c in cands:
+                if kinds is not None and idx.kind(c.path) not in kinds:
+                    hidden_kind += 1
+                    continue
                 it = QListWidgetItem("%3d%%  %s · %s    %s" % (round(min(max(c.score, 0.0), 1.0) * 100), nm, os.path.basename(c.path), c.why))
                 it.setData(Qt.ItemDataRole.UserRole, c.path)
                 it.setToolTip(c.path)
@@ -1012,7 +1081,10 @@ class VidFindTab(QWidget):
             msg += " 플레이어블 캐릭터(%s)는 몸이 아니라 player/pc/hero 이름이 든 공용 애니메이션을 보여줍니다." % ", ".join(players[:3])
         if empty:
             msg += " 이름이 맞는 애니메이션을 못 찾은 캐릭터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
+        if hidden_kind:
+            msg += " 종류 체크로 %d개를 뺐습니다." % hidden_kind
         self.anim_note.setText(msg)
+        self._apply_anim_filter()
 
     def _char_map(self, anims: List[str]) -> Dict[str, str]:
         """고른 메시가 둘 이상일 때, 애니메이션마다 이름이 가장 어울리는 캐릭터 폴더를 정한다 (못 정하면 경로로)."""
@@ -1039,7 +1111,7 @@ class VidFindTab(QWidget):
 
     def open_in_viewport(self, anims: Optional[List[str]] = None) -> None:
         if anims is None:
-            anims = [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems()]
+            anims = self._picked_anims()
         if not anims:
             QMessageBox.warning(self, "뷰포트로 열기", "열 애니메이션을 목록에서 고르세요 (Ctrl/Shift 로 여러 개, 더블클릭은 하나).")
             return
@@ -1131,7 +1203,7 @@ class VidFindTab(QWidget):
         """what: 'mesh' 메시만 / 'anim' 애니메이션만 / 'both' 둘 다."""
         what = what if what in ("mesh", "anim") else "both"
         meshes = [it.data(Qt.ItemDataRole.UserRole) for it in self.mesh_list.selectedItems()] if what != "anim" else []
-        anims = [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems()] if what != "mesh" else []
+        anims = self._picked_anims() if what != "mesh" else []
         if not meshes and not anims:
             QMessageBox.warning(self, "추출", {"mesh": "추출할 메시를 목록에서 고르세요.", "anim": "추출할 애니메이션을 목록에서 고르세요."}.get(what, "추출할 메시나 애니메이션을 목록에서 고르세요."))
             return
