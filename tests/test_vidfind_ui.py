@@ -604,7 +604,26 @@ def main():
         check(vt.oa_row.isVisible() and vt.key_row.isVisible() and not vt.btn_pull.isVisible(), "다른 AI 입력 줄 표시")
         check(vt.model.text() == "gpt-4o", "기본 모델: %s" % vt.model.text())
         vt.oa_preset.setCurrentIndex(vt.oa_preset.findData("Google Gemini"))
-        check(vt.model.text() == "gemini-2.5-flash", "서비스를 바꾸면 모델도 기본값으로: %s" % vt.model.text())
+        check(vt.model.text() == "gemini-flash-latest", "서비스를 바꾸면 모델도 기본값으로: %s" % vt.model.text())
+        # 무료 서비스: 안내 문구(무료 한도 + 키 받는 곳 링크)가 서비스마다 바뀐다
+        vt.oa_preset.setCurrentIndex(vt.oa_preset.findData("🆓 OpenRouter 무료 (자동 선택)"))
+        check(vt.model.text() == "openrouter/free" and "분당 20회" in vt.oa_info.text() and "openrouter.ai/keys" in vt.oa_info.text(), "무료 서비스 안내: %s" % vt.oa_info.text()[:60])
+        vt.oa_preset.setCurrentIndex(vt.oa_preset.findData("🆓 Groq"))
+        check(vt.model.text() != "openrouter/free" and "console.groq.com" in vt.oa_info.text(), "서비스 바꾸면 안내도 바뀜")
+        # 모델 목록: 이미지를 볼 수 있어 보이는 것이 위, 고르면 모델 칸에 들어간다
+        from qt_stub import QInputDialog  # noqa: E402
+        V.QInputDialog = QInputDialog
+        QInputDialog.item_ret = ("👁 qwen/qwen3.8-27b", True)
+        vt._after_models(["whisper-large", "llama-3.3-70b", "qwen/qwen3.8-27b"])
+        shown = QInputDialog.calls[-1][2]
+        check(shown[0].startswith("👁 ") and shown[-1] == "whisper-large" and vt.model.text() == "qwen/qwen3.8-27b", "모델 목록에서 고르기: %s -> %s" % (shown, vt.model.text()))
+        QInputDialog.item_ret = ("", False)
+        vt.model.setText("keep")
+        vt._after_models(["a"])
+        check(vt.model.text() == "keep", "취소하면 그대로")
+        vt._after_models([])
+        check("모델 목록을 주지 않았습니다" in vt.engine_note.text(), "빈 목록 안내")
+        vt.oa_preset.setCurrentIndex(vt.oa_preset.findData("Google Gemini"))
         vt.key.setText("g-secret")
         vt.engine.setCurrentIndex(vt.engine.findData("claude"))
         check(vt.key.text() != "g-secret" and not vt.oa_row.isVisible(), "Claude 로 바꾸면 다른 키: %r" % vt.key.text())
@@ -615,7 +634,7 @@ def main():
         V.vision.make_provider = lambda kind, cfg, post=None: (seen_cfg.update(kind=kind, cfg=dict(cfg)), vision.OllamaProvider("x", post=fake_post))[1]
         vt.provider()
         c = seen_cfg["cfg"]
-        check(seen_cfg["kind"] == "openai" and c["vf_openai_key"] == "g-secret" and c["vf_oa_model"] == "gemini-2.5-flash" and c["vf_oa_preset"] == "Google Gemini"
+        check(seen_cfg["kind"] == "openai" and c["vf_openai_key"] == "g-secret" and c["vf_oa_model"] == "gemini-flash-latest" and c["vf_oa_preset"] == "Google Gemini"
               and c["vf_claude_key"] == "sk-ant-1", "provider() 가 입력값을 넘김: %s" % {k: v for k, v in c.items() if k.startswith("vf_oa") or k.endswith("key")})
         vt.engine.setCurrentIndex(vt.engine.findData("ollama"))
         check(vt.btn_pull.isVisible() and not vt.key_row.isVisible(), "Ollama 로 돌아오면 모델 받기")

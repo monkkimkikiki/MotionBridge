@@ -173,6 +173,21 @@ check(blk[0]["type"] == "text" and blk[1]["type"] == "image_url" and blk[1]["ima
 check(not vision.OpenAICompatProvider("", "gpt-4o", "https://api.openai.com/v1", post=oa_post).check()[0], "원격은 키 필요")
 check(vision.OpenAICompatProvider("", "llava", "http://localhost:1234/v1", post=oa_post).check()[1].startswith("서버에 모델"), "내 서버: 키는 없어도 되고, 없는 모델은 안내")
 check(not vision.OpenAICompatProvider("k", "", "https://x/v1", post=oa_post).check()[0], "모델 이름 필요")
+# 무료 서비스 프리셋 + 안내 + 모델 목록
+free = [p for p in vision.OPENAI_PRESETS if p[0].startswith("🆓")]
+check(len(free) >= 4 and all(p[1].startswith("https://") and p[3] for p in free), "무료 프리셋: %s" % [p[0] for p in free])
+check(all(p[0] in vision.PRESET_INFO for p in vision.OPENAI_PRESETS), "모든 서비스에 안내 문구")
+check(all(vision.PRESET_INFO[p[0]][1].startswith("https://") for p in free), "무료 서비스는 키 받는 곳 링크")
+check(next(p for p in free if "OpenRouter" in p[0])[2] == "openrouter/free", "OpenRouter 무료 자동 선택")
+srt, nlike = vision.sort_models(["text-embed-3", "gpt-4o", "whisper-1", "llava:13b", "gemma-4-31b-it", "gpt-4o"])
+check(srt[:nlike] == sorted(["gpt-4o", "llava:13b", "gemma-4-31b-it"]) and "whisper-1" in srt[nlike:] and srt.count("gpt-4o") == 1, "이미지 모델 추정 순서: %s" % srt)
+lm = vision.OpenAICompatProvider("k", "", "https://x/v1", post=oa_post)
+check(isinstance(lm.list_models(), list), "모델 목록 호출")
+try:
+    vision.OpenAICompatProvider("", "", "https://x/v1", post=oa_post).list_models()
+    check(False, "키 없이 목록 요청은 막힘")
+except vision.VisionError:
+    check(True, "키 없이 목록 요청은 막힘")
 check(not vision.OpenAICompatProvider("k", "m", "x", post=oa_post).check()[0], "주소 형식 확인")
 check("gpt-4o-mini" in vision.OpenAICompatProvider("k", "nope", "https://x/v1", post=oa_post).check()[1], "없는 모델이면 목록을 보여 줌")
 
@@ -201,7 +216,7 @@ def oa_parts(url, payload, headers, timeout):
 
 check(vision.OpenAICompatProvider("k", "m", "https://x/v1", post=oa_parts).ask(img, "q") == '{"characters":[]}', "조각 목록 응답도 받음")
 gm = vision.make_provider("openai", {"vf_openai_key": "g-key", "vf_oa_preset": "Google Gemini"})
-check(isinstance(gm, vision.OpenAICompatProvider) and "generativelanguage" in gm.base_url and gm.model == "gemini-2.5-flash" and gm.vocab_limit() == 800, "make openai (Gemini 프리셋)")
+check(isinstance(gm, vision.OpenAICompatProvider) and "generativelanguage" in gm.base_url and gm.model == "gemini-flash-latest" and gm.vocab_limit() == 800, "make openai (Gemini 프리셋)")
 gm2 = vision.make_provider("openai", {"vf_openai_key": "k", "vf_oa_url": "http://localhost:11434/v1", "vf_oa_model": "llava"})
 check(gm2.base_url == "http://localhost:11434/v1" and gm2.model == "llava", "직접 주소/모델")
 

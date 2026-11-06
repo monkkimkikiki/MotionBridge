@@ -531,6 +531,16 @@ class QMainWindow(QWidget):
         pass
 
 
+class QInputDialog(Stub):
+    item_ret = ("", False)
+    calls = []
+
+    @staticmethod
+    def getItem(parent, title, label, items, current=0, editable=False, *a, **k):
+        QInputDialog.calls.append((title, label, list(items), current))
+        return QInputDialog.item_ret
+
+
 class QFileDialog(Stub):
     open_ret = ("", "")
     save_ret = ("", "")

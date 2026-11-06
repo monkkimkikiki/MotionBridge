@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget,
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -174,7 +174,16 @@ class VidFindTab(QWidget):
         self.oa_url = QLineEdit(self.cfg.get("vf_oa_url", ""))
         self.oa_url.setPlaceholderText("비워 두면 서비스의 기본 주소")
         oh.addWidget(self.oa_url, 1)
+        self.btn_models = QPushButton("모델 목록")
+        self.btn_models.setToolTip("서버에서 쓸 수 있는 모델 이름을 불러와 고릅니다 (이미지를 볼 수 있어 보이는 것이 위쪽). 무료 모델은 자주 바뀌므로 여기서 확인하세요.")
+        self.btn_models.clicked.connect(lambda *_a: self.load_models())
+        oh.addWidget(self.btn_models)
         v.addWidget(self.oa_row)
+        self.oa_info = QLabel("")
+        self.oa_info.setWordWrap(True)
+        self.oa_info.setOpenExternalLinks(True)
+        self.oa_info.setStyleSheet("color:#8a93a6")
+        v.addWidget(self.oa_info)
         self._keys = {"claude": self.cfg.get("vf_claude_key", ""), "openai": self.cfg.get("vf_openai_key", "")}
         self.key_row = QWidget()
         kh = QHBoxLayout(self.key_row)
@@ -506,6 +515,32 @@ class VidFindTab(QWidget):
         self.oa_url.setPlaceholderText(self._preset()[1])
         self._engine_note_update()
 
+    def _preset_info_text(self) -> str:
+        nm = self._preset()[0]
+        note, url = vision.PRESET_INFO.get(nm, ("", ""))
+        return (note + ((' · <a href="%s">API 키 받는 곳</a>' % url) if url else "")) if note else ""
+
+    def load_models(self) -> None:
+        """서버의 모델 목록을 불러와 고르게 한다 (OpenAI 호환 서비스 전용)."""
+        prov = self.provider()
+        if prov.key != "openai":
+            self.engine_note.setText("모델 목록은 '다른 AI' 방식에서 쓸 수 있습니다. Ollama 는 'ollama list' 로 확인하세요.")
+            return
+        self.win.run_async(lambda w: prov.list_models(), self._after_models, "모델 목록 불러오는 중")
+
+    def _after_models(self, names) -> None:
+        if not names:
+            self.engine_note.setText("✖ 서버가 모델 목록을 주지 않았습니다. 서비스 사이트에서 모델 이름을 확인해 직접 입력하세요.")
+            return
+        ordered, likely = vision.sort_models(names)
+        shown = [("👁 " if i < likely else "") + n for i, n in enumerate(ordered)]
+        cur = self.model.text().strip()
+        pick, ok = QInputDialog.getItem(self, "모델 고르기", "이미지를 볼 수 있어 보이는 모델(👁)이 위에 있습니다 — 이름으로만 추정이라 틀릴 수 있어요.\n전체 %d개" % len(ordered),
+                                        shown, max(ordered.index(cur), 0) if cur in ordered else 0, False)
+        if ok and pick:
+            self.model.setText(pick.replace("👁 ", "", 1))
+            self.engine_note.setText("모델을 '%s' 로 정했습니다. [연결 확인]으로 확인하세요." % self.model.text())
+
     def _engine_note_update(self) -> None:
         kind = self._provider_kind()
         if kind == "claude":
@@ -518,6 +553,9 @@ class VidFindTab(QWidget):
         else:
             note = "내 PC에서만 처리됩니다. Ollama 설치 후 'ollama pull %s' 로 모델을 받으세요. 그래픽카드가 약하면 느리고 덜 정확합니다." % vision.OLLAMA_MODELS[0]
         self.engine_note.setText(note)
+        if getattr(self, "oa_info", None) is not None:
+            self.oa_info.setText(self._preset_info_text() if kind == "openai" else "")
+            self.oa_info.setVisible(kind == "openai")
 
     def _engine_changed(self, *_a) -> None:
         kind = self._provider_kind()

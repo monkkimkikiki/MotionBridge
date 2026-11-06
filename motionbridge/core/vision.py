@@ -24,10 +24,36 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 # OpenAI 호환 API 로 붙는 다른 AI: (이름, 주소, 기본 모델, 키 환경변수). GPT·Gemini·OpenRouter·내 서버(LM Studio 등)가 같은 방식이다.
 OPENAI_PRESETS = [
     ("OpenAI (GPT)", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY"),
-    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash", "GEMINI_API_KEY"),
+    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-latest", "GEMINI_API_KEY"),
     ("OpenRouter (여러 AI 모음)", "https://openrouter.ai/api/v1", "google/gemini-2.5-flash", "OPENROUTER_API_KEY"),
+    ("🆓 OpenRouter 무료 (자동 선택)", "https://openrouter.ai/api/v1", "openrouter/free", "OPENROUTER_API_KEY"),
+    ("🆓 Groq", "https://api.groq.com/openai/v1", "qwen/qwen3.8-27b", "GROQ_API_KEY"),
+    ("🆓 GitHub Models", "https://models.inference.ai.azure.com", "gpt-4o", "GITHUB_TOKEN"),
+    ("🆓 NVIDIA NIM (체험 크레딧)", "https://integrate.api.nvidia.com/v1", "meta/llama-3.2-90b-vision-instruct", "NVIDIA_API_KEY"),
     ("내 서버 (LM Studio 등)", "http://localhost:1234/v1", "", ""),
 ]
+# 서비스별 안내 (2026-11 조사 기준 — 무료 한도와 무료 모델은 자주 바뀌므로 '모델 목록' 버튼과 서비스 사이트에서 최신 상태를 확인하세요)
+PRESET_INFO = {
+    "OpenAI (GPT)": ("유료(호출한 만큼 요금)", "https://platform.openai.com/api-keys"),
+    "Google Gemini": ("무료 티어 있음(카드 불필요): Flash 계열. 한도는 AI Studio 에서 확인. ⚠ 무료 티어에 보낸 이미지는 Google 이 모델 개선에 쓸 수 있어요", "https://aistudio.google.com/apikey"),
+    "OpenRouter (여러 AI 모음)": ("유료(크레딧 충전)", "https://openrouter.ai/keys"),
+    "🆓 OpenRouter 무료 (자동 선택)": ("이미지를 볼 수 있는 무료 모델 중에서 알아서 골라 줌(매번 다른 모델일 수 있어 정확도가 들쭉날쭉). 무료 모델은 분당 20회·하루 50회(크레딧 $10 이상 충전하면 1000회)", "https://openrouter.ai/keys"),
+    "🆓 Groq": ("무료(카드 불필요), 분당 약 30회. 이미지를 볼 수 있는 모델만 쓰세요(모델 목록 확인) — 요청당 이미지 수 제한이 있어 '장면당 이미지 수'를 낮게", "https://console.groq.com/keys"),
+    "🆓 GitHub Models": ("GitHub 계정과 토큰만 있으면 무료(한도 낮음, 프로토타입용). 토큰 종류는 'models' 권한", "https://github.com/settings/tokens"),
+    "🆓 NVIDIA NIM (체험 크레딧)": ("가입하면 체험 크레딧(약 1000)과 분당 40회. 계속 무료는 아님", "https://build.nvidia.com/settings/api-keys"),
+    "내 서버 (LM Studio 등)": ("내 PC/서버에서 처리(무료, 이미지를 볼 수 있는 모델을 로드해야 함)", ""),
+}
+VISION_HINTS = ("vision", "-vl", "vl-", "llava", "pixtral", "gpt-4o", "gpt-4.1", "gpt-5", "gemini", "gemma-3", "gemma-4", "gemma3", "gemma4", "llama-3.2", "llama-4",
+                "qwen3", "qwen2.5-vl", "claude", "omni", "inkling", "phi-4-multimodal", "minicpm", "molmo", "internvl")
+
+
+def sort_models(names):
+    """모델 이름 목록을 '이미지를 볼 수 있어 보이는 것' 먼저, 나머지는 뒤에 (이름으로만 추정이라 틀릴 수 있다)."""
+    def likely(n: str) -> bool:
+        low = n.lower()
+        return any(h in low for h in VISION_HINTS)
+    uniq = sorted(dict.fromkeys(str(n) for n in names if n))
+    return [n for n in uniq if likely(n)] + [n for n in uniq if not likely(n)], sum(1 for n in uniq if likely(n))
 VOCAB_LIMIT = {"ollama": 250, "claude": 800, "openai": 800}  # 한 번에 알려줄 이름 수 (작은 모델은 긴 목록에 약하다)
 
 
@@ -314,7 +340,7 @@ class ClaudeProvider(Provider):
 class OpenAICompatProvider(Provider):
     """OpenAI 호환 /chat/completions 로 이미지를 보내는 인식 방식: GPT, Gemini(호환 주소), OpenRouter, LM Studio 등."""
     key = "openai"
-    label = "다른 AI (GPT · Gemini · OpenRouter · 내 서버, API 키)"
+    label = "다른 AI (무료 포함: Gemini · Groq · OpenRouter · GitHub · GPT · 내 서버)"
 
     def __init__(self, api_key: str, model: str, base_url: str, post: Callable = _http, timeout: float = 120.0) -> None:
         super().__init__(post)
@@ -351,6 +377,21 @@ class OpenAICompatProvider(Provider):
         if names and not any(n == self.model or n.split("/")[-1].replace("models/", "") == base for n in names):
             return False, "서버에 모델 '%s' 이(가) 없습니다. 이 중에서 골라 보세요: %s" % (self.model, ", ".join(names[:8])), names
         return True, "연결됨 (%s) — 영상 이미지가 이 서버로 전송되고 호출한 만큼 요금이 들 수 있어요." % self.model, names
+
+    def list_models(self) -> List[str]:
+        """서버가 알려 주는 모델 이름 목록 (모델 이름을 몰라도 된다). 목록을 안 주는 서버는 빈 목록."""
+        if not self.base_url.startswith(("http://", "https://")):
+            raise VisionError("서버 주소를 입력하세요.")
+        if not self.api_key and not self._local():
+            raise VisionError("API 키를 먼저 입력하세요 (환경변수로도 쓸 수 있어요).")
+        try:
+            d = self.post(self.base_url + "/models", None, self._headers(), 20.0)
+        except VisionError as e:
+            if "HTTP 401" in str(e) or "HTTP 403" in str(e):
+                raise VisionError("API 키가 거부됐습니다. 키와 서버 주소가 맞는지 확인하세요.")
+            raise
+        rows = d.get("data") if isinstance(d, dict) else d
+        return [str(m.get("id", "")) for m in (rows or []) if isinstance(m, dict) and m.get("id")]
 
     def _send(self, prompt: str, image_path: Optional[str]) -> str:
         if not self.base_url or not self.model:
