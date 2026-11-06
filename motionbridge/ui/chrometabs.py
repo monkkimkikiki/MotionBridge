@@ -121,9 +121,11 @@ class ChromeTabs(QWidget):
             self.bar.setTabToolTip(index, self.hub.tips.get(id(page), ""))
         finally:
             self._sync = False
-        page.show()
+        # 보이는 화면은 현재 탭 하나뿐이어야 한다. 여기서 page.show() 를 하면 현재가 아닌 탭들이 기본 크기로 왼쪽 위에 겹쳐 보인다.
         if self._cur is None:
             self.set_current(page)
+        else:
+            page.hide()
 
     def remove(self, page: QWidget) -> None:
         i = self.pages.index(page)

@@ -37,9 +37,12 @@ for i, p in enumerate(pages):
     t.addTab(p, "탭%d" % i, "긴 이름 %d" % i)
 t.show()
 app.processEvents()
+check(sum(1 for p in pages if p.isVisible()) == 1 and pages[0].isVisible(), "탭: 현재 화면 하나만 보임(나머지가 왼쪽 위에 겹치지 않음)")
 seen = []
 t.currentChanged.connect(seen.append)
 t.setCurrentIndex(2)
+app.processEvents()
+check(sum(1 for p in pages if p.isVisible()) == 1 and pages[2].isVisible(), "탭 전환 뒤에도 하나만 보임")
 check(t.currentIndex() == 2 and t.bar.currentIndex() == 2 and seen == [2], "번호로 전환 + 신호")
 t.bar.setCurrentIndex(1)
 check(t.currentIndex() == 1 and seen[-1] == 1, "탭 줄을 눌러 전환")
@@ -70,9 +73,12 @@ with tempfile.TemporaryDirectory() as d:
     mw.show()
     app.processEvents()
     check(mw.tabs.count() == 8, "메인 창 탭 8개")
+    check(sum(1 for p in mw.tabs.pages if p.isVisible()) == 1, "메인 창: 처음에 보이는 탭 화면은 하나")
     for i in range(mw.tabs.count()):
         mw.tabs.setCurrentIndex(i)
         app.processEvents()
+        vis = [mw.tabs.tabText(k) for k, p in enumerate(mw.tabs.pages) if p.isVisible()]
+        check(len(vis) == 1 and mw.tabs.pages[i].isVisible(), "탭 %d 에서 보이는 화면: %s" % (i, vis))
     check(mw.tabs.currentIndex() == 7, "모든 탭 순회")
     vt = mw.vidfind
     win = mw.tabs.hub.detach(vt, None)
