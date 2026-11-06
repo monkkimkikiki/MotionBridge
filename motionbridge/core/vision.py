@@ -59,8 +59,9 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str]
                  "Use this as a strong hint. If a visible character matches one of them, answer with its internal name from the list.\n\n"
                  % "\n".join("- " + k for k in known))
     return (
-        "This is a screenshot%s. Identify every distinct monster, enemy, boss or NPC character visible "
-        "(ignore the player's own hands/weapon, UI, and scenery). Several can be on screen at once.\n"
+        "This is a screenshot%s. Identify every distinct monster, enemy, boss or NPC character visible, and also the player-controlled "
+        "(playable) character when its body is visible (ignore first-person hands/weapon, UI, and scenery). Several can be on screen at once. "
+        "For the playable character use a name from the list that contains words like player, hero or protagonist if one exists, otherwise answer \"player\".\n"
         "%sKnown character names in this game's files:\n[%s]\n\n"
         "For each visible character answer with:\n"
         '  "name": the matching name from the list above exactly as written. Do NOT force a match: if the character is not clearly one of them '

@@ -304,7 +304,10 @@ class VidFindTab(QWidget):
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mesh_list.setMinimumHeight(70)
         self.mesh_list.itemSelectionChanged.connect(self._refill_anims)
+        self.mesh_list.itemDoubleClicked.connect(self._mesh_double_clicked)
+        self.mesh_list.setToolTip("더블클릭: 이 메시를 바로 뷰포트(타깃)로 엽니다 — 리깅(스켈레톤·스킨)이 든 GLB 로 뽑아서 바로 불러와요.")
         v.addWidget(self.mesh_list)
+        v.addWidget(QLabel("↑ 더블클릭하면 그 메시가 바로 뷰포트에 열려요 (추출 없이 확인)"))
         h = QHBoxLayout()
         h.addWidget(QLabel("애니메이션 분류"))
         self.label = QComboBox()
@@ -339,6 +342,11 @@ class VidFindTab(QWidget):
         self.anim_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.anim_list.setMinimumHeight(200)
         v.addWidget(self.anim_list)
+        self.ck_player = QCheckBox("플레이어블 캐릭터 애니메이션으로 찾기")
+        self.ck_player.setToolTip("플레이어가 조종하는 캐릭터는 몸(메시)이 여러 벌이어도 애니메이션을 공유해서, 메시 이름이 아니라 player/pc/hero 같은 "
+                                  "이름이 든 공용 애니메이션을 보여줍니다. 메시 경로에 그런 낱말이 있으면 자동으로 켜지고, 아니면 여기서 직접 켜세요.")
+        self.ck_player.toggled.connect(self._refill_anims)
+        v.addWidget(self.ck_player)
         self.anim_note = QLabel("")
         self.anim_note.setWordWrap(True)
         v.addWidget(self.anim_note)
@@ -916,10 +924,14 @@ class VidFindTab(QWidget):
         hits = int(self.hits.value()) or None
         total = 0
         empty: List[str] = []
+        players: List[str] = []
+        force = True if self.ck_player.isChecked() else None
         for p in self._selected_mesh_paths():
-            cands = idx.rank_anims(p, label, hits, 60)
             m = idx.mesh(p)
             nm = m.name if m else assetidx.mesh_name(p)
+            if force or assetidx.is_player_path(p):
+                players.append(nm)
+            cands = idx.rank_anims(p, label, hits, 60, player=force)
             if not cands:
                 empty.append(nm)
             for c in cands:
@@ -929,6 +941,8 @@ class VidFindTab(QWidget):
                 self.anim_list.addItem(it)
                 total += 1
         msg = "애니메이션 후보 %d개 (점수 높은 순)." % total
+        if players:
+            msg += " 플레이어블 캐릭터(%s)는 몸이 아니라 player/pc/hero 이름이 든 공용 애니메이션을 보여줍니다." % ", ".join(players[:3])
         if empty:
             msg += " 이름이 맞는 애니메이션을 못 찾은 몬스터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
         self.anim_note.setText(msg)
@@ -1001,6 +1015,49 @@ class VidFindTab(QWidget):
             win.statusBar().showMessage(msg)
 
         win.run_async(job, done, "애니메이션 뽑는 중")
+
+    def _mesh_double_clicked(self, item, *_a) -> None:
+        self.open_mesh_in_viewport(item.data(Qt.ItemDataRole.UserRole))
+
+    def open_mesh_in_viewport(self, mesh: str) -> None:
+        """고른 메시를 리깅(스켈레톤+스킨)이 든 GLB 로 뽑아 바로 뷰포트의 타깃으로 연다 (Blender 필요 없음)."""
+        a = self.win._extract_args()
+        if a is None:
+            return
+        win = self.win
+        out = win.ex_out.text().strip()
+        if not out:
+            return
+        lay = win.make_layout(layout.character_of(mesh))
+        tex = bool(win.ex_tex.isChecked())
+        bridge.save_config(self.cfg)
+        win._ex_skips = []
+        name = assetidx.mesh_name(mesh)
+
+        def job(w):
+            def ev(e):
+                if e.get("type") == "skip":
+                    win._ex_skips.append("%s — %s" % (os.path.basename(e.get("path", "")), e.get("reason", "")))
+                if e.get("type") in ("exported", "skip"):
+                    w.progress.emit(0, 1, os.path.basename(e.get("path", "")))
+            files = extractor.export_assets(*a, [mesh], out, ev, kind="mesh", mesh_format="glb", textures=tex, lay=lay)
+            glb = next((f for f in files if f.lower().endswith(".glb")), None)
+            if not glb:
+                raise RuntimeError("메시를 뽑지 못했습니다. " + " / ".join(win._ex_skips[:3]))
+            w.progress.emit(0, 1, "메시 읽는 중")
+            m = win.pr.load_target(glb)
+            return files, glb, m.skeleton.n
+
+        def done(res):
+            files, glb, nbones = res
+            self.last_files = list(files)
+            win.ex_files.set_paths(files)
+            win._after_load("target")
+            win.tabs.setCurrentIndex(1)
+            win.statusBar().showMessage("메시를 뷰포트로 열었습니다: %s (본 %d개)" % (name, nbones) if nbones else
+                                        "메시를 열었지만 스켈레톤(리깅)이 없어요: %s — 다른 후보를 써 보세요" % name)
+
+        win.run_async(job, done, "메시 여는 중 (%s)" % name)
 
     # ================================================================== 추출
     def extract(self, what: str = "both") -> None:

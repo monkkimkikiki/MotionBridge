@@ -46,6 +46,15 @@ CATEGORY_NAME = {"attack": "공격", "hit": "피격", "skill": "스킬", "cinema
                  "walk": "걷기", "run": "달리기", "idle": "대기"}
 KNOWN_LABELS = tuple(LABEL_CATEGORY)
 
+# 플레이어가 조종하는 캐릭터(플레이어블)의 경로/이름에 흔히 들어가는 낱말. 플레이어는 몸(메시)이 여러 벌이어도 스켈레톤·애니메이션을 공유하므로
+# 몬스터처럼 '메시 이름과 비슷한 애니메이션'으로 찾지 않고, 이런 낱말이 든 (공용) 애니메이션 경로로 찾는다.
+PLAYER_WORDS = {"player", "pc", "playable", "hero", "protagonist", "avatar", "mc", "fallen"}
+
+
+def is_player_path(path: str) -> bool:
+    """메시/애니메이션 경로가 플레이어블 캐릭터 것으로 보이는지 (폴더 이름 포함)."""
+    return bool(set(tokens((path or "").replace("\\", "/"), drop_stop=False)) & PLAYER_WORDS)
+
 # 게임 안 표시 이름과 리소스 이름이 다를 때를 위한 비슷한 말 (같은 묶음끼리 같은 뜻으로 본다)
 SYNONYMS = [
     {"captive", "prisoner", "convict", "inmate", "hostage", "detainee", "thrall", "slave", "jailed"},
@@ -63,6 +72,7 @@ SYNONYMS = [
     {"archer", "bowman", "ranger", "hunter"},
     {"mage", "wizard", "sorcerer", "witch", "caster"},
     {"king", "lord", "queen", "ruler"},
+    {"player", "playable", "hero", "protagonist", "avatar", "pc"},
 ]
 # 한국어 낱말 -> 영어 후보 (공백을 뺀 글자에서 찾는다)
 KO_TERMS = {
@@ -71,6 +81,7 @@ KO_TERMS = {
     "기사": ["knight"], "병사": ["soldier"], "전사": ["warrior"], "수호자": ["guardian"], "파수꾼": ["sentinel"],
     "거미": ["spider"], "늑대": ["wolf"], "골렘": ["golem"], "드워프": ["dwarf"], "난쟁이": ["dwarf"], "악마": ["demon"],
     "거인": ["giant"], "사제": ["priest"], "광신도": ["cultist"], "궁수": ["archer"], "마법사": ["mage"], "왕": ["king"],
+    "플레이어": ["player"], "플레이어블": ["playable", "player"], "주인공": ["protagonist", "hero", "player"], "조종캐릭터": ["player"],
 }
 # 이름 짓기에서 뜻이 없는 낱말 (찾을 때 무시)
 NAME_NOISE = {"the", "a", "an", "of", "boss", "elite", "minor", "major", "lesser", "greater", "old", "young", "new", "mini", "unique"}
@@ -259,7 +270,15 @@ class AssetIndex:
         for m in self.meshes:
             seen.setdefault(m.name.lower(), m.name)
         out = sorted(seen.values(), key=str.lower)
+        if limit and len(out) > limit:  # 줄여야 하면 플레이어블 이름은 꼭 남긴다 (AI 가 플레이어도 알아보게)
+            pl = [n for n in out if is_player_path(n)][: max(limit // 4, 1)]
+            keep = set(pl)
+            out = sorted(pl + [n for n in out if n not in keep][: limit - len(pl)], key=str.lower)
+            return out
         return out[:limit] if limit else out
+
+    def player_meshes(self) -> List[MeshEntry]:
+        return [m for m in self.meshes if is_player_path(m.path)]
 
     # ------------------------------------------------------------------ 메시 후보
     def rank_meshes(self, guess: str, description: str = "", limit: int = 8, memory: Optional[MatchMemory] = None) -> List[MeshCandidate]:
@@ -378,13 +397,21 @@ class AssetIndex:
             why = "같은 폴더 계열"
         return s, why
 
+    def player_score(self, anim_path: str) -> Tuple[float, str]:
+        """플레이어블 캐릭터 애니메이션 점수: 경로(폴더 포함)에 player/pc/hero 같은 낱말이 있으면 1."""
+        hit = set(tokens(anim_path.replace("\\", "/"), drop_stop=False)) & PLAYER_WORDS
+        return (1.0, "플레이어 공용 (%s)" % ", ".join(sorted(hit))) if hit else (0.0, "")
+
     def rank_anims(self, mesh_path: str, label: Optional[str] = None, hits: Optional[int] = None, limit: int = 80,
-                   min_char: float = 0.3) -> List[AnimCandidate]:
+                   min_char: float = 0.3, player: Optional[bool] = None) -> List[AnimCandidate]:
+        """player=None 이면 메시 경로로 자동 판단, True/False 는 강제."""
         m = self.mesh(mesh_path) or MeshEntry.of(mesh_path)
+        if player is None:
+            player = is_player_path(mesh_path)
         cat = LABEL_CATEGORY.get((label or "").strip()) if label else None
         out: List[AnimCandidate] = []
         for a in self.anims:
-            cs, why = self.char_score(m, a)
+            cs, why = self.player_score(a) if player else self.char_score(m, a)
             if cs < min_char:
                 continue
             reasons = [why] if why else []

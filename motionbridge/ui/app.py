@@ -536,6 +536,7 @@ class MainWindow(QMainWindow):
         self.ex_dir_label.linkActivated.connect(lambda *_a: self._open_out_folder())
         v.addWidget(self.ex_dir_label)
         self.ex_files = PathTree(tag_kinds=True)  # [모델링 · 리깅 포함] / [애니메이션] 같은 이름표를 붙인다
+        self.ex_files.on_set = self.note_extracted  # 추출하면 그 폴더를 기억 -> 모델/모션 열기 창이 거기서 시작
         self.ex_files.setMinimumHeight(130)
         self.ex_files.itemDoubleClicked.connect(self._ex_files_double_clicked)
         v.addWidget(self.ex_files)
@@ -1250,14 +1251,36 @@ class MainWindow(QMainWindow):
         self.cfg["last_dir"] = os.path.dirname(path)
         bridge.save_config(self.cfg)
 
+    MESH_EXTS = (".glb", ".gltf", ".fbx", ".obj", ".psk", ".pskx")
+
+    def note_extracted(self, files) -> None:
+        """방금 추출/불러온 파일들이 든 폴더를 기억한다: 메시는 Models, 모션은 Animations (원본 _raw/변환 중간 폴더는 제외)."""
+        found = {}
+        for f in files or []:
+            low = f.lower().replace("\\", "/")
+            if "/_raw/" in low or "/_stage" in low:
+                continue
+            kind = "mesh" if low.endswith(self.MESH_EXTS) else "anim" if low.endswith(".psa") else None
+            if kind and kind not in found:
+                found[kind] = os.path.dirname(f)
+        if found:
+            self.cfg.update({"last_mesh_dir": found.get("mesh", self.cfg.get("last_mesh_dir", "")),
+                             "last_anim_dir": found.get("anim", self.cfg.get("last_anim_dir", ""))})
+            bridge.save_config(self.cfg)
+
+    def _open_start_dir(self, kind: str) -> str:
+        """열기 창이 시작할 폴더: 마지막으로 추출한 그 종류(mesh/anim)의 폴더, 없으면 마지막으로 연 폴더."""
+        d = self.cfg.get("last_mesh_dir" if kind == "mesh" else "last_anim_dir", "")
+        return d if d and os.path.isdir(d) else self.cfg.get("last_dir", "")
+
     def open_source(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "소스 모션 열기", self.cfg.get("last_dir", ""), FILE_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, "소스 모션 열기", self._open_start_dir("anim"), FILE_FILTER)
         if path:
             self._remember_dir(path)
             self.run_async(lambda w: self.pr.load_source(path), lambda m: self._after_load("source"), "소스 읽는 중")
 
     def open_target(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "타깃 모델 열기", self.cfg.get("last_dir", ""), FILE_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, "타깃 모델 열기", self._open_start_dir("mesh"), FILE_FILTER)
         if path:
             self._remember_dir(path)
             self.run_async(lambda w: self.pr.load_target(path), lambda m: self._after_load("target"), "타깃 읽는 중")

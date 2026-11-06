@@ -123,5 +123,23 @@ check([c.name for c in idx.search("golem")] == ["StoneGolem"], "부분 문자열
 check(len(idx.search("")) == 5, "빈 검색은 앞부분 전체")
 check(ai.filter_paths(M, r"(?i)monsters") == M[:4], "경로 필터")
 
+# 플레이어블 캐릭터: 몸(메시)이 여러 벌이어도 공용 애니메이션(player/pc 경로)으로 찾는다
+PM = ["Sparta/Content/Characters/Player/Meshes/SK_Player_Shell_Tiel.SK_Player_Shell_Tiel", "Sparta/Content/Characters/Monsters/Dwarf/Meshes/SK_Dwarf.SK_Dwarf"]
+PA = ["Sparta/Content/Characters/Player/Animations/A_PC_LightAttack_01", "Sparta/Content/Characters/Player/Animations/A_PC_Roll_Fwd",
+      "Sparta/Content/Characters/Monsters/Dwarf/Animations/A_Dwarf_Attack_1", "Sparta/Content/Common/Hero_Idle"]
+pidx = ai.AssetIndex(PM, PA)
+check(ai.is_player_path(PM[0]) and not ai.is_player_path(PM[1]), "플레이어 경로 판별")
+check([m.name for m in pidx.player_meshes()] == ["Player_Shell_Tiel"], "플레이어 메시 목록")
+rp = pidx.rank_anims(PM[0], None, None, 10)
+check({c.path for c in rp} == {PA[0], PA[1], PA[3]} and all("플레이어" in c.why for c in rp), "플레이어는 공용(player/pc/hero) 애니메이션을 보여줌: %s" % [c.path for c in rp])
+rp2 = pidx.rank_anims(PM[0], "타격", None, 10)
+check(rp2 and rp2[0].path == PA[0], "플레이어도 분류(타격)로 정렬: %s" % [c.path for c in rp2])
+rm = pidx.rank_anims(PM[1], None, None, 10)
+check([c.path for c in rm] == [PA[2]], "몬스터는 그대로 메시 이름으로")
+check({c.path for c in pidx.rank_anims(PM[1], None, None, 10, player=True)} == {PA[0], PA[1], PA[3]}, "강제로 플레이어 모드")
+big = ai.AssetIndex(PM + ["X/SK_M%d.SK_M%d" % (i, i) for i in range(50)], [])
+check("Player_Shell_Tiel" in big.names(10) and len(big.names(10)) == 10, "이름 목록을 줄여도 플레이어 이름은 남김")
+check(pidx.rank_meshes("Player")[0].name == "Player_Shell_Tiel", "AI 가 'Player' 라고 하면 플레이어 메시")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

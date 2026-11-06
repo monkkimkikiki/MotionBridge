@@ -142,9 +142,16 @@ class PathTree(QTreeWidget):
         self.setUniformRowHeights(True)
 
     # -- 채우기
+    on_set = None  # 목록이 새로 채워질 때 부르는 함수(paths) — 앱이 '마지막 추출 폴더'를 기억하는 데 쓴다
+
     def set_paths(self, paths) -> None:
         self.clear()
         self._paths = list(dict.fromkeys(paths))
+        if self.on_set is not None:
+            try:
+                self.on_set(list(self._paths))
+            except Exception:  # noqa: BLE001 (목록 표시는 이 기억 때문에 막히면 안 됨)
+                pass
         for n in build_tree(self._paths, strip_ext=self.strip_ext):
             self.addTopLevelItem(self._make(n))
         if len(self._paths) <= self.AUTO_EXPAND_MAX:

@@ -430,6 +430,35 @@ def main():
         vt._anim_double_clicked(vt.anim_list.item(2))
         check(len(mw.pr.src.animations) == 1 and exported[-1] == [vt.anim_list.item(2).data(A.Qt.ItemDataRole.UserRole)], "더블클릭은 하나만 열기")
 
+        # 메시 더블클릭 = 추출 단계 없이 리깅된 GLB 를 뽑아 바로 타깃으로
+        import shutil
+        import test_pipeline as TPL
+        os.makedirs(os.path.join(d, "mk"), exist_ok=True)
+        _s, _s2, tgt_glb, _a, _b = TPL.make_inputs(os.path.join(d, "mk"))
+        mesh_calls = []
+
+        def fake_ea_mesh(helper, root, ue, aes, usmap, paths, out, on_event=None, kind="anim", **k):
+            mesh_calls.append((list(paths), kind, k.get("mesh_format")))
+            dst = os.path.join(k["lay"].model_dest(paths[0]), "SK_Dwarf.glb")
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy(tgt_glb, dst)
+            return [dst]
+
+        V.extractor.export_assets = fake_ea_mesh
+        mw.pr.tgt = None
+        vt._mesh_double_clicked(vt.mesh_list.item(0))
+        check(mesh_calls == [([MESHES[0]], "mesh", "glb")], "메시를 GLB 로 뽑음: %s" % mesh_calls)
+        check(mw.pr.tgt is not None and mw.pr.tgt.skeleton.n > 0, "뷰포트 타깃으로 열림 (리깅 포함)")
+        md = mw.cfg.get("last_mesh_dir", "")
+        check(md.replace("\\", "/").endswith("/Models") and os.path.isdir(md) and mw._open_start_dir("mesh") == md, "타깃 열기 창은 메시를 뽑은 폴더에서 시작: %s" % md)
+        ad = mw.cfg.get("last_anim_dir", "")
+        check(ad.replace("\\", "/").endswith("/Animations") and mw._open_start_dir("anim") == ad, "소스 열기 창은 모션을 뽑은 폴더에서 시작: %s" % ad)
+        mw.cfg["last_mesh_dir"] = "/nonexistent/zzz"
+        check(mw._open_start_dir("mesh") == mw.cfg.get("last_dir", ""), "폴더가 없으면 마지막으로 연 폴더")
+        mw.note_extracted([md + "/_raw/x.pskx", md + "/a.fbx"])
+        check(mw.cfg["last_mesh_dir"] == md, "_raw 는 건너뜀")
+        V.extractor.export_assets = fake_ea2
+
         # ---------------- 메시만 / 애니메이션만 추출
         calls = {"mesh": 0, "anim": 0}
         real_ea, real_em = V.extractor.export_assets, V.extractor.export_meshes
