@@ -755,7 +755,7 @@ def main():
         check(seen_start == [clips], "클립 폴더 대화상자 시작 위치: %s" % seen_start)
 
         # 탭: 크롬식 탭 줄 (번호 = 처음 추가된 순서)
-        check(mw.tabs.count() == 8 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AnimRef", "탭 8개 (AnimRef 포함)")
+        check(mw.tabs.count() == 9 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AnimRef", "탭 9개 (AnimRef·AI모캡 포함)")
         mw.tabs.setCurrentIndex(5)
         check(mw.tabs.currentIndex() == 5 and mw.tabs.current_page() is vt, "탭 이동/표시")
         mw.tabs._bar_changed(2)  # 탭 줄을 눌렀을 때

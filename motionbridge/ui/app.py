@@ -27,6 +27,7 @@ from .viewer import MESH_MODES, Viewport
 from .retimebar import RetimeBar
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
+from .mocap_tab import MocapTab
 from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
 from .widgets import BusyDialog, EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
             ("탭", "tab3", "3. 품질 검수", "goto_tab:3", ("Ctrl+4",)),
             ("탭", "tab4", "4. 내보내기", "goto_tab:4", ("Ctrl+5",)),
             ("탭", "tab5", "영상으로 찾기", "goto_tab:5", ("Ctrl+6",)),
+            ("탭", "tab8", "AI 모캡", "goto_tab:8", ("Ctrl+7",)),
             ("도움말", "shortcuts", "단축키 목록", "show_shortcuts", ("F1",)),
             ("도움말", "about", "정보", "show_about", ()),
         ]
@@ -344,6 +346,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_help(), "도우미", "추출 도우미")
         self.animref = AnimRefTab(self)  # 처음 열 때 만들어진다 (시작이 느려지지 않게)
         self.tabs.addTab(self.animref, "AnimRef", "AnimRef — 게임 영상에서 모션 클립 수집")
+        self.mocap = MocapTab(self)
+        self.tabs.addTab(self.mocap, "AI모캡", "AI 모캡 — 영상에서 사람 3D 모션 (GVHMR / WHAM)")
         self.tabs.setMinimumWidth(500)
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         split.addWidget(self.tabs)

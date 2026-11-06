@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory() as d:
     mw = A.MainWindow()
     mw.show()
     app.processEvents()
-    check(mw.tabs.count() == 8, "메인 창 탭 8개")
+    check(mw.tabs.count() == 9, "메인 창 탭 9개")
     check(sum(1 for p in mw.tabs.pages if p.isVisible()) == 1, "메인 창: 처음에 보이는 탭 화면은 하나")
     for i in range(mw.tabs.count()):
         mw.tabs.setCurrentIndex(i)
