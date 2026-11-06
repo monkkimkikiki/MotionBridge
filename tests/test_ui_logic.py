@@ -291,9 +291,12 @@ def test_full_flow():
         mw.cb_fmt["glb"].setChecked(True)
         mw.cb_preset["max"].setChecked(True)
         mw.rb_clip_all.setChecked(True)
+        assert mw.cb_organize.isChecked(), "캐릭터별 폴더 정리가 기본"
         mw.do_export()
-        fs = sorted(os.listdir(out))
-        assert len([f for f in fs if f.endswith(".bvh")]) == 4 and len([f for f in fs if f.endswith(".glb")]) == 2, fs  # 클립 2개 × (blender,max)
+        walk = sorted(os.path.relpath(os.path.join(r, f), out).replace("\\", "/") for r, _ds, fl in os.walk(out) for f in fl)
+        fs = [os.path.basename(f) for f in walk]
+        assert len([f for f in fs if f.endswith(".bvh")]) == 4 and len([f for f in fs if f.endswith(".glb")]) == 2, walk  # 클립 2개 × (blender,max)
+        assert all(w.count("/") == 2 and w.split("/")[1] in ("Animations", "Models") for w in walk), walk  # 캐릭터/Animations|Models/파일
         assert "완료" in mw.export_log.toPlainText()
         assert mw.pr.clip == 0 and mw.pr.result is not None and mw.tabs.isEnabled()
         # 본 구조 제외
@@ -303,7 +306,8 @@ def test_full_flow():
         mw.rb_clip_all.setChecked(False)
         mw.rb_clip_cur.setChecked(True)
         mw.do_export()
-        assert [f for f in os.listdir(out2)] and all(f.endswith("_curves.json") for f in os.listdir(out2))
+        walk2 = [os.path.join(r, f) for r, _ds, fl in os.walk(out2) for f in fl]
+        assert walk2 and all(f.endswith("_curves.json") and os.sep + "Animations" + os.sep in f for f in walk2), walk2
         # 형식 미선택 / FBX 인데 Blender 없음 -> 경고창, 파일 없음
         mw.cb_skeleton.setChecked(True)
         for cb in mw.cb_fmt.values():
