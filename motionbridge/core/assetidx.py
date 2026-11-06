@@ -15,6 +15,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from . import textmatch
+
 # 이름에서 의미 없는 단어 (접두사/폴더 잡음)
 STOP = {
     "sk", "skm", "sm", "skel", "skeletal", "skeleton", "mesh", "meshes", "a", "am", "as", "anim", "anims", "animation",
@@ -341,6 +343,11 @@ class AssetIndex:
         q = (text or "").strip().lower()
         if not q:
             return [MeshCandidate(m.path, m.name, 0.0) for m in self.meshes[:limit]]
+        if "," in q:  # 쉼표: 모두 포함 (예: character,attack)
+            ps = textmatch.parts(q)
+            hits = [MeshCandidate(m.path, m.name, 0.5) for m in self.meshes if all(t in m.path.lower() for t in ps)]
+            hits.sort(key=lambda c: (len(c.name), c.name.lower()))
+            return hits[:limit]
         hits = [MeshCandidate(m.path, m.name, 1.0 if m.name.lower() == q else 0.5) for m in self.meshes if q in m.path.lower()]
         hits.sort(key=lambda c: (-c.score, len(c.name), c.name.lower()))
         return hits[:limit] if hits else self.find_by_name(text, limit)
@@ -499,5 +506,5 @@ def load_index(path: str, game_key: str = "") -> Optional[AssetIndex]:
 def filter_paths(paths: Sequence[str], pattern: str) -> List[str]:
     if not pattern.strip():
         return list(paths)
-    rx = re.compile(pattern)
+    rx = re.compile(textmatch.and_regex(pattern))  # 쉼표로 나누면 모두 포함
     return [p for p in paths if rx.search(p)]

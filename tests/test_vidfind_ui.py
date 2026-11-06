@@ -285,6 +285,10 @@ def main():
         check(len(vis) == 2 and "Idle" not in " ".join(vis) and "2 / 3" in vt.anim_count.text(), "글자로 거르기: %s %s" % (vis, vt.anim_count.text()))
         vt.anim_filter.setText("ATTACK heavy")  # 대소문자 무시, 띄어쓰기는 모두 포함
         check(vt._picked_anims() == ["X/Player/Animations/A_PC_HeavyAttack"], "가려진 것은 선택에서 빠짐: %s" % vt._picked_anims())
+        vt.anim_filter.setText("player,attack")  # 쉼표도 모두 포함
+        check(vt._picked_anims() == [] or vt._picked_anims() == ["X/Player/Animations/A_PC_HeavyAttack"], "쉼표 검색")
+        vis = [i for i in range(3) if not vt.anim_list.item(i).isHidden()]
+        check(vis == [2], "쉼표: player 와 attack 둘 다 든 것만: %s" % vis)
         vt.anim_filter.setText("zzz")
         check(vt._picked_anims() == [] and "0 / 3" in vt.anim_count.text(), "없는 글자")
         vt.anim_filter.setText("")

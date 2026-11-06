@@ -64,7 +64,7 @@ class LibraryTab(QWidget):
         self.topbar = AdaptiveRow(reserve=330)  # 좁아지면 버튼은 아이콘만
         top = self.topbar.h
         self.search = QLineEdit()
-        self.search.setPlaceholderText("🔍 클립/원본 영상 이름으로 검색")
+        self.search.setPlaceholderText("🔍 클립/원본 영상 이름으로 검색 (쉼표로 나누면 모두 포함)")
         self.search.textChanged.connect(lambda *_: self.apply_filter())
         top.addWidget(self.search, 1)
         top.addWidget(muted("크기"))
@@ -188,12 +188,12 @@ class LibraryTab(QWidget):
 
     def apply_filter(self):
         label, group, view = self._cur(self.label_list), self._cur(self.group_list), self.view_combo.currentData()
-        q = self.search.text().strip().lower()
+        qs = [t.strip() for t in self.search.text().lower().split(",") if t.strip()]  # 쉼표: 모두 포함
         self.shown = [m for m in self.clips
                       if label in (ALL, library.final_label(m))
                       and group in (ALL, m.get("group") or library.OTHER_GROUP)
                       and view in (ALL, m.get("view"))
-                      and (q in m.get("source_name", "").lower() or q in Path(m["_json"]).stem.lower())]
+                      and all(q in m.get("source_name", "").lower() or q in Path(m["_json"]).stem.lower() for q in qs)]
         self.model.clear()
         for m in self.shown:
             lab = library.final_label(m)

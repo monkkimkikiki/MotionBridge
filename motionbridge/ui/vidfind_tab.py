@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, motionsearch, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, motionsearch, textmatch, vision
 from .widgets import EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
@@ -346,7 +346,7 @@ class VidFindTab(QWidget):
         h = QHBoxLayout()
         h.addWidget(QLabel("설명으로 찾기"))
         self.anim_q = QLineEdit()
-        self.anim_q.setPlaceholderText("예: 스핀 공격 / 내려찍기 / 점프 — 비우고 누르면 기본 목록으로")
+        self.anim_q.setPlaceholderText("예: 스핀 공격 / 내려찍기 / 점프 — 쉼표로 나누면 모두 맞는 것만 (예: 점프,내려찍기). 비우고 누르면 기본 목록으로")
         self.anim_q.setToolTip("동작 설명을 애니메이션 이름 낱말(spin, slam…)로 바꿔 검색합니다. 메시를 고르면 그 캐릭터 안에서, 안 고르면 전체에서 찾습니다.")
         self.anim_q.returnPressed.connect(self.search_anims_by_text)
         h.addWidget(self.anim_q, 1)
@@ -372,7 +372,7 @@ class VidFindTab(QWidget):
         h = QHBoxLayout()
         h.addWidget(QLabel("목록에서 거르기"))
         self.anim_filter = QLineEdit()
-        self.anim_filter.setPlaceholderText("🔍 지금 목록 안에서 글자로 바로 거르기 (띄어쓰기 = 모두 포함, 예: attack heavy)")
+        self.anim_filter.setPlaceholderText("🔍 지금 목록 안에서 글자로 바로 거르기 (쉼표·띄어쓰기 = 모두 포함, 예: character,attack)")
         self.anim_filter.setClearButtonEnabled(True)
         self.anim_filter.textChanged.connect(lambda *_a: self._apply_anim_filter())
         h.addWidget(self.anim_filter, 1)
@@ -1024,7 +1024,7 @@ class VidFindTab(QWidget):
         self._refill_anims()
 
     def _apply_anim_filter(self, *_a) -> None:
-        terms = self.anim_filter.text().lower().split()
+        terms = textmatch.terms(self.anim_filter.text())  # 쉼표·공백 모두 '모두 포함'
         n = self.anim_list.count()
         shown = 0
         for i in range(n):

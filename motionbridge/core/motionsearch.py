@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from . import assetidx, layout
+from . import assetidx, layout, textmatch
 
 # 개념 -> (영어 낱말들[첫 낱말이 대표], 한국어 신호)
 CONCEPTS: Dict[str, Tuple[List[str], List[str]]] = {
@@ -168,6 +168,18 @@ def search_anims(idx: assetidx.AssetIndex, text: str, extra_words: Sequence[str]
                  limit: int = 120, min_score: float = 0.34, kinds: Optional[Iterable[str]] = None) -> Tuple[List[MotionHit], MotionQuery]:
     """설명과 이름이 맞는 애니메이션 목록(점수 순). restrict: 이 캐릭터 폴더 이름들 안에서만(소문자 비교).
     kinds: {'monster'} / {'player'} 로 종류를 좁히면 점수 계산 전에 걸러서 더 빠르다 (None 이나 둘 다면 전체)."""
+    ps = textmatch.parts(text) if "," in (text or "") else []
+    if len(ps) >= 2:  # 쉼표: 조각마다 맞는 애니메이션만 (모두 포함). 점수는 가장 낮은 조각 기준
+        per = [search_anims(idx, p, extra_words, restrict, 10 ** 6, min_score, kinds) for p in ps]
+        common = set.intersection(*[{h.path for h in hs} for hs, _q in per])
+        by = [{h.path: h for h in hs} for hs, _q in per]
+        merged = []
+        for pth in common:
+            hs_ = [d[pth] for d in by]
+            low = min(hs_, key=lambda h: h.score)
+            merged.append(MotionHit(pth, low.score, " + ".join(h.why for h in hs_ if h.why)[:160], low.monster))
+        merged.sort(key=lambda h: (-h.score, h.path.lower()))
+        return merged[:limit], per[0][1]
     q = parse_motion(text, extra_words)
     allow = {r.lower() for r in restrict} if restrict else None
     out: List[MotionHit] = []

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit
+from ..core import animlink, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -507,7 +507,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.mesh_opts)
         h = QHBoxLayout()
         self.ex_filter = QLineEdit(self.KIND_FILTERS["anim"])
-        self.ex_filter.setToolTip("에셋 경로에 대한 정규식. 예: (?i)(walk|run|attack)")
+        self.ex_filter.setToolTip("에셋 경로에 대한 정규식. 예: (?i)(walk|run|attack)\n쉼표(,)로 나누면 모두 포함하는 것만 찾습니다. 예: player,attack (대소문자 무시)")
         h.addWidget(self.ex_filter, 1)
         b = QPushButton("검색")
         b.clicked.connect(self._search_anims)
@@ -790,7 +790,7 @@ class MainWindow(QMainWindow):
         a = self._extract_args()
         if a is None:
             return
-        pattern = self.ex_filter.text().strip() or self.KIND_FILTERS[self.ex_kind.currentData() or "anim"]
+        pattern = textmatch.and_regex(self.ex_filter.text().strip() or self.KIND_FILTERS[self.ex_kind.currentData() or "anim"])  # 쉼표 = 모두 포함
 
         self._ex_logs = []
 
