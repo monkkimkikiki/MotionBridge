@@ -151,6 +151,60 @@ calls.clear()
 o.analyze(img, many)
 check(calls[-1][1]["messages"][0]["content"].count("N") < 400, "Ollama 는 이름 목록을 줄여서 보냄")
 
+# 다른 AI (OpenAI 호환: GPT / Gemini / OpenRouter / 내 서버)
+oa_calls = []
+
+
+def oa_post(url, payload, headers, timeout):
+    oa_calls.append((url, payload, headers))
+    if url.endswith("/models"):
+        return {"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}
+    return {"choices": [{"message": {"content": '{"characters":[{"name":"Hexapod","confidence":0.9,"description":"six legs","box":null}]}'}}]}
+
+
+oa = vision.OpenAICompatProvider("sk-oa", "gpt-4o", "https://api.openai.com/v1/", post=oa_post)
+okk, mm, names = oa.check()
+check(okk and "gpt-4o" in mm and oa_calls[-1][0] == "https://api.openai.com/v1/models" and oa_calls[-1][2]["Authorization"] == "Bearer sk-oa", "다른 AI 연결 확인(모델 목록)")
+r = oa.analyze(img, ["Hexapod"])
+url, pl, hd = oa_calls[-1]
+blk = pl["messages"][0]["content"]
+check(url == "https://api.openai.com/v1/chat/completions" and r and r[0].name == "Hexapod", "다른 AI 응답 해석")
+check(blk[0]["type"] == "text" and blk[1]["type"] == "image_url" and blk[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"), "다른 AI 이미지+글 구성")
+check(not vision.OpenAICompatProvider("", "gpt-4o", "https://api.openai.com/v1", post=oa_post).check()[0], "원격은 키 필요")
+check(vision.OpenAICompatProvider("", "llava", "http://localhost:1234/v1", post=oa_post).check()[1].startswith("서버에 모델"), "내 서버: 키는 없어도 되고, 없는 모델은 안내")
+check(not vision.OpenAICompatProvider("k", "", "https://x/v1", post=oa_post).check()[0], "모델 이름 필요")
+check(not vision.OpenAICompatProvider("k", "m", "x", post=oa_post).check()[0], "주소 형식 확인")
+check("gpt-4o-mini" in vision.OpenAICompatProvider("k", "nope", "https://x/v1", post=oa_post).check()[1], "없는 모델이면 목록을 보여 줌")
+
+
+def oa_404(url, payload, headers, timeout):
+    raise vision.VisionError("HTTP 404 not found")
+
+
+check(vision.OpenAICompatProvider("k", "m", "https://x/v1", post=oa_404).check()[0], "모델 목록 미지원 서버도 통과")
+
+
+def oa_401(url, payload, headers, timeout):
+    raise vision.VisionError("HTTP 401 bad")
+
+
+try:
+    vision.OpenAICompatProvider("k", "m", "https://x/v1", post=oa_401).analyze(img, [])
+    check(False, "키 거부는 오류")
+except vision.VisionError as e:
+    check("키" in str(e), "키 거부 안내")
+
+
+def oa_parts(url, payload, headers, timeout):
+    return {"choices": [{"message": {"content": [{"type": "text", "text": '{"characters":[]}'}]}}]}
+
+
+check(vision.OpenAICompatProvider("k", "m", "https://x/v1", post=oa_parts).ask(img, "q") == '{"characters":[]}', "조각 목록 응답도 받음")
+gm = vision.make_provider("openai", {"vf_openai_key": "g-key", "vf_oa_preset": "Google Gemini"})
+check(isinstance(gm, vision.OpenAICompatProvider) and "generativelanguage" in gm.base_url and gm.model == "gemini-2.5-flash" and gm.vocab_limit() == 800, "make openai (Gemini 프리셋)")
+gm2 = vision.make_provider("openai", {"vf_openai_key": "k", "vf_oa_url": "http://localhost:11434/v1", "vf_oa_model": "llava"})
+check(gm2.base_url == "http://localhost:11434/v1" and gm2.model == "llava", "직접 주소/모델")
+
 # make_provider
 check(isinstance(vision.make_provider("ollama", {}), vision.OllamaProvider), "make ollama")
 mp = vision.make_provider("claude", {"vf_claude_key": "sk-1", "vf_claude_model": "claude-haiku-5-5"})

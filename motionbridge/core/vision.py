@@ -21,7 +21,14 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODELS = ["qwen2.5vl:7b", "llama3.2-vision", "gemma3:12b", "minicpm-v"]
 CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"]
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-VOCAB_LIMIT = {"ollama": 250, "claude": 800}  # 한 번에 알려줄 이름 수 (작은 모델은 긴 목록에 약하다)
+# OpenAI 호환 API 로 붙는 다른 AI: (이름, 주소, 기본 모델, 키 환경변수). GPT·Gemini·OpenRouter·내 서버(LM Studio 등)가 같은 방식이다.
+OPENAI_PRESETS = [
+    ("OpenAI (GPT)", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY"),
+    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash", "GEMINI_API_KEY"),
+    ("OpenRouter (여러 AI 모음)", "https://openrouter.ai/api/v1", "google/gemini-2.5-flash", "OPENROUTER_API_KEY"),
+    ("내 서버 (LM Studio 등)", "http://localhost:1234/v1", "", ""),
+]
+VOCAB_LIMIT = {"ollama": 250, "claude": 800, "openai": 800}  # 한 번에 알려줄 이름 수 (작은 모델은 긴 목록에 약하다)
 
 
 class VisionError(Exception):
@@ -304,7 +311,78 @@ class ClaudeProvider(Provider):
         return "".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
 
 
+class OpenAICompatProvider(Provider):
+    """OpenAI 호환 /chat/completions 로 이미지를 보내는 인식 방식: GPT, Gemini(호환 주소), OpenRouter, LM Studio 등."""
+    key = "openai"
+    label = "다른 AI (GPT · Gemini · OpenRouter · 내 서버, API 키)"
+
+    def __init__(self, api_key: str, model: str, base_url: str, post: Callable = _http, timeout: float = 120.0) -> None:
+        super().__init__(post)
+        self.api_key, self.model, self.timeout = (api_key or "").strip(), (model or "").strip(), timeout
+        self.base_url = (base_url or "").strip().rstrip("/")
+
+    def _local(self) -> bool:
+        return any(h in self.base_url for h in ("localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10."))
+
+    def _headers(self) -> Dict[str, str]:
+        h = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = "Bearer " + self.api_key
+        return h
+
+    def check(self) -> Tuple[bool, str, List[str]]:
+        if not self.base_url.startswith(("http://", "https://")):
+            return False, "서버 주소를 입력하세요 (예: https://api.openai.com/v1).", []
+        if not self.model:
+            return False, "모델 이름을 입력하세요 (이미지를 볼 수 있는 모델이어야 합니다).", []
+        if not self.api_key and not self._local():
+            return False, "API 키를 입력하세요 (환경변수로도 쓸 수 있어요).", []
+        try:
+            d = self.post(self.base_url + "/models", None, self._headers(), 15.0)
+        except VisionError as e:
+            msg = str(e)
+            if "HTTP 401" in msg or "HTTP 403" in msg:
+                return False, "API 키가 거부됐습니다. 키와 서버 주소가 맞는지 확인하세요.", []
+            if "HTTP 404" in msg:  # 모델 목록을 안 주는 서버도 있다 — 호출은 될 수 있다
+                return True, "연결됨 (모델 목록은 확인하지 못함): %s — 호출한 만큼 요금이 들 수 있어요." % self.model, []
+            return False, "서버에 연결하지 못했습니다: %s" % msg, []
+        names = [str(m.get("id", "")) for m in (d.get("data") or []) if isinstance(m, dict)] if isinstance(d, dict) else []
+        base = self.model.split("/")[-1].replace("models/", "")
+        if names and not any(n == self.model or n.split("/")[-1].replace("models/", "") == base for n in names):
+            return False, "서버에 모델 '%s' 이(가) 없습니다. 이 중에서 골라 보세요: %s" % (self.model, ", ".join(names[:8])), names
+        return True, "연결됨 (%s) — 영상 이미지가 이 서버로 전송되고 호출한 만큼 요금이 들 수 있어요." % self.model, names
+
+    def _send(self, prompt: str, image_path: Optional[str]) -> str:
+        if not self.base_url or not self.model:
+            raise VisionError("서버 주소와 모델 이름이 필요합니다.")
+        content: List[dict] = [{"type": "text", "text": prompt}]
+        if image_path:
+            mt, b64 = _b64(image_path)
+            content.append({"type": "image_url", "image_url": {"url": "data:%s;base64,%s" % (mt, b64)}})
+        payload = {"model": self.model, "temperature": 0, "messages": [{"role": "user", "content": content}]}
+        try:
+            d = self.post(self.base_url + "/chat/completions", payload, self._headers(), self.timeout)
+        except VisionError as e:
+            s = str(e)
+            if "HTTP 401" in s or "HTTP 403" in s:
+                raise VisionError("API 키가 거부됐습니다. 키를 확인하세요.")
+            if "HTTP 404" in s:
+                raise VisionError("모델 '%s' 을(를) 쓸 수 없거나 서버 주소가 틀렸습니다." % self.model)
+            if "HTTP 429" in s:
+                raise VisionError("호출 한도에 걸렸습니다. 잠시 뒤 다시 시도하세요.")
+            raise
+        ch = (d.get("choices") or [{}])[0] if isinstance(d, dict) else {}
+        c = (ch.get("message") or {}).get("content")
+        if isinstance(c, list):  # 일부 서버는 조각 목록으로 준다
+            c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
+        return str(c or "")
+
+
 def make_provider(kind: str, cfg: dict, post: Callable = _http) -> Provider:
+    if kind == "openai":
+        preset = next((p for p in OPENAI_PRESETS if p[0] == cfg.get("vf_oa_preset")), OPENAI_PRESETS[0])
+        key = (cfg.get("vf_openai_key") or (os.environ.get(preset[3]) if preset[3] else "") or "").strip()
+        return OpenAICompatProvider(key, cfg.get("vf_oa_model") or preset[2], cfg.get("vf_oa_url") or preset[1], post)
     if kind == "claude":
         key = (cfg.get("vf_claude_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         return ClaudeProvider(key, cfg.get("vf_claude_model") or CLAUDE_MODELS[0], post)

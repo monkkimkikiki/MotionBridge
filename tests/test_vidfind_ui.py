@@ -564,6 +564,26 @@ def main():
         mw.import_animref()
         check(vt.link_query and vt.link_query["id"] == "직접" and vt.label.currentData() == "스킬" and vt.hits.value() == 2, "query.json 직접 열기")
         check(any(v[3] == "AnimRef에서 가져오기…" for v in mw._actions.values()), "파일 메뉴에 항목")
+        # 인식 방식: 다른 AI(OpenAI 호환) 선택 -> 서비스/주소 줄과 키 줄이 보이고, 키는 방식마다 따로 기억한다
+        vt.engine.setCurrentIndex(vt.engine.findData("openai"))
+        check(vt.oa_row.isVisible() and vt.key_row.isVisible() and not vt.btn_pull.isVisible(), "다른 AI 입력 줄 표시")
+        check(vt.model.text() == "gpt-4o", "기본 모델: %s" % vt.model.text())
+        vt.oa_preset.setCurrentIndex(vt.oa_preset.findData("Google Gemini"))
+        check(vt.model.text() == "gemini-2.5-flash", "서비스를 바꾸면 모델도 기본값으로: %s" % vt.model.text())
+        vt.key.setText("g-secret")
+        vt.engine.setCurrentIndex(vt.engine.findData("claude"))
+        check(vt.key.text() != "g-secret" and not vt.oa_row.isVisible(), "Claude 로 바꾸면 다른 키: %r" % vt.key.text())
+        vt.key.setText("sk-ant-1")
+        vt.engine.setCurrentIndex(vt.engine.findData("openai"))
+        check(vt.key.text() == "g-secret", "다른 AI 키가 따로 남아 있음")
+        seen_cfg = {}
+        V.vision.make_provider = lambda kind, cfg, post=None: (seen_cfg.update(kind=kind, cfg=dict(cfg)), vision.OllamaProvider("x", post=fake_post))[1]
+        vt.provider()
+        c = seen_cfg["cfg"]
+        check(seen_cfg["kind"] == "openai" and c["vf_openai_key"] == "g-secret" and c["vf_oa_model"] == "gemini-2.5-flash" and c["vf_oa_preset"] == "Google Gemini"
+              and c["vf_claude_key"] == "sk-ant-1", "provider() 가 입력값을 넘김: %s" % {k: v for k, v in c.items() if k.startswith("vf_oa") or k.endswith("key")})
+        vt.engine.setCurrentIndex(vt.engine.findData("ollama"))
+        check(vt.btn_pull.isVisible() and not vt.key_row.isVisible(), "Ollama 로 돌아오면 모델 받기")
         # 영상을 받아도 몬스터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
         called = []
         _orig_guess = vt.start_guess

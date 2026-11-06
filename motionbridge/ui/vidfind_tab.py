@@ -144,12 +144,13 @@ class VidFindTab(QWidget):
         self.engine = QComboBox()
         self.engine.addItem(vision.OllamaProvider.label, "ollama")
         self.engine.addItem(vision.ClaudeProvider.label, "claude")
+        self.engine.addItem(vision.OpenAICompatProvider.label, "openai")
         self.engine.setCurrentIndex(max(self.engine.findData(self.cfg.get("vf_engine", "ollama")), 0))
         self.engine.currentIndexChanged.connect(self._engine_changed)
         h.addWidget(self.engine, 1)
         h.addWidget(QLabel("모델"))
         self.model = QLineEdit()
-        self.model.setToolTip("Ollama 예: %s\nClaude 예: %s" % (", ".join(vision.OLLAMA_MODELS), ", ".join(vision.CLAUDE_MODELS)))
+        self.model.setToolTip("Ollama 예: %s\nClaude 예: %s\n다른 AI: 이미지를 볼 수 있는 모델 이름 (gpt-4o, gemini-2.5-flash …)" % (", ".join(vision.OLLAMA_MODELS), ", ".join(vision.CLAUDE_MODELS)))
         h.addWidget(self.model, 1)
         b = QPushButton("연결 확인")
         b.clicked.connect(self.check_engine)
@@ -159,11 +160,29 @@ class VidFindTab(QWidget):
         self.btn_pull.clicked.connect(self.pull_model)
         h.addWidget(self.btn_pull)
         v.addLayout(h)
+        self.oa_row = QWidget()  # 다른 AI(OpenAI 호환) 전용: 서비스 고르기 + 서버 주소
+        oh = QHBoxLayout(self.oa_row)
+        oh.setContentsMargins(0, 0, 0, 0)
+        oh.addWidget(QLabel("서비스"))
+        self.oa_preset = QComboBox()
+        for nm, _u, _m, _e in vision.OPENAI_PRESETS:
+            self.oa_preset.addItem(nm, nm)
+        self.oa_preset.setCurrentIndex(max(self.oa_preset.findData(self.cfg.get("vf_oa_preset", vision.OPENAI_PRESETS[0][0])), 0))
+        self.oa_preset.currentIndexChanged.connect(self._preset_changed)
+        oh.addWidget(self.oa_preset)
+        oh.addWidget(QLabel("서버 주소"))
+        self.oa_url = QLineEdit(self.cfg.get("vf_oa_url", ""))
+        self.oa_url.setPlaceholderText("비워 두면 서비스의 기본 주소")
+        oh.addWidget(self.oa_url, 1)
+        v.addWidget(self.oa_row)
+        self._keys = {"claude": self.cfg.get("vf_claude_key", ""), "openai": self.cfg.get("vf_openai_key", "")}
         self.key_row = QWidget()
         kh = QHBoxLayout(self.key_row)
         kh.setContentsMargins(0, 0, 0, 0)
-        kh.addWidget(QLabel("Claude API 키"))
-        self.key = QLineEdit(self.cfg.get("vf_claude_key", ""))
+        self.key_label = QLabel("Claude API 키")
+        kh.addWidget(self.key_label)
+        self.key = QLineEdit(self._keys["claude"])
+        self.key.textChanged.connect(self._remember_key)
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.key.setPlaceholderText("sk-ant-… (비워 두면 환경변수 ANTHROPIC_API_KEY 사용)")
         kh.addWidget(self.key, 1)
@@ -443,26 +462,76 @@ class VidFindTab(QWidget):
     def _provider_kind(self) -> str:
         return self.engine.currentData() or "ollama"
 
-    def _engine_changed(self, *_a) -> None:
+    MODEL_KEY = {"claude": "vf_claude_model", "openai": "vf_oa_model", "ollama": "vf_ollama_model"}
+
+    def _preset(self):
+        nm = self.oa_preset.currentData()
+        return next((p for p in vision.OPENAI_PRESETS if p[0] == nm), vision.OPENAI_PRESETS[0])
+
+    def _remember_key(self, *_a) -> None:
+        kind = self._provider_kind()
+        if kind in self._keys and not getattr(self, "_switching", False):
+            self._keys[kind] = self.key.text()
+
+    def _preset_changed(self, *_a) -> None:
+        """서비스를 바꾸면 모델을 그 서비스의 기본 모델로 (직접 고친 모델이 다른 서비스 기본값이 아닐 때만 유지)."""
+        if self._provider_kind() != "openai":
+            return
+        defaults = {p[2] for p in vision.OPENAI_PRESETS}
+        if self.model.text().strip() in defaults | {""}:
+            self.model.setText(self._preset()[2])
+        self.oa_url.setPlaceholderText(self._preset()[1])
+        self._engine_note_update()
+
+    def _engine_note_update(self) -> None:
         kind = self._provider_kind()
         if kind == "claude":
-            self.model.setText(self.cfg.get("vf_claude_model") or vision.CLAUDE_MODELS[0])
+            note = "영상 이미지가 인터넷으로 Anthropic 에 전송되고 호출한 만큼 요금이 듭니다."
+        elif kind == "openai":
+            nm, url, _m, env = self._preset()
+            local = "localhost" in (self.oa_url.text() or url)
+            note = ("내 서버(%s)로 보냅니다 — 이미지를 볼 수 있는 모델이어야 해요." % (self.oa_url.text().strip() or url)) if local else \
+                   "영상 이미지가 인터넷으로 %s 에 전송되고 호출한 만큼 요금이 듭니다. 이미지를 볼 수 있는 모델을 고르세요. (키는 환경변수 %s 로도 가능)" % (nm, env or "-")
         else:
-            self.model.setText(self.cfg.get("vf_ollama_model") or vision.OLLAMA_MODELS[0])
-        self.key_row.setVisible(kind == "claude")
-        self.btn_pull.setVisible(kind != "claude")
-        self.engine_note.setText("영상 이미지가 인터넷으로 Anthropic 에 전송되고 호출한 만큼 요금이 듭니다." if kind == "claude"
-                                 else "내 PC에서만 처리됩니다. Ollama 설치 후 'ollama pull %s' 로 모델을 받으세요. 그래픽카드가 약하면 느리고 덜 정확합니다." % vision.OLLAMA_MODELS[0])
+            note = "내 PC에서만 처리됩니다. Ollama 설치 후 'ollama pull %s' 로 모델을 받으세요. 그래픽카드가 약하면 느리고 덜 정확합니다." % vision.OLLAMA_MODELS[0]
+        self.engine_note.setText(note)
+
+    def _engine_changed(self, *_a) -> None:
+        kind = self._provider_kind()
+        self._switching = True
+        try:
+            if kind == "openai":
+                self.model.setText(self.cfg.get("vf_oa_model") or self._preset()[2])
+                self.oa_url.setPlaceholderText(self._preset()[1])
+            elif kind == "claude":
+                self.model.setText(self.cfg.get("vf_claude_model") or vision.CLAUDE_MODELS[0])
+            else:
+                self.model.setText(self.cfg.get("vf_ollama_model") or vision.OLLAMA_MODELS[0])
+            if kind in self._keys:
+                self.key.setText(self._keys[kind])
+                self.key_label.setText("Claude API 키" if kind == "claude" else "API 키")
+                self.key.setPlaceholderText("sk-ant-… (비워 두면 환경변수 ANTHROPIC_API_KEY 사용)" if kind == "claude"
+                                            else "서비스에서 받은 키 (내 서버는 비워도 됨)")
+        finally:
+            self._switching = False
+        self.key_row.setVisible(kind in ("claude", "openai"))
+        self.oa_row.setVisible(kind == "openai")
+        self.btn_pull.setVisible(kind == "ollama")
+        self._engine_note_update()
 
     def _save_settings(self) -> None:
         kind = self._provider_kind()
+        self._remember_key()
         self.cfg["vf_engine"] = kind
-        self.cfg["vf_claude_model" if kind == "claude" else "vf_ollama_model"] = self.model.text().strip()
+        self.cfg[self.MODEL_KEY.get(kind, "vf_ollama_model")] = self.model.text().strip()
+        self.cfg["vf_oa_preset"] = self.oa_preset.currentData() or vision.OPENAI_PRESETS[0][0]
+        self.cfg["vf_oa_url"] = self.oa_url.text().strip()
         self.cfg["vf_save_key"] = bool(self.save_key.isChecked())
-        if self.save_key.isChecked():
-            self.cfg["vf_claude_key"] = self.key.text().strip()
-        else:
-            self.cfg.pop("vf_claude_key", None)
+        for k, cfgkey in (("claude", "vf_claude_key"), ("openai", "vf_openai_key")):
+            if self.save_key.isChecked() and self._keys.get(k, "").strip():
+                self.cfg[cfgkey] = self._keys[k].strip()
+            else:
+                self.cfg.pop(cfgkey, None)
         self.cfg["vf_per"] = int(self.per.value())
         self.cfg["vf_hint"] = self.hint.text().strip()
         self.cfg["vf_known"] = self.known.toPlainText()
@@ -474,11 +543,9 @@ class VidFindTab(QWidget):
         self._save_settings()
         kind = self._provider_kind()
         cfg = dict(self.cfg)
-        if kind == "claude":
-            cfg["vf_claude_key"] = self.key.text().strip()  # 저장 여부와 상관없이 지금 입력한 키를 쓴다
-            cfg["vf_claude_model"] = self.model.text().strip()
-        else:
-            cfg["vf_ollama_model"] = self.model.text().strip()
+        cfg["vf_claude_key"] = self._keys.get("claude", "").strip()  # 저장 여부와 상관없이 지금 입력한 키를 쓴다
+        cfg["vf_openai_key"] = self._keys.get("openai", "").strip()
+        cfg[self.MODEL_KEY.get(kind, "vf_ollama_model")] = self.model.text().strip()
         return vision.make_provider(kind, cfg)
 
     def check_engine(self) -> None:
@@ -551,7 +618,7 @@ class VidFindTab(QWidget):
         if a is None:
             return
         prov = self.provider()
-        ok, msg, _ = prov.check() if prov.key == "claude" else (True, "", [])
+        ok, msg, _ = prov.check() if prov.key in ("claude", "openai") else (True, "", [])
         if not ok:
             QMessageBox.warning(self, "인식 방식", msg)
             return
