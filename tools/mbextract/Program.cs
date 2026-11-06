@@ -18,6 +18,7 @@ using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
+using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
@@ -128,7 +129,7 @@ try
                 {
                     if (kind == "mesh")
                     {
-                        if (obj is USkeletalMesh && queuedObjs.Add(obj)) { session.Add(obj); queued++; }
+                        if ((obj is USkeletalMesh || obj is UStaticMesh) && queuedObjs.Add(obj)) { session.Add(obj); queued++; }  // 스태틱(리깅 없는) 메시도
                     }
                     else if (obj is UAnimSequence)
                     {
@@ -144,7 +145,7 @@ try
                 if (montage) Emit(new { type = "log", message = "몽타주에서 AnimSequence " + queued + "개를 찾음: " + p });
                 if (queued == 0)
                 {
-                    Emit(new { type = "skip", path = p, reason = kind == "mesh" ? "스켈레탈 메시가 아님" : "AnimSequence 도, 그것을 참조하는 몽타주도 아님" });
+                    Emit(new { type = "skip", path = p, reason = kind == "mesh" ? "스켈레탈/스태틱 메시가 아님" : "AnimSequence 도, 그것을 참조하는 몽타주도 아님" });
                     continue;
                 }
                 var results = session.RunAsync(outDir, opts).GetAwaiter().GetResult();

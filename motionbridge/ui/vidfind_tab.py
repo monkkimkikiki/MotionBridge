@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -33,7 +33,8 @@ LOCRES_DIR = os.path.join(bridge.CONFIG_DIR, "locres")
 FRAME_DIR = os.path.join(bridge.CONFIG_DIR, "vf_frames")
 MESH_RX = re.compile(r"(?i)/sk[a-z]*_[^/]*$")
 ANIM_RX = re.compile(r"(?i)anim")
-LIST_PATTERN = r"(?i)(/sk[a-z]*_|anim)"
+LIST_PATTERN = r"(?i)(/sk[a-z]*_|/sm[a-z]{0,2}_|anim)"
+STATIC_RX = re.compile(r"(?i)/sm[a-z]{0,2}_[^/]*$")
 MONSTER_DIRS = re.compile(r"(?i)/(monsters?|enemies|enemy|bosses|boss|creatures?|npcs?)/")
 LABEL_CHOICES = ["타격", "피격", "스킬", "연출", "회피", "사망", "걷기", "달리기", "대기"]
 PICK_FILTER = "영상/이미지 (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.png *.jpg *.jpeg *.webp);;모든 파일 (*)"
@@ -81,7 +82,7 @@ class VidFindTab(QWidget):
         self.memory = assetidx.MatchMemory(MEMORY_FILE)
         self.rows: List[_Row] = []
         self.confirmed: List[str] = []
-        self.player_mode = False  # True 면 영상 추측과 상관없이 플레이어블 캐릭터 메시/애니메이션 전체 목록을 보여 주는 중
+        self.char_mode = False  # True 면 영상 추측과 상관없이 플레이어블 캐릭터 메시/애니메이션 전체 목록을 보여 주는 중
         self.clip_labels: Dict[str, str] = {}
         self.link_query: Optional[dict] = None  # AnimRef 가 보낸 요청 (답을 보내기 전까지)
         self.last_files: List[str] = []         # 방금 추출한 파일 (AnimRef 결과에 넣는다)
@@ -237,15 +238,50 @@ class VidFindTab(QWidget):
         self.min_conf.setSuffix("%")
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮으면 메시를 자동으로 고르지 않고 '직접 고르세요'로 둡니다 (엉뚱한 캐릭터로 넘어가는 것을 막음).")
-        self.ck_guess_player = QCheckBox("플레이어블 캐릭터 (몬스터 추측 건너뛰기)")
-        self.ck_guess_player.setToolTip("영상 속 캐릭터가 플레이어블이면 켜세요. 몬스터를 AI로 추측하지 않고(영상 없이도), 플레이어 메시 목록과 플레이어 애니메이션 전체를 바로 보여 줍니다.")
-        self.ck_guess_player.setChecked(bool(self.cfg.get("vf_guess_player", False)))
-        self.ck_guess_player.toggled.connect(self._guess_player_toggled)
-        v.addWidget(self.ck_guess_player)
+        r = QHBoxLayout()
+        self.rb_mode_monster = QRadioButton("몬스터 찾기 (영상으로 AI 추측)")
+        self.rb_mode_char = QRadioButton("캐릭터 메쉬 찾기 (캐릭터 모델링 전체 검색)")
+        self.rb_mode_monster.setToolTip("영상 속 몬스터를 AI가 게임의 메시 이름 안에서 추측합니다 (아래 4) 검수 표).")
+        self.rb_mode_char.setToolTip("플레이어블·NPC 등 캐릭터 모델링을 AI 없이 이름으로 전체 검색합니다. 리깅된 것(SK_)과 리깅 없는 것(SM_)을 나눠 볼 수 있고, "
+                                     "고른 캐릭터에 해당하는 애니메이션 클립만 보여 줍니다.")
+        on_char = bool(self.cfg.get("vf_mode_char", False))
+        self.rb_mode_char.setChecked(on_char)
+        self.rb_mode_monster.setChecked(not on_char)
+        r.addWidget(self.rb_mode_monster)
+        r.addWidget(self.rb_mode_char)
+        r.addStretch(1)
+        v.addLayout(r)
+        self.char_panel = QWidget()
+        cp = QVBoxLayout(self.char_panel)
+        cp.setContentsMargins(0, 0, 0, 0)
+        ch = QHBoxLayout()
+        self.char_q = QLineEdit()
+        self.char_q.setPlaceholderText("캐릭터 메쉬 이름 검색 (쉼표/띄어쓰기 = 모두 포함, 예: knight,armor). 비우고 검색하면 전체")
+        self.char_q.returnPressed.connect(self.show_char_meshes)
+        ch.addWidget(self.char_q, 1)
+        self.char_rig = QComboBox()
+        for lab, key in (("리깅 전체", "all"), ("리깅됨 (SK_ 스켈레탈)", "rigged"), ("리깅 안 됨 (SM_ 스태틱)", "static")):
+            self.char_rig.addItem(lab, key)
+        self.char_rig.currentIndexChanged.connect(lambda *_a: self.show_char_meshes())
+        ch.addWidget(self.char_rig)
+        self.ck_char_player = QCheckBox("플레이어블만")
+        self.ck_char_player.setToolTip("player/pc/hero 이름이 든 메시와 같은 폴더의 같은 리그 변형만. 끄면 몬스터·NPC 등 캐릭터 전체.")
+        self.ck_char_player.toggled.connect(self._char_player_toggled)
+        ch.addWidget(self.ck_char_player)
+        b = QPushButton("검색")
+        b.clicked.connect(lambda *_a: self.show_char_meshes())
+        ch.addWidget(b)
+        cp.addLayout(ch)
+        self.char_note = QLabel("")
+        self.char_note.setWordWrap(True)
+        cp.addWidget(self.char_note)
+        v.addWidget(self.char_panel)
+        self.char_panel.setVisible(on_char)
+        self.rb_mode_char.toggled.connect(self._mode_changed)
         self.btn_guess = QPushButton("캐릭터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
-        if self.ck_guess_player.isChecked():
-            self.btn_guess.setText("플레이어블 메시 목록 보기")
+        if self.rb_mode_char.isChecked():
+            self.btn_guess.setText("캐릭터 메쉬 목록 열기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.btn_guess, 1)
         h.addWidget(QLabel("자동 선택 최소 확신"))
@@ -339,15 +375,7 @@ class VidFindTab(QWidget):
         # 5) 후보 / 추출
         g = QGroupBox("5) 후보에서 골라 추출")
         v = QVBoxLayout(g)
-        h = QHBoxLayout()
-        h.addWidget(QLabel("메시 (확정한 캐릭터)"))
-        h.addStretch(1)
-        self.btn_player = QPushButton("플레이어블 캐릭터 목록 열기")
-        self.btn_player.setToolTip("영상 추측과 상관없이, 플레이어가 조종하는 캐릭터의 메시(player/pc/hero 이름이 든 것과 같은 폴더의 같은 리그 변형)를 나열하고 "
-                                   "플레이어 애니메이션 전체를 목록에 띄웁니다. 직접 고르거나, 이름·설명으로 검색하세요.")
-        self.btn_player.clicked.connect(lambda *_a: self.load_player_mode())
-        h.addWidget(self.btn_player)
-        v.addLayout(h)
+        v.addWidget(QLabel("메시 (확정한 캐릭터 / 캐릭터 메쉬 검색 결과)"))
         self.mesh_list = QListWidget()
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mesh_list.setMinimumHeight(70)
@@ -668,11 +696,13 @@ class VidFindTab(QWidget):
         w.progress.emit(0, 1, "게임 파일에서 이름 목록 읽는 중 (처음 한 번은 오래 걸립니다)")
         paths = extractor.list_assets(helper, game, ue, aes, usmap, LIST_PATTERN, 200000)
         meshes = [p for p in paths if MESH_RX.search(p)]
-        ms = set(meshes)
-        anims = [p for p in paths if p not in ms and ANIM_RX.search(p)]
+        # 리깅 없는 캐릭터 모델링(SM_*): 게임 전체 소품까지 담으면 너무 커서 캐릭터 폴더/플레이어 이름이 든 것만
+        statics = [p for p in paths if STATIC_RX.search(p) and (set(assetidx._dir_parts(p)) & layout.MARKERS or assetidx.is_player_path(p))]
+        ms = set(meshes) | set(statics)
+        anims = [p for p in paths if p not in ms and ANIM_RX.search(p) and not STATIC_RX.search(p)]
         if not meshes:
             raise RuntimeError("메시(SK_*)를 하나도 찾지 못했습니다. 0번 탭에서 UE 버전/mappings 를 확인하세요.")
-        idx = assetidx.AssetIndex(meshes, anims)
+        idx = assetidx.AssetIndex(meshes, anims, statics)
         assetidx.save_index(INDEX_CACHE, idx, game)
         return idx
 
@@ -695,16 +725,18 @@ class VidFindTab(QWidget):
             notes.append("이름 %d종 중 %d종만 AI에게 알렸습니다. '이름 필터'로 줄이면 정확해집니다." % (len(names), limit))
         return names, notes
 
-    def _guess_player_toggled(self, on: bool) -> None:
-        self.cfg["vf_guess_player"] = bool(on)
-        self.btn_guess.setText("플레이어블 메시 목록 보기" if on else "캐릭터 추측 시작")
+    def _mode_changed(self, *_a) -> None:
+        on = bool(self.rb_mode_char.isChecked())
+        self.cfg["vf_mode_char"] = on
+        self.char_panel.setVisible(on)
+        self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else "캐릭터 추측 시작")
         if on:
             if self._load_index_cached():
-                self.load_player_mode()
+                self.show_char_meshes()
             else:
-                self.status.setText("플레이어블 모드: 에셋 이름 목록이 아직 없어요. '플레이어블 메시 목록 보기'를 누르면 게임 파일에서 읽어 옵니다.")
-        elif self.player_mode:
-            self.player_mode = False
+                self.status.setText("캐릭터 메쉬 찾기: 에셋 이름 목록이 아직 없어요. '캐릭터 메쉬 목록 열기'를 누르면 게임 파일에서 읽어 옵니다.")
+        elif self.char_mode:
+            self.char_mode = False
             self.confirmed = []
             self.mesh_list.clear()
             self.anim_list.clear()
@@ -712,12 +744,19 @@ class VidFindTab(QWidget):
                 ck.blockSignals(True)
                 ck.setChecked(True)
                 ck.blockSignals(False)
-            self.status.setText("몬스터 추측 모드로 돌아왔습니다.")
+            self.status.setText("몬스터 찾기로 돌아왔습니다.")
 
-    def start_player(self, force_index: bool = False) -> None:
-        """AI 추측 없이 플레이어블 메시/애니메이션 목록만 연다 (에셋 이름 목록이 없으면 먼저 읽는다)."""
+    def _char_player_toggled(self, on: bool) -> None:
+        for ck, v in ((self.ck_k_monster, not on), (self.ck_k_player, True)):  # 애니메이션 종류도 같이
+            ck.blockSignals(True)
+            ck.setChecked(v)
+            ck.blockSignals(False)
+        self.show_char_meshes()
+
+    def start_chars(self, force_index: bool = False) -> None:
+        """AI 추측 없이 캐릭터 메쉬 검색 목록을 연다 (에셋 이름 목록이 없으면 먼저 읽는다)."""
         if not force_index and self._load_index_cached():
-            self.load_player_mode()
+            self.show_char_meshes()
             return
         a = self.win._extract_args()
         if a is None:
@@ -728,13 +767,13 @@ class VidFindTab(QWidget):
 
         def done(idx):
             self.index = idx
-            self.load_player_mode()
+            self.show_char_meshes()
 
         self.win.run_async(job, done, "에셋 이름 목록 읽는 중")
 
     def start_guess(self, force_index: bool = False) -> None:
-        if self.ck_guess_player.isChecked():  # 플레이어블이면 몬스터 추측은 건너뛴다
-            self.start_player(force_index)
+        if self.rb_mode_char.isChecked():  # 캐릭터 메쉬 찾기: AI 추측 없이 이름 검색
+            self.start_chars(force_index)
             return
         srcs = self.source_paths()
         if not srcs:
@@ -1017,8 +1056,9 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "설명으로 찾기", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
             return
         restrict = None
-        if not self.anim_all.isChecked() and not self.player_mode and self._selected_mesh_paths():
-            restrict = [layout.character_of(p) for p in self._selected_mesh_paths()]
+        chosen = self._chosen_rigged() if self.char_mode else self._selected_mesh_paths()
+        if not self.anim_all.isChecked() and chosen:
+            restrict = [layout.character_of(p) for p in chosen]
         use_ai = bool(self.motion_ai.isChecked())
         kinds = self._kinds()
 
@@ -1089,34 +1129,51 @@ class VidFindTab(QWidget):
         return out
 
     def _mesh_sel_changed(self, *_a) -> None:
-        if not self.player_mode:  # 플레이어 모드의 애니메이션 목록은 메시 선택과 무관하다 (공용 애니메이션)
-            self._refill_anims()
+        self._refill_anims()
 
-    def load_player_mode(self) -> bool:
-        """플레이어블 캐릭터 모드: 메시 = 플레이어/같은 리그 후보 전체, 애니메이션 = 플레이어 애니메이션 전체 (검수자가 직접/이름/설명으로 찾음)."""
+    def _chosen_rigged(self) -> List[str]:
+        """캐릭터 메쉬 찾기에서 고른 메시 중 리깅된 것 (애니메이션은 리깅된 메시에만 있다)."""
         idx = self.index
+        out = []
+        for it in self.mesh_list.selectedItems():
+            pth = it.data(Qt.ItemDataRole.UserRole)
+            m = idx.mesh(pth) if idx else None
+            if m is None or m.rigged:
+                out.append(pth)
+        return out
+
+    def show_char_meshes(self, *_a) -> bool:
+        """캐릭터 메쉬 찾기: 캐릭터 모델링 전체를 이름으로 검색해 (리깅됨 먼저, 리깅 안 됨 다음) 나열한다."""
+        idx = self.index or self._load_index_cached()
         if idx is None or not idx:
-            QMessageBox.warning(self, "플레이어블 캐릭터", "에셋 이름 목록이 아직 없습니다. 0번 탭에서 게임 에셋을 한 번 읽어 오세요 (또는 '캐릭터 추측 시작').")
+            QMessageBox.warning(self, "캐릭터 메쉬 찾기", "에셋 이름 목록이 아직 없습니다. '캐릭터 메쉬 목록 열기'로 게임 파일에서 한 번 읽어 오세요.")
             return False
-        meshes = idx.player_rig_meshes()
-        self.player_mode = True
+        meshes = idx.character_meshes(self.char_q.text(), self.char_rig.currentData() or "all", bool(self.ck_char_player.isChecked()))
+        self.char_mode = True
         self.confirmed = [m.path for m in meshes]
         self.mesh_list.clear()
-        for m in meshes:
-            it = QListWidgetItem("%s    (%s)" % (m.name, m.path))
+        shown = meshes[: self.CHAR_LIST_MAX]
+        for m in shown:
+            it = QListWidgetItem("[%s] %s    (%s)" % ("리깅됨" if m.rigged else "리깅 없음", m.name, m.path))
             it.setData(Qt.ItemDataRole.UserRole, m.path)
             it.setToolTip(m.path)
             self.mesh_list.addItem(it)
-        for ck, on in ((self.ck_k_monster, False), (self.ck_k_player, True)):  # 검색이 플레이어 쪽만 훑게
-            ck.blockSignals(True)
-            ck.setChecked(on)
-            ck.blockSignals(False)
+        n_r = sum(1 for m in meshes if m.rigged)
+        note = "캐릭터 메쉬 %d개 — 리깅됨 %d · 리깅 없음 %d" % (len(meshes), n_r, len(meshes) - n_r)
+        if len(meshes) > len(shown):
+            note += " (앞 %d개만 표시 — 검색어로 좁히세요)" % len(shown)
+        if not idx.statics_known:
+            note += ". 이 이름 목록에는 리깅 없는 메시가 없어요: '에셋 목록 새로 읽기'를 누르면 포함됩니다"
+        note += ". 메시를 고르면 그 캐릭터에 해당하는 애니메이션만 아래에 나옵니다 (고르지 않으면 전체)."
+        self.char_note.setText(note)
+        self.status.setText("캐릭터 메쉬 찾기: " + note.split(" — ")[0] + "개")
         self._refill_anims()
-        self.status.setText("플레이어블 캐릭터 모드: 메시 %d개, 애니메이션 %d개. 아래 '목록 거르기'나 '설명으로 찾기'로 좁히세요." % (len(meshes), self.anim_list.count()))
         return True
 
+    CHAR_LIST_MAX = 3000
+
     def confirm(self) -> None:
-        self.player_mode = False
+        self.char_mode = False
         meshes = self.chosen_meshes()
         if not meshes:
             QMessageBox.warning(self, "검수 확정", "메시가 정해진 캐릭터가 없습니다. 후보에서 고르거나 검색 칸에서 찾으세요.")
@@ -1179,8 +1236,8 @@ class VidFindTab(QWidget):
 
     PLAYER_LIST_MAX = 30000
 
-    def _fill_player_anims(self) -> None:
-        """플레이어 모드: 종류 체크에 맞는 애니메이션을 이름순으로 전부 (점수·개수 제한 없음)."""
+    def _fill_all_anims(self) -> None:
+        """캐릭터 메쉬 찾기에서 메시를 고르지 않았을 때: 종류 체크에 맞는 애니메이션을 이름순으로 전부 (점수·개수 제한 없음)."""
         idx = self.index
         paths = idx.anims_of_kinds(self._kinds() or {assetidx.KIND_PLAYER, assetidx.KIND_MONSTER}) if idx else []
         paths = sorted(paths, key=lambda a: (os.path.basename(a).lower(), a.lower()))
@@ -1189,17 +1246,20 @@ class VidFindTab(QWidget):
             it.setData(Qt.ItemDataRole.UserRole, a)
             it.setToolTip(a)
             self.anim_list.addItem(it)
-        msg = "플레이어블 캐릭터 애니메이션 전체 %d개 (이름순)." % len(paths)
+        msg = "애니메이션 전체 %d개 (이름순)." % len(paths)
         if len(paths) > self.PLAYER_LIST_MAX:
             msg += " 너무 많아 앞 %d개만 보입니다. 거르기로 좁히세요." % self.PLAYER_LIST_MAX
-        self.anim_note.setText(msg + " 목록 거르기(쉼표=모두 포함) 또는 설명으로 찾기를 쓰세요. 메시는 위에서 골라 추출합니다.")
+        self.anim_note.setText(msg + " 위에서 메시를 고르면 그 캐릭터에 해당하는 클립만 남습니다. 목록 거르기(쉼표=모두 포함)·설명으로 찾기도 쓸 수 있어요.")
         self._apply_anim_filter()
 
     def _refill_anims(self, *_a) -> None:
         self.anim_list.clear()
         idx = self.index
-        if self.player_mode and idx is not None:
-            self._fill_player_anims()
+        if self.char_mode and idx is not None and not self._chosen_rigged():
+            if self.mesh_list.selectedItems():
+                self.anim_note.setText("리깅 없는 메시(SM_)에는 애니메이션이 없습니다. 리깅된 메시를 고르거나 선택을 풀어 전체 목록을 보세요.")
+            else:
+                self._fill_all_anims()
             return
         if idx is None or not self.confirmed:
             return
@@ -1211,7 +1271,7 @@ class VidFindTab(QWidget):
         kinds = self._kinds()
         force = True if (self.ck_player.isChecked() or kinds == {assetidx.KIND_PLAYER}) else None
         hidden_kind = 0
-        for p in self._selected_mesh_paths():
+        for p in (self._chosen_rigged() if self.char_mode else self._selected_mesh_paths()):
             m = idx.mesh(p)
             nm = m.name if m else assetidx.mesh_name(p)
             if force or assetidx.is_player_path(p):
@@ -1382,9 +1442,8 @@ class VidFindTab(QWidget):
             files, n, skipped = res
             self.last_files = list(files)
             win.ex_files.set_paths(files)
-            win._after_load("source")
-            win.tabs.setCurrentIndex(1)
-            msg = "소스 모션 %d개를 열었습니다 — 오른쪽 '클립' 목록에서 바꿔 볼 수 있습니다" % n
+            win._after_load("source")  # 탭은 옮기지 않는다 (이 탭에 그대로 머물며 더 고를 수 있게)
+            msg = "소스 모션 %d개를 뷰포트로 열었습니다 — 오른쪽 '클립' 목록에서 바꿔 볼 수 있습니다" % n
             if skipped:
                 msg += " (건너뜀 %d: %s)" % (len(skipped), skipped[0][:80])
                 QMessageBox.information(self, "뷰포트로 열기", "일부는 열지 못했습니다:\n" + "\n".join(skipped)[:700])
@@ -1541,7 +1600,7 @@ class VidFindTab(QWidget):
                 cur = self.known.toPlainText().strip()
                 self.known.setPlainText((cur + "\n" if cur else "") + ch["name"] + (" — %s" % ch["kind"] if ch.get("kind") else ""))
         self.rows, self.confirmed = [], []
-        self.player_mode = False
+        self.char_mode = False
         self.table.setRowCount(0)
         self.mesh_list.clear()
         self.anim_list.clear()

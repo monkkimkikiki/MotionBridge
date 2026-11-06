@@ -144,6 +144,15 @@ def norm_key(text: str) -> str:
     return " ".join(sorted(set(tokens(text))))
 
 
+_STATIC_RX = re.compile(r"(?i)^sm[a-z]{0,2}_")
+
+
+def is_rigged_path(path: str) -> bool:
+    """파일 이름 접두사로 판단: SM_* (스태틱 메시)면 리깅 없음, 그 밖(SK_* 등 스켈레탈)은 리깅됨."""
+    base = os.path.basename((path or "").replace("\\", "/")).split(".")[0]
+    return not _STATIC_RX.match(base)
+
+
 def mesh_name(path: str) -> str:
     """'/Game/.../SK_Dwarf_Warrior.SK_Dwarf_Warrior' -> 'Dwarf_Warrior'."""
     base = os.path.basename(path.replace("\\", "/")).split(".")[0]
@@ -163,11 +172,12 @@ class MeshEntry:
     name: str
     toks: frozenset
     dirs: List[str] = field(default_factory=list)
+    rigged: bool = True   # 스켈레탈 메시(SK_*) = 리깅됨 / 스태틱 메시(SM_*) = 리깅 없음
 
     @staticmethod
-    def of(path: str) -> "MeshEntry":
+    def of(path: str, rigged: Optional[bool] = None) -> "MeshEntry":
         n = mesh_name(path)
-        return MeshEntry(path, n, frozenset(tokens(n)), _dir_parts(path))
+        return MeshEntry(path, n, frozenset(tokens(n)), _dir_parts(path), is_rigged_path(path) if rigged is None else rigged)
 
 
 @dataclass
@@ -262,11 +272,14 @@ class MatchMemory:
 
 
 class AssetIndex:
-    def __init__(self, mesh_paths: Iterable[str] = (), anim_paths: Iterable[str] = ()) -> None:
-        self.meshes: List[MeshEntry] = [MeshEntry.of(p) for p in dict.fromkeys(mesh_paths)]
+    def __init__(self, mesh_paths: Iterable[str] = (), anim_paths: Iterable[str] = (), static_paths: Optional[Iterable[str]] = None) -> None:
+        self.meshes: List[MeshEntry] = [MeshEntry.of(p, True) for p in dict.fromkeys(mesh_paths)]   # 스켈레탈(리깅됨): AI 추측 대상
         self.anims: List[str] = list(dict.fromkeys(anim_paths))
+        self.statics_known = static_paths is not None   # 예전에 저장한 목록에는 스태틱 메시가 없다 (새로 읽어야 함)
+        self.statics: List[MeshEntry] = [MeshEntry.of(p, False) for p in dict.fromkeys(static_paths or ())]  # 리깅 없는 캐릭터 모델링
         self._anim_toks: Dict[str, frozenset] = {}
-        self._by_path: Dict[str, MeshEntry] = {m.path: m for m in self.meshes}
+        self._by_path: Dict[str, MeshEntry] = {m.path: m for m in self.statics}
+        self._by_path.update({m.path: m for m in self.meshes})
         self._kind: Dict[str, str] = {}
 
     def kind(self, path: str) -> str:
@@ -305,13 +318,30 @@ class AssetIndex:
     def player_meshes(self) -> List[MeshEntry]:
         return [m for m in self.meshes if is_player_path(m.path)]
 
-    def player_rig_meshes(self) -> List[MeshEntry]:
+    def character_meshes(self, query: str = "", rig: str = "all", player_only: bool = False) -> List[MeshEntry]:
+        """캐릭터 모델링 전체 검색. rig = 'all' | 'rigged'(리깅됨) | 'static'(리깅 없음). query 는 쉼표/공백 = 모두 포함.
+        리깅된 것이 먼저, 그다음 경로순. player_only 면 플레이어블(+같은 폴더 변형)만."""
+        pool: List[MeshEntry] = []
+        if rig in ("all", "rigged"):
+            pool += self.meshes
+        if rig in ("all", "static"):
+            pool += self.statics
+        if player_only:
+            keep = {m.path for m in self.player_rig_meshes(pool)}
+            pool = [m for m in pool if m.path in keep]
+        terms = textmatch.terms(query)
+        if terms:
+            pool = [m for m in pool if all(t in (m.path + " " + m.name).lower() for t in terms)]
+        return sorted(pool, key=lambda m: (not m.rigged, m.path.lower()))
+
+    def player_rig_meshes(self, pool: Optional[List[MeshEntry]] = None) -> List[MeshEntry]:
         """플레이어블 캐릭터 메시 후보: 경로에 player/pc/hero 같은 낱말이 든 메시 + 그 메시와 같은 폴더에 있는 메시
         (같은 리그를 쓰는 의상·장비 변형은 보통 같은 폴더에 있다). 경로 순으로 정렬."""
-        base = self.player_meshes()
+        pool = list(self.meshes) + list(self.statics) if pool is None else pool
+        base = [m for m in pool if is_player_path(m.path)]
         folders = {os.path.dirname(m.path.replace("\\", "/")) for m in base}
         seen, out = set(), []
-        for m in self.meshes:
+        for m in pool:
             if is_player_path(m.path) or os.path.dirname(m.path.replace("\\", "/")) in folders:
                 if m.path not in seen:
                     seen.add(m.path)
@@ -492,11 +522,12 @@ class AssetIndex:
 
     # ------------------------------------------------------------------ 캐시
     def to_json(self, game_key: str = "") -> dict:
-        return {"game": game_key, "saved": int(time.time()), "meshes": [m.path for m in self.meshes], "anims": self.anims}
+        return {"game": game_key, "saved": int(time.time()), "meshes": [m.path for m in self.meshes], "anims": self.anims,
+                "statics": [m.path for m in self.statics]}
 
     @staticmethod
     def from_json(d: dict) -> "AssetIndex":
-        return AssetIndex(d.get("meshes") or [], d.get("anims") or [])
+        return AssetIndex(d.get("meshes") or [], d.get("anims") or [], d.get("statics") if "statics" in d else None)
 
 
 def save_index(path: str, idx: AssetIndex, game_key: str = "") -> None:

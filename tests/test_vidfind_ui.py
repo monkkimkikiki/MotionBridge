@@ -306,31 +306,54 @@ def main():
         check(vt._kinds() == {"player"}, "플레이어만")
         vt.ck_k_monster.setChecked(True)
         vt.anim_filter.setText("")
-        # ---------------- 플레이어블 캐릭터 모드: 영상 추측과 상관없이 메시 후보 + 플레이어 애니메이션 전체
+        # ---------------- 캐릭터 메쉬 찾기 모드: AI 추측 없이 캐릭터 모델링 전체 검색 (리깅됨/리깅 없음), 고른 캐릭터의 애니메이션만
         saved_idx = vt.index
-        vt.index = assetidx.AssetIndex(["G/Characters/Player/Meshes/SK_Player_A.SK_Player_A", "G/Characters/Player/Meshes/SK_Armor_B.SK_Armor_B", "G/Characters/Monsters/Golem/Meshes/SK_Golem.SK_Golem"],
-                                        ["G/Characters/Player/Animations/A_PC_Roll", "G/Characters/Player/Animations/A_PC_Attack_01", "G/Characters/Monsters/Golem/Animations/A_Golem_Slam"])
+        P = "G/Characters/Player/Meshes/"
+        vt.index = assetidx.AssetIndex([P + "SK_Player_A.SK_Player_A", P + "SK_Armor_B.SK_Armor_B", "G/Characters/Monsters/Golem/Meshes/SK_Golem.SK_Golem"],
+                                       ["G/Characters/Player/Animations/A_PC_Roll", "G/Characters/Player/Animations/A_PC_Attack_01", "G/Characters/Monsters/Golem/Animations/A_Golem_Slam"],
+                                       [P + "SM_Player_Helmet.SM_Player_Helmet", "G/Characters/Monsters/Golem/Meshes/SM_GolemRock.SM_GolemRock"])
         try:
-            check(vt.load_player_mode() and vt.player_mode, "플레이어 모드 시작")
-            check(vt.mesh_list.count() == 2 and vt.anim_list.count() == 2, "플레이어 메시 2 / 애니메이션 2(몬스터 것 제외): %d %d" % (vt.mesh_list.count(), vt.anim_list.count()))
-            check("A_PC_Attack_01" in vt.anim_list.item(0).text(), "이름순 정렬: %s" % vt.anim_list.item(0).text())
-            vt.anim_filter.setText("roll")
-            check([vt.anim_list.item(i).text() for i in range(2) if not vt.anim_list.item(i).isHidden()][0].startswith("A_PC_Roll"), "플레이어 목록도 글자로 거르기")
-            vt.anim_filter.setText("")
+            vt.rb_mode_char.setChecked(True)  # 모드를 바꾸면 바로 목록이 열린다
+            check(vt.char_mode and vt.mesh_list.count() == 5 and "캐릭터 메쉬" in vt.btn_guess.text() and vt.char_panel.isVisible() is not False, "캐릭터 메쉬 전체: %d" % vt.mesh_list.count())
+            check(vt.mesh_list.item(0).text().startswith("[리깅됨]") and vt.mesh_list.item(4).text().startswith("[리깅 없음]"), "리깅됨이 먼저, 리깅 없음이 뒤: %s / %s" % (vt.mesh_list.item(0).text(), vt.mesh_list.item(4).text()))
+            check(vt.anim_list.count() == 3, "메시를 안 골랐으면 애니메이션 전체: %d" % vt.anim_list.count())
+            vt.char_rig.setCurrentIndex(vt.char_rig.findData("static"))
+            check(vt.mesh_list.count() == 2 and all(vt.mesh_list.item(i).text().startswith("[리깅 없음]") for i in range(2)), "리깅 안 된 것만")
+            vt.char_rig.setCurrentIndex(vt.char_rig.findData("rigged"))
+            check(vt.mesh_list.count() == 3, "리깅된 것만 3")
+            vt.char_rig.setCurrentIndex(vt.char_rig.findData("all"))
+            vt.char_q.setText("player, helmet")
+            vt.show_char_meshes()
+            check(vt.mesh_list.count() == 1 and "Helmet" in vt.mesh_list.item(0).text(), "쉼표 = 모두 포함 검색")
+            vt.char_q.setText("")
+            vt.ck_char_player.setChecked(True)  # 플레이어블만 (같은 폴더 변형 포함)
+            check(vt.mesh_list.count() == 3 and vt._kinds() == {"player"}, "플레이어블만: %d" % vt.mesh_list.count())
+            check(vt.anim_list.count() == 2, "플레이어 애니메이션만")
+            vt.ck_char_player.setChecked(False)
             vt.ck_k_monster.setChecked(True)
-            check(vt.anim_list.count() == 3, "몬스터도 켜면 전체 3개")
-            vt.confirmed, vt.player_mode = [], False
-            # 3) 칸의 '플레이어블 캐릭터' 체크: 몬스터 추측(AI·영상)을 건너뛰고 바로 플레이어 목록
+            vt.show_char_meshes()
+            # 몬스터 메시를 고르면 그 캐릭터에 해당하는 클립만
+            gi = [i for i in range(vt.mesh_list.count()) if vt.mesh_list.item(i).text().startswith("[리깅됨]") and "Golem" in vt.mesh_list.item(i).text()][0]
+            vt.mesh_list.selectItems([gi])
+            vt._mesh_sel_changed()
+            check(vt.anim_list.count() == 1 and "Slam" in vt.anim_list.item(0).text(), "고른 캐릭터의 클립만: %s" % [vt.anim_list.item(i).text() for i in range(vt.anim_list.count())])
+            # 리깅 없는 메시만 고르면 애니메이션 없음 안내
+            si = [i for i in range(vt.mesh_list.count()) if vt.mesh_list.item(i).text().startswith("[리깅 없음]")][0]
+            vt.mesh_list.selectItems([si])
+            vt._mesh_sel_changed()
+            check(vt.anim_list.count() == 0 and "SM_" in vt.anim_note.text(), "리깅 없는 메시는 애니메이션 없음")
+            vt.mesh_list.selectItems([])
+            vt._mesh_sel_changed()
+            vt.anim_filter.setText("roll")
+            check(len([i for i in range(vt.anim_list.count()) if not vt.anim_list.item(i).isHidden()]) == 1, "목록 거르기")
+            vt.anim_filter.setText("")
             vt.mesh_list.clear()
-            vt.anim_list.clear()
-            vt.ck_guess_player.setChecked(True)
-            check(vt.player_mode and vt.mesh_list.count() == 2 and "플레이어블" in vt.btn_guess.text(), "체크하면 바로 플레이어 목록")
-            vt.mesh_list.clear()
-            vt.player_mode = False
-            vt.start_guess(False)  # 영상이 없어도, AI 를 부르지 않고 플레이어 목록
-            check(vt.player_mode and vt.mesh_list.count() == 2 and vt.anim_list.count() >= 2, "추측 버튼 = 플레이어 목록 (영상 없이도)")
-            vt.ck_guess_player.setChecked(False)
-            check(not vt.player_mode and vt.mesh_list.count() == 0 and vt.btn_guess.text() == "캐릭터 추측 시작", "끄면 몬스터 추측으로 복귀")
+            vt.char_mode = False
+            vt.start_guess(False)  # 영상이 없어도 AI 를 부르지 않고 캐릭터 메쉬 목록
+            check(vt.char_mode and vt.mesh_list.count() == 5, "추측 버튼 = 캐릭터 메쉬 목록 (영상 없이도)")
+            vt.rb_mode_monster.setChecked(True)
+            vt.rb_mode_char.setChecked(False)  # (진짜 Qt 는 같은 묶음 라디오가 자동으로 해제된다)
+            check(not vt.char_mode and vt.mesh_list.count() == 0 and vt.btn_guess.text() == "캐릭터 추측 시작", "몬스터 찾기로 복귀")
         finally:
             vt.index = saved_idx
         # ---------------- 영상 속 동작과 비슷한 순으로 정렬 (뼈 방향 + DTW). 뽑기/읽기는 가짜로 바꿔서 흐름만 확인한다
@@ -525,7 +548,9 @@ def main():
         vt.anim_list.selectItems([0, 1])
         picks = [vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in (0, 1)]
         mw.ex_out.setText(os.path.join(d, "out2"))
+        mw.tabs.setCurrentIndex(5)
         vt.open_in_viewport()
+        check(mw.tabs.currentIndex() == 5, "뷰포트로 열어도 매핑 탭으로 넘어가지 않고 그 탭에 머묾")
         check(exported and exported[-1] == picks, "고른 애니메이션만 뽑음: %s" % exported)
         check(mw.pr.src is not None and len(mw.pr.src.animations) == 2 and mw.clip_combo.count() == 2, "소스 모션으로 열림: %d" % (len(mw.pr.src.animations) if mw.pr.src else -1))
         check(mw.ex_files.count() == 2, "추출 목록에도 올라감")
