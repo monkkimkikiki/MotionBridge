@@ -151,6 +151,33 @@ def test_full_flow():
         assert bar.move(1) and mw.vd.n_frames == T0 and not bar.move(1) and mw.frame_slider.value() == 34
         bar.reset()
         mw._reset_settings()
+        # 좌표축 빠른 수정: 지금 쓰이는 축에서 시작해 돌리고/뒤집고, 자동으로 되돌린다
+        mw._reset_settings()
+        mw.recompute()
+        st = mw.pr.settings
+        d0 = mw.pr.result.frame_tgt[1]
+        assert st.tgt_up == "auto" and "적용 축" in mw.axis_notes["tgt"].text(), mw.axis_notes["tgt"].text()
+        from motionbridge.core.mapping import axes_of_frame
+        init = axes_of_frame(mw.pr.result.frame_tgt[0])
+        assert mw.axis_quick("tgt", "yaw90") and st.tgt_up != "auto" and st.tgt_fwd != "auto"
+        up0, fwd0 = init
+        assert mw.pr.result.frame_tgt[1] != d0 and "수동" in mw.pr.result.frame_tgt[1], mw.pr.result.frame_tgt[1]
+        for _ in range(3):  # 처음 한 번 + 세 번 = 네 번이면 제자리
+            mw.axis_quick("tgt", "yaw90")
+        assert (st.tgt_up, st.tgt_fwd) == (up0, fwd0), "90° 네 번이면 제자리"
+        mw.axis_quick("tgt", "yaw180")
+        assert st.tgt_fwd != fwd0 and st.tgt_up == up0
+        mw.axis_quick("tgt", "flip_up")
+        assert st.tgt_up != up0
+        assert mw.axis_quick("src", "pitch90") and st.src_up != "auto"
+        assert mw._fields["tgt_up"][0].currentData() == st.tgt_up, "콤보에도 반영"
+        mw.axis_quick("tgt", "auto")
+        mw.axis_quick("src", "auto")
+        assert st.tgt_up == st.tgt_fwd == st.src_up == st.src_fwd == "auto" and mw.pr.result.frame_tgt[1] == d0
+        mw.unload_target()
+        assert not mw.axis_quick("tgt", "yaw90"), "타깃이 없으면 아무 일 없음"
+        QFileDialog.open_ret = (tgt, "")
+        mw.open_target()
         # 열어 둔 타깃/소스를 뺄 수 있다 (다른 쪽은 그대로, 뷰어는 남은 것만 보여 줌)
         assert mw.btn_unload_tgt.isEnabled() and mw.btn_unload_src.isEnabled()
         mw.unload_target()

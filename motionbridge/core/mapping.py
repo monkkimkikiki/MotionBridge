@@ -304,6 +304,80 @@ def detect_frame(skel: Skeleton, slots: Dict[str, int]) -> Optional[Tuple[np.nda
 DEFAULT_FRAME = frame_from_axes("+Y", "+Z")
 
 
+# ---------------------------------------------------------------------------- 축 빠른 수정 / 진단
+def _axis_name(v: np.ndarray) -> str:
+    return max(AXES, key=lambda k: float(np.dot(AXES[k], v)))
+
+
+def axes_of_frame(F: np.ndarray) -> Tuple[str, str]:
+    """프레임(월드->표준)이 가리키는, 좌표축에 가장 가까운 (상방, 전방) 축 이름. 서로 수직이 되도록 고른다."""
+    inv = Q.conj(np.asarray(F, float))
+    up_w = Q.rotate(inv, np.array([0.0, 1.0, 0.0]))
+    fwd_w = Q.rotate(inv, np.array([0.0, 0.0, 1.0]))
+    up = _axis_name(up_w)
+    fwd_c = fwd_w - AXES[up] * float(np.dot(fwd_w, AXES[up]))
+    fwd = _axis_name(fwd_c if np.linalg.norm(fwd_c) > 1e-9 else fwd_w)
+    return up, fwd
+
+
+def turn_axes(up: str, fwd: str, op: str) -> Tuple[str, str]:
+    """(상방, 전방)을 빠르게 고친다. op: 'yaw90' 위축 기준 90° 돌리기(전방이 옆으로) / 'yaw180' 앞뒤 반전(180°) /
+    'flip_up' 위아래 반전 / 'pitch90' 좌우축 기준 90°(Z-up 모델을 Y-up 으로 눕히거나 세우기). 결과는 항상 서로 수직인 축이다."""
+    u, f = AXES[up], AXES[fwd]
+    if op == "yaw90":
+        nu, nf = u, np.cross(u, f)
+    elif op == "yaw180":
+        nu, nf = u, -f
+    elif op == "flip_up":
+        nu, nf = -u, f
+    elif op == "pitch90":
+        nu, nf = f, -u
+    else:
+        raise ValueError("알 수 없는 축 동작: " + op)
+    return _axis_name(nu), _axis_name(nf)
+
+
+def diagnose_frame(skel: Skeleton, slots: Dict[str, int]) -> List[str]:
+    """자동 좌표축 인식이 틀리기 쉬운 이유를 찾아 문장으로 돌려준다 (비어 있으면 특별한 문제 없음)."""
+    notes: List[str] = []
+    need_up = "Hips" in slots and any(k in slots for k in ("Head", "Neck", "Spine2"))
+    lr = ("L_UpLeg" in slots and "R_UpLeg" in slots) or ("L_UpperArm" in slots and "R_UpperArm" in slots)
+    if not need_up:
+        notes.append("골반(Hips)과 머리/목/가슴 매핑이 없어 상방을 알 수 없습니다 → 기본값(상방 +Y / 전방 +Z)을 씁니다. 파일이 Z-up 이면 눕거나 뒤집혀 보입니다.")
+    if not lr:
+        notes.append("양쪽 허벅지(또는 위팔) 매핑이 없어 좌우를 알 수 없습니다 → 기본값(상방 +Y / 전방 +Z)을 씁니다.")
+    if notes:
+        return notes
+    _, bwp = skel.bind_world()
+    hips = slots["Hips"]
+    top = slots.get("Head", slots.get("Neck", slots.get("Spine2")))
+
+    def off_axis(v: np.ndarray) -> float:
+        v = v / max(float(np.linalg.norm(v)), 1e-12)
+        return float(np.degrees(np.arccos(np.clip(max(float(np.dot(v, a)) for a in AXES.values()), -1, 1))))
+
+    if "L_Foot" in slots and "R_Foot" in slots:
+        leg = bwp[hips] - (bwp[slots["L_Foot"]] + bwp[slots["R_Foot"]]) / 2.0
+        a = off_axis(leg)
+        if a > 25.0:
+            notes.append("다리(발→골반) 방향이 좌표축에서 %.0f° 벗어나 있어 다리로 상방을 잡지 못했습니다 (바인드 포즈가 기울었거나 다리 매핑이 틀림)." % a)
+    torso = bwp[top] - bwp[hips]
+    at = off_axis(torso)
+    if at > 35.0:
+        notes.append("몸통(골반→머리) 방향이 좌표축에서 %.0f° 기울어 있습니다 (구부정한 괴수/비인간형 리그). 상방이 비스듬하게 잡힐 수 있어요." % at)
+    if "L_UpLeg" in slots and "R_UpLeg" in slots:
+        left = bwp[slots["L_UpLeg"]] - bwp[slots["R_UpLeg"]]
+    else:
+        left = bwp[slots["L_UpperArm"]] - bwp[slots["R_UpperArm"]]
+    if float(np.linalg.norm(left)) < 1e-9:
+        notes.append("왼쪽·오른쪽 본이 같은 위치라 좌우를 알 수 없습니다 (L/R 매핑 확인).")
+    else:
+        ang = off_axis(left)
+        if ang > 35.0:
+            notes.append("좌우(왼쪽-오른쪽 본) 방향이 좌표축에서 %.0f° 벗어나 있습니다. 좌우 매핑이 서로 바뀌었거나 리그가 비스듬합니다." % ang)
+    return notes
+
+
 def _frame_from_up_left(up: np.ndarray, left: np.ndarray, snap_up: bool = True, left_tol: float = 15.0) -> Optional[Tuple[np.ndarray, str]]:
     if np.linalg.norm(up) < 1e-9:
         return None

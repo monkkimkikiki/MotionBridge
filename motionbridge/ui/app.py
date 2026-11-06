@@ -1036,6 +1036,28 @@ class MainWindow(QMainWindow):
             cb.currentIndexChanged.connect(lambda i, k=key, c=cb: self._set(k, c.itemData(i)))
             self._fields[key] = (cb, False)
             f.addRow(lab, cb)
+        # 빠른 수정: 상방/전방을 직접 고르지 않아도 버튼으로 돌리거나 뒤집는다 (자동 인식 값에서 시작)
+        self.axis_notes = {}
+        for side, title in (("src", "소스"), ("tgt", "타깃")):
+            row = QHBoxLayout()
+            for op, text, tip in (("yaw90", "↻ 90° 돌리기", "위를 축으로 앞 방향을 90° 돌립니다 (옆을 보고 있을 때). 여러 번 누르면 계속 돌아요."),
+                                  ("yaw180", "↔ 앞뒤 반전", "앞과 뒤를 바꿉니다 (뒤돌아 있을 때)"),
+                                  ("flip_up", "⇅ 위아래 반전", "위와 아래를 바꿉니다 (거꾸로 서 있을 때)"),
+                                  ("pitch90", "⤴ 눕히기/세우기 90°", "좌우 축 기준으로 90° 굴립니다 (Z-up 모델이 누워 보일 때)")):
+                b = QPushButton(text)
+                b.setToolTip(title + ": " + tip)
+                b.clicked.connect(lambda *_a, sd=side, o=op: self.axis_quick(sd, o))
+                row.addWidget(b)
+            b = QPushButton("자동")
+            b.setToolTip("자동 인식으로 되돌립니다")
+            b.clicked.connect(lambda *_a, sd=side: self.axis_quick(sd, "auto"))
+            row.addWidget(b)
+            f.addRow(title + " 빠른 수정", row)
+            lb = QLabel("")
+            lb.setWordWrap(True)
+            lb.setTextFormat(Qt.TextFormat.RichText)
+            self.axis_notes[side] = lb
+            f.addRow("", lb)
         lay.addWidget(g)
 
         g = QGroupBox("본별 회전 보정 (하위 본 전체에 적용)")
@@ -1441,6 +1463,65 @@ class MainWindow(QMainWindow):
         setattr(self.pr.settings, key, value)
         self.schedule()
 
+    # ---- 좌표축 빠른 수정
+    def _frame_now(self, side: str):
+        """지금 그 쪽(src/tgt)에 쓰이는 프레임(월드->표준). 결과가 있으면 그 값, 없으면 직접 감지."""
+        from ..core.mapping import DEFAULT_FRAME, detect_frame
+
+        res = self.pr.result
+        if res is not None:
+            return (res.frame_src if side == "src" else res.frame_tgt)[0]
+        m = self.pr.src if side == "src" else self.pr.tgt
+        slots = self.pr.src_slots if side == "src" else self.pr.tgt_slots
+        det = detect_frame(m.skeleton, slots) if m is not None else None
+        return det[0] if det else DEFAULT_FRAME
+
+    def axis_quick(self, side: str, op: str) -> bool:
+        """축 빠른 수정: op 는 yaw90 / yaw180 / flip_up / pitch90 / auto. 지금 쓰이는 축에서 시작해 한 번 돌린다."""
+        from ..core.mapping import axes_of_frame, turn_axes
+
+        m = self.pr.src if side == "src" else self.pr.tgt
+        if m is None:
+            self.statusBar().showMessage("먼저 %s을(를) 여세요" % ("소스 모션" if side == "src" else "타깃 모델"))
+            return False
+        st = self.pr.settings
+        ku, kf = side + "_up", side + "_fwd"
+        if op == "auto":
+            setattr(st, ku, "auto")
+            setattr(st, kf, "auto")
+        else:
+            up, fwd = getattr(st, ku), getattr(st, kf)
+            if up == "auto" or fwd == "auto":
+                up, fwd = axes_of_frame(self._frame_now(side))
+            setattr(st, ku, turn_axes(up, fwd, op)[0])
+            setattr(st, kf, turn_axes(up, fwd, op)[1])
+        self._sync_settings_ui()
+        self.recompute()
+        return True
+
+    def _update_axis_notes(self) -> None:
+        """좌표축 설명 줄: 지금 적용된 축 + 자동 인식이 틀리기 쉬운 이유."""
+        if not getattr(self, "axis_notes", None):
+            return
+        from ..core.mapping import diagnose_frame
+
+        res, st = self.pr.result, self.pr.settings
+        for side in ("src", "tgt"):
+            m = self.pr.src if side == "src" else self.pr.tgt
+            if m is None:
+                self.axis_notes[side].setText("")
+                continue
+            parts = []
+            if res is not None:
+                desc = (res.frame_src if side == "src" else res.frame_tgt)[1]
+                manual = getattr(st, side + "_up") != "auto" and getattr(st, side + "_fwd") != "auto"
+                parts.append("<b>%s</b> 적용 축: %s%s" % ("소스" if side == "src" else "타깃", desc, "" if manual else " (자동)"))
+            if getattr(st, side + "_up") == "auto" or getattr(st, side + "_fwd") == "auto":
+                slots = self.pr.src_slots if side == "src" else self.pr.tgt_slots
+                for n in diagnose_frame(m.skeleton, slots):
+                    parts.append("<span style='color:#d08a2e'>⚠ %s</span>" % n)
+            self.axis_notes[side].setText("<br>".join(parts))
+
     def fit_scale(self) -> None:
         """소스와 타깃의 크기를 재서 스케일 배율을 정한다 (자동 스케일을 켜고 배율만 바꿈)."""
         if not self.pr.ready():
@@ -1600,6 +1681,7 @@ class MainWindow(QMainWindow):
         self._update_quality()
 
     def _update_info(self, err: Optional[str]) -> None:
+        self._update_axis_notes()
         if getattr(self, "btn_unload_src", None) is not None:
             self.btn_unload_src.setEnabled(self.pr.src is not None)
             self.btn_unload_tgt.setEnabled(self.pr.tgt is not None)

@@ -130,10 +130,55 @@ def test_refine_frame():
     print("refine frame OK")
 
 
+def test_axes_quick_fix():
+    import itertools
+
+    from motionbridge.core import mapping as M
+
+    n = 0
+    for u, f in itertools.product(M.AXES, M.AXES):
+        if abs(float(np.dot(M.AXES[u], M.AXES[f]))) > 1e-6:
+            continue
+        assert M.axes_of_frame(M.frame_from_axes(u, f)) == (u, f), (u, f)
+        for op in ("yaw90", "yaw180", "flip_up", "pitch90"):
+            a, b = M.turn_axes(u, f, op)
+            assert abs(float(np.dot(M.AXES[a], M.AXES[b]))) < 1e-6, (u, f, op)
+        assert M.turn_axes(*M.turn_axes(*M.turn_axes(*M.turn_axes(u, f, "yaw90"), "yaw90"), "yaw90"), "yaw90") == (u, f)
+        assert M.turn_axes(*M.turn_axes(u, f, "yaw180"), "yaw180") == (u, f) and M.turn_axes(*M.turn_axes(u, f, "flip_up"), "flip_up") == (u, f)
+        n += 1
+    assert n == 24
+    try:
+        M.turn_axes("+Y", "+Z", "zzz")
+        raise AssertionError("알 수 없는 동작은 오류")
+    except ValueError:
+        pass
+
+
+def test_diagnose_frame():
+    from motionbridge.core import mapping as M
+
+    sk0 = Skeleton(["a", "b"], [-1, 0], np.zeros((2, 3)))
+    notes = M.diagnose_frame(sk0, {})
+    assert notes and "골반" in notes[0] and "기본값" in notes[0], notes  # 매핑이 없으면 이유를 알려 준다
+    sk, meta = synth.build_skeleton("mixamo", "y_up_z", 1.0, "T", "aligned")
+    slots = auto_map(sk)
+    assert M.diagnose_frame(sk, slots) == [], "정상 리그는 문제 없음"
+    # 일부 매핑만 있으면 (머리 없음)
+    part = {k: v for k, v in slots.items() if k not in ("Head", "Neck", "Spine2")}
+    assert any("상방" in n for n in M.diagnose_frame(sk, part))
+    # 리그 전체가 비스듬하게 기울어 있으면 이유를 알려 준다 (루트를 X 로 40° 눕힘)
+    sk2, meta2 = synth.build_skeleton("mixamo", "y_up_z", 1.0, "T", "aligned")
+    sk2.rest_rot[0] = Q.mul(Q.from_axis_angle(np.array([1.0, 0, 0]), np.radians(40)), sk2.rest_rot[0])
+    ns = M.diagnose_frame(sk2, auto_map(sk2))
+    assert ns and any("벗어나" in n or "기울" in n for n in ns), ns
+
+
 if __name__ == "__main__":
     test_prefers_standard_names()
     test_hunched_character_frame()
     test_refine_frame()
     test_names()
     test_frames()
+    test_axes_quick_fix()
+    test_diagnose_frame()
     print("test_mapping ALL OK")
