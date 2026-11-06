@@ -191,6 +191,18 @@ with tempfile.TemporaryDirectory() as d:
     bd.close()  # 오른쪽 위 X
     bd.reject()
     check(got == [1], "X 로 닫으면 취소 신호 한 번: %s" % got)
+    # 멈추는 중: 취소 신호 뒤에 set_stopping 하면 창이 닫히지 않고 안내가 바뀌며, 또 눌러도 신호는 늘지 않는다
+    bd3 = BusyDialog("y", mw)
+    bd3.cancelled.connect(lambda: (got.append(3), bd3.set_stopping()))
+    bd3.show()
+    bd3.reject()
+    bd3.close()
+    bd3.reject()
+    app.processEvents()
+    check(got == [1, 3] and bd3.isVisible() and bd3.stopping and "멈추는 중" in bd3.text.text() and not bd3.btn.isEnabled(), "취소 뒤 '멈추는 중' 표시 유지: %s" % got)
+    bd3.finish()
+    check(not bd3.isVisible(), "멈춤이 끝나면 닫힘")
+    got.remove(3)
     bd2 = BusyDialog("x", mw)
     bd2.cancelled.connect(lambda: got.append(2))
     bd2.show()

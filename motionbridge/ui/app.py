@@ -1250,7 +1250,8 @@ class MainWindow(QMainWindow):
         wk.start()
 
     def cancel_async(self) -> bool:
-        """진행 중인 작업을 멈춘다: 작업 함수에 취소를 알리고, 화면은 바로 풀어 준다(결과는 버림)."""
+        """진행 중인 작업을 멈춘다: 작업 함수에 취소를 알리고 결과는 버린다.
+        하던 단계(네트워크 요청 등)가 실제로 끝날 때까지 화면은 잠겨 있고, 진행 창은 '멈추는 중'으로 바뀌어 남는다."""
         wk = self._worker
         if wk is None:
             return False
@@ -1262,12 +1263,28 @@ class MainWindow(QMainWindow):
                 pass
         self._worker = None
         self._zombies.append(wk)
+        self._stop_wk = wk
+        self.statusBar().showMessage("⏹ 멈추는 중… 하던 단계가 끝나면 풀립니다")
+        dlg = getattr(self, "_busy_dlg", None)
+        if dlg is not None:
+            dlg.set_stopping()
+        wk.finished.connect(self._stopped)
+        if not wk.isRunning():  # 연결하기 전에 이미 끝났으면 신호가 오지 않는다
+            self._stopped()
+        return True
+
+    def _stopped(self) -> None:
+        """멈추던 작업 스레드가 끝났다 -> 화면을 풀고 알린다 (한 번만)."""
+        wk = getattr(self, "_stop_wk", None)
+        if wk is None:
+            return
+        self._stop_wk = None
+        self._zombies = [z for z in self._zombies if z is not wk and z.isRunning()]
         self._set_busy(False)
         self.statusBar().showMessage("작업을 취소했습니다")
         cb = getattr(self, "_on_cancel", None)
         if cb:
             cb()
-        return True
 
     def _worker_done(self, res) -> None:
         cb = self._on_done

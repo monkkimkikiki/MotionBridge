@@ -359,6 +359,8 @@ class BusyDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
                             | Qt.WindowType.WindowCloseButtonHint)
         self._done = False
+        self._stopping = False
+        self._title = title
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 16, 18, 14)
         v.setSpacing(10)
@@ -387,17 +389,43 @@ class BusyDialog(QDialog):
             head = label
         self.text.setText((head + "\n" if head else "") + name)
 
+    def set_stopping(self) -> None:
+        """취소를 눌렀지만 하던 단계가 아직 끝나지 않은 상태. 창을 닫지 않고 '멈추는 중'을 분명하게 보여 준다."""
+        self._stopping = True
+        self.setWindowTitle(self._title + " — 멈추는 중")
+        self.text.setText("⏹ 멈추는 중입니다…\n지금 처리 중이던 단계가 끝나는 대로 이 창이 닫혀요. 잠시만 기다려 주세요.")
+        self.text.setStyleSheet("color:#e0a050;font-weight:bold")
+        self.bar.setRange(0, 0)
+        self.btn.setText("멈추는 중…")
+        self.btn.setEnabled(False)
+        self.hint.setText("끝나기 전에는 다른 조작을 할 수 없어요")
+
+    @property
+    def stopping(self) -> bool:
+        return self._stopping
+
     def finish(self) -> None:
-        """작업이 끝났을 때 취소 신호 없이 닫는다."""
+        """작업이 끝났을 때(또는 멈춤이 끝났을 때) 취소 신호 없이 닫는다."""
         self._done = True
+        self._stopping = False
         self.hide()
 
     def reject(self) -> None:
+        if self._stopping:  # 이미 멈추는 중: 다시 취소하거나 닫지 않는다
+            return
         if not self._done:
             self._done = True
             self.cancelled.emit()
+            if self._stopping:  # 취소 신호를 받은 쪽이 '멈추는 중' 표시로 바꿨다 -> 닫지 않고 기다린다
+                return
         super().reject()
 
     def closeEvent(self, ev) -> None:
+        if self._stopping:
+            ev.ignore()
+            return
         self.reject()
-        ev.accept()
+        if self._stopping:
+            ev.ignore()
+        else:
+            ev.accept()

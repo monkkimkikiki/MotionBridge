@@ -461,8 +461,18 @@ class QTreeWidget(QWidget):
 
 
 class QThread(QObject):
+    _running = False
+
     def start(self):
-        self.run()
+        self._running = True
+        try:
+            self.run()
+        finally:
+            self._running = False
+            self.finished.emit()  # 진짜 QThread 처럼 run 이 끝나면 finished
+
+    def isRunning(self):
+        return self._running
 
 
 class QTimer(QObject):

@@ -292,7 +292,7 @@ def test_worker_failure():
 
     mw.run_async(fn, lambda r: called.append(r), "시험2", cancellable=True, on_cancel=lambda: cancelled.append(1))
     assert seen == [True] and not called and cancelled == [1] and mw._worker is None and mw.tabs.isEnabled()
-    assert len(mw._zombies) == 1 and not mw.cancel_async(), "작업이 없으면 취소는 아무 일도 안 함"
+    assert len(mw._zombies) == 0 and not mw.cancel_async(), "작업이 끝났으면 남은 것 없음, 작업이 없으면 취소는 아무 일도 안 함"
     mw._zombies = []
     # 취소할 수 있는 작업은 진행 창이 뜨고, 창의 X(reject)가 곧 취소다. 끝나면 창은 닫힌다
     shown = []
@@ -304,6 +304,9 @@ def test_worker_failure():
         mw._worker_progress(2, 5, "장면 c.png")
         assert "3/5" in dlg.text.text() and "시험3" in dlg.text.text(), dlg.text.text()
         dlg.reject()  # 사용자가 X 를 누름
+        # 하던 단계가 끝나기 전에는 창이 닫히지 않고 '멈추는 중'으로 바뀐다 (화면도 계속 잠김)
+        assert dlg.stopping and mw._busy_dlg is dlg and "멈추는 중" in dlg.text.text(), dlg.text.text()
+        dlg.reject()  # 멈추는 중에 또 눌러도 취소가 두 번 처리되지 않는다
         return 7
 
     called.clear(); cancelled.clear()
