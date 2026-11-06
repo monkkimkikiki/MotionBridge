@@ -109,14 +109,14 @@ DEFAULTS = {
     "auto_discard": True,       # discard 표시된 분류로 판정된 클립 자동 삭제
     "discard_min_conf": 0.6,
     "obs_record_dir": "",       # OBS 녹화 폴더 (OBS에서 자동으로 알아냄)
-    "blender_exe": "",          # 모션 AI: Blender 실행 파일 (비면 자동으로 찾음)
-    "rig_blend": "",            # 모션 AI: 모션을 넣을 리그가 들어 있는 .blend 파일
-    "mocap_in_place": False,    # 모션 AI: 앞뒤·좌우 이동 빼기
-    "mocap_markers": True,      # 모션 AI: 타격 시점 마커
-    "mocap_reduce": 0.0,        # 모션 AI: 키 줄이기 허용 각도(도). 0이면 매 프레임
-    "mocap_video_bg": False,    # 모션 AI: 참고 영상을 Blender 카메라 배경으로
-    "mocap_character": "",      # 모션 AI: 마지막으로 고른 캐릭터 이름 ("" = 자동)
-    "mocap_crop_subject": True,   # 모션 AI: 대상을 따라가며 확대해서 분석 (작은 캐릭터를 WHAM이 놓치지 않게)
+    "blender_exe": "",          # AI 모캡: Blender 실행 파일 (비면 자동으로 찾음)
+    "rig_blend": "",            # AI 모캡: 모션을 넣을 리그가 들어 있는 .blend 파일
+    "mocap_in_place": False,    # AI 모캡: 앞뒤·좌우 이동 빼기
+    "mocap_markers": True,      # AI 모캡: 타격 시점 마커
+    "mocap_reduce": 0.0,        # AI 모캡: 키 줄이기 허용 각도(도). 0이면 매 프레임
+    "mocap_video_bg": False,    # AI 모캡: 참고 영상을 Blender 카메라 배경으로
+    "mocap_character": "",      # AI 모캡: 마지막으로 고른 캐릭터 이름 ("" = 자동)
+    "mocap_crop_subject": True,   # AI 모캡: 대상을 따라가며 확대해서 분석 (작은 캐릭터를 WHAM이 놓치지 않게)
     "link_enabled": True,       # 추출 툴과 실시간 연결 (내 PC 안에서만 열리는 창구)
     "link_dir": "",             # 연결 정보 폴더 (비우면 %APPDATA%\\AnimRefLink)
     "tool_link_file": "",       # 추출 툴의 연결 정보 파일 (비우면 연결 폴더의 animtool.json)
@@ -125,7 +125,7 @@ DEFAULTS = {
     "tool_cmd": "",             # 추출 툴 연동: 실행 명령 ({query}, {folder} 자리표시자)
     "tool_copy_video": False,   # 추출 툴 연동: 영상을 연동 폴더에 복사
     "tool_open_video": True,    # 추출 툴 연동: 보낸 뒤 영상 열기
-    "mocap_use_vlm": True,      # 모션 AI: 대상이 애매하면 AI(VLM)에게 확인
+    "mocap_use_vlm": True,      # AI 모캡: 대상이 애매하면 AI(VLM)에게 확인
     "last_dir": "",
     "welcome_shown": False,
     "settings_version": 5,

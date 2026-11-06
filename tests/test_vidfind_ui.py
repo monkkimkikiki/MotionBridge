@@ -98,6 +98,26 @@ def main():
         check(listed == [V.LIST_PATTERN], "에셋 목록은 한 번에 읽음")
         check(os.path.isfile(V.INDEX_CACHE), "색인 저장")
         check(len(vt.rows) == 2, "추측 2종: %d" % len(vt.rows))
+
+        # 추측 취소: 취소를 알리면 작업이 다음 단계로 넘어가지 않고 멈춘다 (취소 버튼은 추측에만 켜짐)
+        import threading
+        cap = []
+        _orig_run = mw.run_async
+        mw.run_async = lambda fn, done, label, **k: cap.append((fn, k))
+        vt.start_guess()
+        mw.run_async = _orig_run
+        check(len(cap) == 1 and cap[0][1].get("cancellable") is True and callable(cap[0][1].get("on_cancel")), "추측은 취소할 수 있게 등록")
+        fw = type("W", (), {"cancel": threading.Event(), "progress": type("P", (), {"emit": lambda *a: None})()})()
+        fw.cancel.set()
+        try:
+            cap[0][0](fw)
+            check(False, "취소하면 작업이 멈춰야 함")
+        except Exception as e:  # noqa: BLE001
+            check(type(e).__name__ == "_Stopped", "취소 -> 작업 중단: %s" % type(e).__name__)
+        prev_status = vt.status.text()
+        cap[0][1]["on_cancel"]()
+        check("취소" in vt.status.text(), "취소 안내: %s" % vt.status.text())
+        vt.status.setText(prev_status)
         check("Dwarf" in prompts[0] and "StoneGolem" in prompts[0], "AI에게 게임 이름 목록을 알림")
         check(len(prompts) == 2, "장면마다 호출: %d" % len(prompts))
         r0, r1 = vt.rows
@@ -515,6 +535,16 @@ def main():
         mw.import_animref()
         check(vt.link_query and vt.link_query["id"] == "직접" and vt.label.currentData() == "스킬" and vt.hits.value() == 2, "query.json 직접 열기")
         check(any(v[3] == "AnimRef에서 가져오기…" for v in mw._actions.values()), "파일 메뉴에 항목")
+        # 영상을 받아도 몬스터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
+        called = []
+        _orig_guess = vt.start_guess
+        vt.start_guess = lambda *a, **k: called.append(1)
+        write_query("자동금지", "타격", [0.5], video=qf)  # 파일이 실제로 있는 경로
+        QFileDialog.open_ret = (qf, "")
+        mw.import_animref()
+        check(vt.link_query and vt.link_query["id"] == "자동금지" and not called, "받기만 하고 추측은 자동 시작 안 함")
+        check("몬스터 추측 시작" in vt.link_banner.text(), "배너가 직접 시작하라고 안내: %s" % vt.link_banner.text())
+        vt.start_guess = _orig_guess
         vt.link_query = None
 
         # AnimRef 클립 폴더 대화상자는 AnimRef 설정의 라이브러리/게임/clips 에서 시작

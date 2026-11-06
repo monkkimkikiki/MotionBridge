@@ -1,4 +1,4 @@
-"""외부 모션 AI 서비스(DeepMotion, Move.ai, Rokoko Vision, Plask 등)와 오가기.
+"""외부 AI 모캡 서비스(DeepMotion, Move.ai, Rokoko Vision, Plask 등)와 오가기.
 
   1) export_for_external : 서비스에 올릴 영상 만들기 (대상을 따라가며 확대한 영상, 또는 원본 그대로)
   2) import_motion       : 서비스가 준 BVH/FBX 를 AnimRef 모션으로 가져오기 -> 이후 Blender/3ds Max 로 보내기는 똑같아요"""
@@ -61,7 +61,7 @@ def export_for_external(meta, s, follow=True, log=noop, progress=noop, cancel=No
 # ---------------------------------------------------------------- 2) 서비스가 준 모션 가져오기
 def fbx_to_bvh(blender_exe, fbx, out_bvh, log=noop, cancel=None):
     if not blender_exe or not Path(blender_exe).exists():
-        raise RuntimeError("FBX 는 Blender 로 바꿔서 읽어요. 모션 AI 창의 'Blender' 경로를 먼저 지정해 주세요. "
+        raise RuntimeError("FBX 는 Blender 로 바꿔서 읽어요. AI 모캡 창의 'Blender' 경로를 먼저 지정해 주세요. "
                            "(서비스에서 BVH 로 받을 수 있으면 BVH 가 더 간단해요.)")
     script = resource_path("motion_ai/fbx2bvh.py")
     cmd = [str(blender_exe), "--background", "--python", str(script), "--", str(fbx), str(out_bvh)]

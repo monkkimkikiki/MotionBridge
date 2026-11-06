@@ -1,4 +1,4 @@
-"""WSL(Windows 안의 리눅스) 도우미. 모션 AI(WHAM)는 WSL 안에서 돌아가므로, Windows 프로그램인 AnimRef가
+"""WSL(Windows 안의 리눅스) 도우미. AI 모캡(WHAM)는 WSL 안에서 돌아가므로, Windows 프로그램인 AnimRef가
 WSL 명령을 실행하고, 경로를 서로 바꾸고, 파일을 넣어 주는 일을 여기서 한다."""
 import queue
 import re
@@ -80,7 +80,7 @@ def win_to_wsl(path) -> str:
         return (m.group(1) or "\\").replace("\\", "/")
     p = PureWindowsPath(s)
     if not p.drive or p.drive.startswith("\\\\"):
-        raise ValueError(f"이 경로는 모션 AI가 읽을 수 없어요: {s}")
+        raise ValueError(f"이 경로는 AI 모캡이 읽을 수 없어요: {s}")
     drive = p.drive.rstrip(":").lower()
     rest = "/".join(p.parts[1:])
     return f"/mnt/{drive}/{rest}" if rest else f"/mnt/{drive}"

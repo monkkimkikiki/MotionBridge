@@ -1,4 +1,4 @@
-"""모션 AI: 클립 하나에서 3D 동작을 뽑아(WHAM, WSL 안에서 실행) BVH/모션 파일로 만들고,
+"""AI 모캡: 클립 하나에서 3D 동작을 뽑아(WHAM, WSL 안에서 실행) BVH/모션 파일로 만들고,
 Blender 또는 3ds Max 의 '이미 세팅된 리그'에 키프레임으로 넣을 수 있게 준비한다.
 
 흐름
@@ -52,7 +52,7 @@ def gpu_name():
 
 def gpu_warning(name):
     if not name:
-        return "NVIDIA 그래픽카드를 찾지 못했어요. 모션 AI(WHAM)는 NVIDIA 그래픽카드가 필요해요."
+        return "NVIDIA 그래픽카드를 찾지 못했어요. AI 모캡(WHAM)는 NVIDIA 그래픽카드가 필요해요."
     if re.search(r"RTX\s*(40|50)\d\d", name, re.IGNORECASE):
         return (f"{name}은(는) 최신 카드라서 WHAM이 쓰는 오래된 PyTorch(1.11)와 안 맞을 수 있어요. "
                 "설치 마지막의 '그래픽카드 동작 확인'에서 막히면 클라우드 서비스(Rokoko 등)를 쓰는 게 빨라요.")
@@ -60,10 +60,10 @@ def gpu_warning(name):
 
 
 def status(distro_pref=DISTRO_DEFAULT):
-    """모션 AI가 쓸 수 있는 상태인지. level: ok / partial / not_installed / no_distro / no_wsl / no_windows / wsl_error"""
+    """AI 모캡이 쓸 수 있는 상태인지. level: ok / partial / not_installed / no_distro / no_wsl / no_windows / wsl_error"""
     st = {"level": "", "distro": None, "message": "", "missing": [], "gpu": None, "gpu_warn": ""}
     if not wsl.is_windows():
-        st.update(level="no_windows", message="모션 AI 설치는 Windows에서만 할 수 있어요.")
+        st.update(level="no_windows", message="AI 모캡 설치는 Windows에서만 할 수 있어요.")
         return st
     st["gpu"] = gpu_name()
     st["gpu_warn"] = gpu_warning(st["gpu"])
@@ -106,9 +106,9 @@ def status(distro_pref=DISTRO_DEFAULT):
         miss.append("그래픽카드 동작 확인")
     st["missing"] = miss
     if not miss:
-        st.update(level="ok", message="모션 AI를 쓸 수 있어요.")
+        st.update(level="ok", message="AI 모캡을 쓸 수 있어요.")
     elif len(miss) >= 4:
-        st.update(level="not_installed", message="모션 AI가 아직 설치되지 않았어요. [설치 시작]을 누르세요.")
+        st.update(level="not_installed", message="AI 모캡이 아직 설치되지 않았어요. [설치 시작]을 누르세요.")
     else:
         st.update(level="partial", message="설치가 중간까지만 됐어요. 빠진 것: " + ", ".join(miss) + " → [설치 시작]으로 이어서 설치하세요.")
     return st
@@ -124,7 +124,7 @@ def launch_installer():
     if not bat.exists():
         raise RuntimeError(f"설치 파일을 찾을 수 없어요: {bat}")
     if not wsl.is_windows():
-        raise RuntimeError("모션 AI 설치는 Windows에서만 할 수 있어요.")
+        raise RuntimeError("AI 모캡 설치는 Windows에서만 할 수 있어요.")
     subprocess.Popen(["cmd.exe", "/c", "start", "AnimRef Motion AI setup", "cmd", "/k", str(bat)],
                      cwd=str(bat.parent))
 
@@ -202,7 +202,7 @@ def extract(meta, s, in_place=False, markers=True, log=noop, progress=noop, canc
         subj = (meta.get("subject") or {}) if use_subject else {}
         if crop_subject or not subj.get("boxes") or "사람이 한 명도" not in str(e):
             raise
-        log("모션 AI가 이 화면에서 사람을 찾지 못했어요. 대상을 따라가며 확대해서 다시 시도해요.")
+        log("AI 모캡이 이 화면에서 사람을 찾지 못했어요. 대상을 따라가며 확대해서 다시 시도해요.")
         progress(0.0, "사람을 못 찾아서 대상을 확대해 다시 시도하는 중...")
         return _extract_once(meta, s, in_place, markers, log, progress, cancel, use_subject, True)
 
@@ -240,7 +240,7 @@ def _extract_once(meta, s, in_place=False, markers=True, log=noop, progress=noop
     inp = f"{p['inp']}/{seq}.mp4"
     outdir_w = f"{p['out']}/{seq}"
 
-    progress(0.02, "모션 AI에 영상 보내는 중...")
+    progress(0.02, "AI 모캡에 영상 보내는 중...")
     wsl.push_file(distro, resource_path("motion_ai/wham2motion.py"), p["conv"])
     rc, tail = wsl.run(distro, f"mkdir -p {wsl.q(p['inp'])} && cp {wsl.q(wsl.win_to_wsl(src_video))} {wsl.q(inp)}", cancel=cancel)
     if rc != 0:
@@ -257,9 +257,9 @@ def _extract_once(meta, s, in_place=False, markers=True, log=noop, progress=noop
             if m and int(m.group(2)) > 0:
                 idx = stages.setdefault(name, len(stages))
                 frac = 0.06 + 0.78 * min(1.0, (idx + int(m.group(1)) / int(m.group(2))) / 4.0)
-                progress(frac, f"모션 AI 분석 중... {name} {m.group(1)}/{m.group(2)}")
+                progress(frac, f"AI 모캡 분석 중... {name} {m.group(1)}/{m.group(2)}")
             elif line.strip():
-                progress(-1, "모션 AI 분석 중... " + line.strip()[:50])
+                progress(-1, "AI 모캡 분석 중... " + line.strip()[:50])
 
         used, total = gpu_memory(distro)
         if used is not None:
@@ -269,7 +269,7 @@ def _extract_once(meta, s, in_place=False, markers=True, log=noop, progress=noop
                     "WHAM은 메모리를 많이 써서, 모자라면 극단적으로 느려지거나 멈출 수 있어요. 그 프로그램들을 끄는 걸 권해요.")
                 progress(0.05, f"⚠ 그래픽카드 메모리를 다른 프로그램이 {used}MiB 쓰는 중 - 느려질 수 있어요")
         limit = int(min(3600, 900 + info.duration * 90))
-        progress(0.06, "모션 AI 분석 중... (처음엔 모델을 불러오느라 1~2분 걸려요)")
+        progress(0.06, "AI 모캡 분석 중... (처음엔 모델을 불러오느라 1~2분 걸려요)")
         cmd = (f"{_activate()} && cd {wsl.q(p['wham'])} && PYTHONUNBUFFERED=1 timeout {limit} python -u demo.py "
                f"--video {wsl.q(inp)} --output_pth {wsl.q(p['out'])} --save_pkl --estimate_local_only")
         try:
@@ -280,12 +280,12 @@ def _extract_once(meta, s, in_place=False, markers=True, log=noop, progress=noop
         except wsl.IdleTimeout:
             wsl.kill_matching(distro, "demo.py")
             u2, t2 = gpu_memory(distro)
-            raise RuntimeError(f"모션 AI가 {IDLE_LIMIT // 60}분 넘게 멈춰 있어서 중단했어요. "
+            raise RuntimeError(f"AI 모캡이 {IDLE_LIMIT // 60}분 넘게 멈춰 있어서 중단했어요. "
                                "가장 흔한 원인은 그래픽카드 메모리 부족이에요: OBS·게임·영상 편집기·브라우저 영상을 모두 끄고 다시 해 보세요."
                                + (f" (지금 다른 프로그램이 쓰는 메모리: {u2}MiB)" if u2 is not None else ""))
         if rc == 124:
             wsl.kill_matching(distro, "demo.py")
-            raise RuntimeError(f"모션 AI가 제한 시간({limit // 60}분)을 넘겨서 중단했어요. "
+            raise RuntimeError(f"AI 모캡이 제한 시간({limit // 60}분)을 넘겨서 중단했어요. "
                                "다른 프로그램을 끄고 다시 하거나 더 짧은 클립으로 해 보세요.")
         if rc != 0:
             raise RuntimeError(explain_failure(tail))

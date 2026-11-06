@@ -22,7 +22,7 @@ STATE_TEXT = {"live": "추출 툴: 🟢 연결됨", "running": "추출 툴: 🟡
 STATE_TIP = {"live": "추출 툴과 실시간으로 연결돼 있어요.",
              "running": "추출 툴 프로그램은 켜져 있지만 AnimRef 와 연결하는 창구가 없어요. 보내기는 폴더 방식으로 동작해요.\n(툴이 연동규격 8절을 지원하면 🟢 이 돼요)",
              "off": "추출 툴이 꺼져 있어요. 보내면 실행 명령으로 켜요.",
-             "unknown": "툴이 켜져 있는지 알아낼 이름이 없어요. 모션 AI 창의 ②-C 에서 '켜졌는지 확인할 이름'을 적어 주세요."}
+             "unknown": "툴이 켜져 있는지 알아낼 이름이 없어요. AI 모캡 창의 ②-C 에서 '켜졌는지 확인할 이름'을 적어 주세요."}
 
 NEW_GAME = "＋ 새 게임 추가..."
 
@@ -480,10 +480,30 @@ class MainWindow(QMainWindow):
                                on_done=lambda _: self.library.refresh())
         return dlg.changed
 
+    def send_clip_to_tool(self, metas):
+        """클립 하나를 추출/리타깃 도구(MotionBridge 영상찾기)로 바로 보낸다. 후보 고르기는 그쪽에서 한다."""
+        from ..core import handoff
+        from .mocap_dialog import _send_tool_job
+        if len(metas) != 1:
+            QMessageBox.information(self, "게임 모션 찾기", "클립을 한 개만 골라 주세요. (추출 도구에서 클립 하나씩 후보를 고르는 방식이에요)")
+            return False
+        try:
+            qp = handoff.build_query(metas[0], self.s, copy_video=bool(self.s.get("tool_copy_video", False)), log=self.log)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "게임 모션 찾기", str(e))
+            return False
+
+        def done(mode):
+            if mode == "manual":
+                QMessageBox.information(self, "게임 모션 찾기", "추출 도구가 연결돼 있지 않아 연동 파일만 만들었어요:\n" + qp)
+            else:
+                self.flash("🎯 영상찾기 탭으로 보냈어요 — 후보를 고르고 확정하세요", 6000)
+        return self.start_job("게임 모션 찾기", _send_tool_job, (self.s, qp), on_done=done)
+
     def mocap_clips(self, metas):
         """클립에서 3D 동작(모션)을 뽑아 Blender/3ds Max 로 보내는 창."""
         if not metas:
-            QMessageBox.information(self, "모션 AI", "먼저 클립을 만들어 주세요.")
+            QMessageBox.information(self, "AI 모캡", "먼저 클립을 만들어 주세요.")
             return False
         if self.busy:
             QMessageBox.information(self, "작업 중", "분석이 끝난 뒤에 열어 주세요.")
@@ -492,7 +512,7 @@ class MainWindow(QMainWindow):
             from .mocap_dialog import MocapDialog
             dlg = MocapDialog(self, metas)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "모션 AI", str(e))
+            QMessageBox.warning(self, "AI 모캡", str(e))
             return False
         dlg.exec()
         return dlg.changed

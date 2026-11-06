@@ -110,6 +110,14 @@ with tempfile.TemporaryDirectory() as d:
         app.processEvents()
         check(mw.tabs.pages.index(ar) == 7, "AnimRef 탭 합치기")
         check(ar.can_close(), "닫기 허용")
+        tb = ar.inner.library.topbar  # 좁은 화면: 글자 대신 아이콘만 (글이 잘려 안 보이는 것 방지)
+        tb.set_compact(False)
+        full = [b.text() for b, *_r in tb._tracked]
+        tb.set_compact(True)
+        check(all(len(b.text()) <= 2 for b, *_r in tb._tracked) and all("\n" in b.toolTip() or b.toolTip() for b, *_r in tb._tracked), "좁으면 아이콘만")
+        tb.set_compact(False)
+        check([b.text() for b, *_r in tb._tracked] == full and any("게임 모션 찾기" in t for t in full), "넓으면 글자 복귀")
+        check(tb.needed() > 0, "필요 폭 계산")
     # 프레임 편집 줄: 실제 그리기/마우스/편집이 진짜 Qt 에서 돈다
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import test_pipeline as TP  # noqa: E402

@@ -1,6 +1,7 @@
 """작은 재사용 위젯들."""
 from __future__ import annotations
 
+import threading
 import traceback
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -44,6 +45,7 @@ class Worker(QThread):
     def __init__(self, fn, parent=None):
         super().__init__(parent)
         self.fn = fn
+        self.cancel = threading.Event()  # 취소 요청 (작업 함수가 중간중간 is_set() 으로 확인한다)
 
     def run(self):
         try:

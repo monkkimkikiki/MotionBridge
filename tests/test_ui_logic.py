@@ -225,6 +225,19 @@ def test_worker_failure():
     QMessageBox.calls.clear()
     mw.run_async(lambda w: 1 / 0, lambda r: None, "시험")
     assert QMessageBox.calls and QMessageBox.calls[-1][0] == "critical" and mw._worker is None and mw.tabs.isEnabled()
+    # 취소: 작업 함수에 취소가 전달되고, 결과 콜백은 호출되지 않으며 화면은 바로 풀린다
+    called, cancelled, seen = [], [], []
+
+    def fn(w):
+        assert not w.cancel.is_set()
+        mw.cancel_async()
+        seen.append(w.cancel.is_set())
+        return 5
+
+    mw.run_async(fn, lambda r: called.append(r), "시험2", cancellable=True, on_cancel=lambda: cancelled.append(1))
+    assert seen == [True] and not called and cancelled == [1] and mw._worker is None and mw.tabs.isEnabled()
+    assert len(mw._zombies) == 1 and not mw.cancel_async(), "작업이 없으면 취소는 아무 일도 안 함"
+    mw._zombies = []
     # 존재하지 않는 파일
     QFileDialog.open_ret = ("/nonexistent/x.glb", "")
     QMessageBox.calls.clear()

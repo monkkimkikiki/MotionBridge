@@ -1,6 +1,6 @@
 """캐릭터 등록 / 대상 고르기 창.
 
-  CharactersDialog      : 캐릭터 이름 + 참고 이미지를 등록·수정·삭제한다 (모션 AI가 '누구의 모션을 뽑을지' 찾는 데 쓴다)
+  CharactersDialog      : 캐릭터 이름 + 참고 이미지를 등록·수정·삭제한다 (AI 모캡이 '누구의 모션을 뽑을지' 찾는 데 쓴다)
   SubjectPickerDialog   : 자동으로 못 정한 클립에서 후보 사람들의 사진을 보고 '이 사람'을 직접 클릭해서 고른다"""
 from pathlib import Path
 
@@ -109,7 +109,7 @@ class CharactersDialog(QDialog):
         self.ed_text.setPlaceholderText("예: knight in red armor  — 비워도 돼요. 채우면 찾기와 AI 확인이 조금 더 정확해져요")
         row.addWidget(self.ed_text, 1)
         right.addLayout(row)
-        right.addWidget(muted("크리처(몬스터 등)는 지금의 모션 AI(사람 체형 기준)로는 정확도가 낮아요. 우선 '인간형'을 권해요."))
+        right.addWidget(muted("크리처(몬스터 등)는 지금의 AI 모캡(사람 체형 기준)로는 정확도가 낮아요. 우선 '인간형'을 권해요."))
         right.addWidget(QLabel("참고 이미지"))
         self.imgs = QListWidget()
         self.imgs.setViewMode(QListView.ViewMode.IconMode)

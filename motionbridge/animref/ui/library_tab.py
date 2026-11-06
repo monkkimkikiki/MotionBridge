@@ -12,8 +12,14 @@ from ..core import classify, library
 from ..core.settings import label_names
 
 from .player import PlayerDialog
-from .widgets import muted, open_path, reveal
+from .widgets import AdaptiveRow, muted, open_path, reveal
 
+# 버튼과 우클릭 메뉴가 같은 글을 쓴다 (이름이 달라 헷갈리지 않게)
+LBL_FIND = "🎯 게임 모션 찾기"
+TIP_FIND = ("이 영상과 같은 동작을 게임 데이터에서 찾아요. 선택한 클립을 '영상찾기'(추출·리타깃 도구)로 보내면 비슷한 후보를 나열하고, "
+            "맞는 걸 고르면 애니메이션을 꺼내 내 모델에 리타깃할 수 있어요. (클립 1개 선택)")
+LBL_MOCAP = "🦴 AI 모캡"
+TIP_MOCAP = "영상 속 사람 동작을 AI로 3D 모션(BVH)으로 뽑아 Blender / 3ds Max 의 리그에 키프레임으로 넣어요 (선택한 클립, 없으면 전체)"
 ALL = "__all__"
 ROLE = Qt.ItemDataRole.UserRole
 
@@ -55,7 +61,8 @@ class LibraryTab(QWidget):
 
         # --- 오른쪽
         right = QVBoxLayout()
-        top = QHBoxLayout()
+        self.topbar = AdaptiveRow(reserve=330)  # 좁아지면 버튼은 아이콘만
+        top = self.topbar.h
         self.search = QLineEdit()
         self.search.setPlaceholderText("🔍 클립/원본 영상 이름으로 검색")
         self.search.textChanged.connect(lambda *_: self.apply_filter())
@@ -77,8 +84,12 @@ class LibraryTab(QWidget):
         btn_edit.setToolTip("원본 영상 타임라인을 보면서 클립을 직접 만들어요")
         btn_edit.clicked.connect(lambda: self.main.open_editor())
         top.addWidget(btn_edit)
-        btn_mocap = QPushButton("🦴 모션 AI")
-        btn_mocap.setToolTip("영상에서 3D 동작을 뽑아 Blender / 3ds Max 의 리그에 키프레임으로 넣어요 (선택한 클립, 없으면 전체)")
+        btn_find = QPushButton(LBL_FIND)
+        btn_find.setToolTip(TIP_FIND)
+        btn_find.clicked.connect(lambda: self.find_game_motion(self.selected()))
+        top.addWidget(btn_find)
+        btn_mocap = QPushButton(LBL_MOCAP)
+        btn_mocap.setToolTip(TIP_MOCAP)
         btn_mocap.clicked.connect(lambda: self.mocap(self.selected() or list(self.clips)))
         top.addWidget(btn_mocap)
         btn_open = QPushButton("📂 저장 폴더")
@@ -88,7 +99,9 @@ class LibraryTab(QWidget):
         btn_ref.clicked.connect(self.refresh)
         for b in (self.btn_ai, btn_export, btn_open, btn_ref):
             top.addWidget(b)
-        right.addLayout(top)
+        self.topbar.track(self.btn_ai, btn_export, btn_edit, btn_find, btn_mocap, btn_open)
+        self.search.setMinimumWidth(90)
+        right.addWidget(self.topbar)
 
         self.count_label = muted("")
         right.addWidget(self.count_label)
@@ -117,7 +130,7 @@ class LibraryTab(QWidget):
         self.stack.addWidget(self.view)
         right.addWidget(self.stack, 1)
         right.addWidget(muted("더블클릭: 재생(슬로모션·프레임 단위)  ·  E: 클립 수정(길이 조절·나누기)  ·  T: 속도·편집(부분 슬로모션, 자르고 붙이기, 여러 클립 이어붙이기)  ·  "
-                              "우클릭: 분류 바꾸기/삭제  ·  Ctrl/Shift로 여러 개 선택"))
+                              "G: 게임 모션 찾기  ·  M: AI 모캡  ·  우클릭: 분류 바꾸기/삭제  ·  Ctrl/Shift로 여러 개 선택"))
         root.addLayout(right, 1)
         self._resize_icons(self.size.value(), save=False)
 
@@ -254,7 +267,8 @@ class LibraryTab(QWidget):
                        else f"🔗 선택한 클립 {len(sel)}개 이어붙이기·편집  T",
                        lambda: self.retime(sel))
         menu.addAction(f"🔪 타수별로 나누기 (1타·2타·3타…) ({len(sel)}개)  H", lambda: self.split_hits(sel))
-        menu.addAction(f"🦴 모션 뽑기 (3D 애니메이션 → Blender/Max) ({len(sel)}개)  M", lambda: self.mocap(sel))
+        menu.addAction(LBL_FIND + "  G", lambda: self.find_game_motion(sel))
+        menu.addAction(LBL_MOCAP + "  M", lambda: self.mocap(sel))
         sub = menu.addMenu(f"분류 바꾸기 ({len(sel)}개)")
         for n in label_names(self.main.s) + [library.UNLABELED]:
             sub.addAction(n, lambda _=False, n=n: self.set_label(sel, n))
@@ -273,6 +287,9 @@ class LibraryTab(QWidget):
     def split_hits(self, clips):
         if self.main.split_hits_clips(list(clips)):
             self.refresh()
+
+    def find_game_motion(self, clips):
+        self.main.send_clip_to_tool(list(clips))
 
     def mocap(self, clips):
         if self.main.mocap_clips(list(clips)):
@@ -322,6 +339,8 @@ class LibraryTab(QWidget):
             self.retime(self.selected())
         elif e.key() == Qt.Key.Key_H and self.selected():
             self.split_hits(self.selected())
+        elif e.key() == Qt.Key.Key_G and self.selected():
+            self.find_game_motion(self.selected())
         elif e.key() == Qt.Key.Key_M and self.selected():
             self.mocap(self.selected())
         elif e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.view.currentIndex().isValid():

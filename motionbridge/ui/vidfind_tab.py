@@ -554,17 +554,31 @@ class VidFindTab(QWidget):
         ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
         w_cap = 24
 
+        class _Stopped(Exception):
+            pass
+
+        def stop_check(w):
+            if w.cancel.is_set():
+                raise _Stopped()
+
         def job(w):
             if prov.key == "ollama":  # 모델이 없으면 긴 작업(목록 읽기, 장면 뽑기) 전에 바로 알린다
                 ok2, msg2, _n = prov.check()
                 if not ok2:
                     raise RuntimeError(msg2)
             idx = self._ensure_index(a, w, force_index)
+            stop_check(w)
             try:
                 shutil.rmtree(FRAME_DIR, ignore_errors=True)
             except OSError:
                 pass
-            fr = frames.sample_sources(ff, srcs, FRAME_DIR, per, w_cap, lambda i, n, name: w.progress.emit(i, n, "장면 뽑는 중 " + name))
+
+            def sampling(i, n, name):
+                stop_check(w)
+                w.progress.emit(i, n, "장면 뽑는 중 " + name)
+
+            fr = frames.sample_sources(ff, srcs, FRAME_DIR, per, w_cap, sampling)
+            stop_check(w)
             vocab, notes = self._vocab(idx, prov.vocab_limit(), pat)
             if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
                 gamenames.resolve_known(known, idx, book)
@@ -576,6 +590,7 @@ class VidFindTab(QWidget):
             dets: List[vision.Detection] = []
             errors: List[str] = []
             for i, f in enumerate(fr):
+                stop_check(w)  # 취소하면 다음 장면부터 안 한다
                 w.progress.emit(i, len(fr), "몬스터 인식 중 " + os.path.basename(f.path))
                 try:
                     dets += prov.analyze(f.path, vocab, hint, klines)
@@ -585,7 +600,8 @@ class VidFindTab(QWidget):
                         break  # 계속 실패하면 멈춘다 (키/연결 문제)
             return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
 
-        self.win.run_async(job, self._after_guess, "몬스터 추측 중")
+        self.win.run_async(job, self._after_guess, "몬스터 추측 중", cancellable=True,
+                           on_cancel=lambda: self.status.setText("몬스터 추측을 취소했습니다. 인식 방식을 바꾸고 다시 시작할 수 있어요."))
 
     def _after_guess(self, res) -> None:
         self.index = res["idx"]
@@ -1105,12 +1121,12 @@ class VidFindTab(QWidget):
         self._update_src_note(prefix=" · ".join(facts))
         n = len(q.get("paths", []))
         missing = [p for p in q.get("paths", []) if not os.path.isfile(p)]
-        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개%s. 몬스터를 추측·검수하고 메시/애니메이션을 골라 추출하세요."
+        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개%s 를 받았어요."
                                  % (" #%s" % q["id"] if q.get("id") else "", n, " · " + " · ".join(facts) if facts else ""))
         if missing:
             self.link_banner.setText(self.link_banner.text() + "\n⚠ 영상 파일이 없습니다: " + wrappable(missing[0]))
-        sc = self.win.scan
-        if n and not missing and sc is not None and sc.found and sc.root == self.win.ex_game.text().strip():
-            self.start_guess()  # 게임 폴더를 이미 검사해 뒀으면 바로 추측 시작
-        elif n:
-            self.link_banner.setText(self.link_banner.text() + "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '몬스터 추측 시작'을 누르세요.)")
+        if n and not missing:  # 받기만 한다 — 몬스터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)
+            sc = self.win.scan
+            ready = sc is not None and sc.found and sc.root == self.win.ex_game.text().strip()
+            self.link_banner.setText(self.link_banner.text() + ("\n(인식 방식을 확인하고 '몬스터 추측 시작'을 눌러 주세요.)" if ready else
+                                     "\n(먼저 '0. 게임에서 추출' 탭에서 게임 폴더를 검사한 뒤 '몬스터 추측 시작'을 누르세요.)"))

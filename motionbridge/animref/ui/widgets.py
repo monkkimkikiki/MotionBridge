@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QThread, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ..core import Cancelled
 
@@ -183,3 +183,59 @@ def env_info():
 
 def is_windows():
     return os.name == "nt"
+
+
+def split_icon(text: str):
+    """'🤖 AI 분류 실행' -> ('🤖', 'AI 분류 실행'). 맨 앞 글자가 아이콘이 아니면 ('', 전체)."""
+    head, _, rest = text.partition(" ")
+    if rest and not any(ch.isalnum() for ch in head):
+        return head, rest
+    return "", text
+
+
+def needed_width(texts, advance, pad=30, gap=8) -> int:
+    """버튼들(글자 + 여백)을 한 줄에 다 펼치는 데 필요한 폭. advance(text) = 글자 폭(px)."""
+    return int(sum(advance(t) + pad + gap for t in texts))
+
+
+class AdaptiveRow(QWidget):
+    """버튼 줄: 자리가 모자라면 글자를 숨기고 아이콘만 보인다 (글자가 잘려서 못 읽는 것보다 낫다).
+    전체 글은 툴팁에 있다. track() 으로 등록한 버튼만 바뀌고, 나머지(검색칸/슬라이더)는 그대로다."""
+
+    def __init__(self, reserve=260, parent=None):
+        super().__init__(parent)
+        self.h = QHBoxLayout(self)
+        self.h.setContentsMargins(0, 0, 0, 0)
+        self.reserve = reserve      # 검색칸·슬라이더 등 줄어들지 않는 부분이 쓰는 폭
+        self._tracked = []          # [(버튼, 아이콘, 글, 툴팁)]
+        self.compact = False
+
+    def track(self, *buttons):
+        for b in buttons:
+            full = b.text()
+            icon, _ = split_icon(full)
+            if not icon:
+                continue
+            tip = b.toolTip()
+            self._tracked.append((b, icon, full, (full + ("\n" + tip if tip else ""))))
+        return self
+
+    def needed(self) -> int:
+        fm = self.fontMetrics()
+        return needed_width([t[2] for t in self._tracked], lambda x: fm.horizontalAdvance(x)) + self.reserve
+
+    def set_compact(self, on: bool) -> None:
+        if on == self.compact and getattr(self, "_applied", False):
+            return
+        self.compact, self._applied = on, True
+        for b, icon, full, tip in self._tracked:
+            b.setText(icon if on else full)
+            b.setToolTip(tip)
+            b.setMinimumWidth(40 if on else 0)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        try:
+            self.set_compact(self.width() < self.needed())
+        except Exception:  # noqa: BLE001 (그리기 중 예외로 창이 죽지 않게)
+            pass

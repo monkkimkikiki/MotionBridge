@@ -1,4 +1,4 @@
-"""모션 AI 창: 클립에서 3D 동작을 뽑아(WHAM) Blender / 3ds Max 의 '이미 세팅된 리그'에 키프레임으로 넣는다.
+"""AI 모캡 창: 클립에서 3D 동작을 뽑아(WHAM) Blender / 3ds Max 의 '이미 세팅된 리그'에 키프레임으로 넣는다.
 
   ① 준비 상태: 설치 여부를 확인하고 [설치 시작]으로 한 번에 설치 (WSL + WHAM)
   ② 모션 뽑기: 선택한 클립마다 .bvh / .motion.json / .motion.txt 를 만든다
@@ -103,7 +103,7 @@ class MocapDialog(QDialog):
         self.sjob = None
         self.st = None
         self.installer_started = False
-        self.setWindowTitle("🦴 모션 AI — 영상에서 3D 동작 뽑기")
+        self.setWindowTitle("🦴 AI 모캡 — 영상에서 3D 동작 뽑기")
         self.resize(800, 860)
 
         outer = QVBoxLayout(self)
@@ -118,7 +118,7 @@ class MocapDialog(QDialog):
         outer.addWidget(scroll, 1)
 
         # ---- ① 준비 상태
-        c1, l1 = card("① 모션 AI 준비 상태",
+        c1, l1 = card("① AI 모캡 준비 상태",
                       "영상에서 사람의 3D 동작을 뽑는 AI(WHAM)를 쓰려면 한 번만 설치가 필요해요. "
                       "Windows 안에 리눅스(WSL)를 깔고 그 안에서 돌리기 때문에 설치가 조금 길어요.")
         self.lbl_status = QLabel("상태를 확인하는 중...")
@@ -220,7 +220,7 @@ class MocapDialog(QDialog):
         # ---- ②-B 외부 AI 서비스
         c2b, l2b = card("②-B 외부 AI 서비스로 뽑기 (선택)",
                         "DeepMotion · Move.ai · Rokoko Vision · Plask 같은 서비스에 영상을 올려 모션을 받아서 쓰는 방법이에요. "
-                        "①~②의 모션 AI(WHAM)보다 나은지는 영상마다 달라서, 같은 클립으로 비교해 보세요.")
+                        "①~②의 AI 모캡(WHAM)보다 나은지는 영상마다 달라서, 같은 클립으로 비교해 보세요.")
         l2b.addWidget(muted("1) [📤 서비스에 올릴 영상 만들기] → 만들어진 영상을 서비스 사이트에 올려요 (서비스 이용약관과 요금은 직접 확인하세요)\n"
                             "2) 서비스에서 결과를 BVH(또는 FBX)로 받아요 — 가능하면 BVH 가 간단해요\n"
                             "3) 목록에서 그 클립을 고르고 [📥 받은 모션 가져오기] → 이후 ③ Blender/3ds Max 로 보내는 건 똑같아요"))
@@ -246,7 +246,7 @@ class MocapDialog(QDialog):
                         "후보를 영상과 비교해서 맞는 것을 고르면 툴이 그 애니메이션과 모델링 데이터를 꺼내요. (AnimRef는 영상을 보여 주고 선택 결과를 클립에 연결 표시해요)")
         self.lbl_tool_state = QLabel("")
         l2c.addWidget(self.lbl_tool_state)
-        l2c.addWidget(muted("순서: ① [🎯 대상 찾기]로 캐릭터를 정하고 ② (있으면) [모션 뽑기]로 거친 모션을 만든 뒤 ③ 아래 [📨 보내기] → 추출 툴에서 후보 선택 → ④ [📥 결과 가져오기]. 모션 AI가 실패해도 캐릭터·길이·타격 시각만으로 보낼 수 있어요."))
+        l2c.addWidget(muted("순서: ① [🎯 대상 찾기]로 캐릭터를 정하고 ② (있으면) [모션 뽑기]로 거친 모션을 만든 뒤 ③ 아래 [📨 보내기] → 추출 툴에서 후보 선택 → ④ [📥 결과 가져오기]. AI 모캡이 실패해도 캐릭터·길이·타격 시각만으로 보낼 수 있어요."))
         row = QHBoxLayout()
         row.addWidget(QLabel("추출 툴 실행 명령"))
         self.ed_tool = QLineEdit(main.s.get("tool_cmd", ""))
@@ -514,7 +514,7 @@ class MocapDialog(QDialog):
     def _failed(self, msg, cancelled):
         self.lbl_prog.setText(("⏹ " if cancelled else "⚠ ") + msg.splitlines()[0])
         if not cancelled:
-            QMessageBox.warning(self, "모션 AI", msg + "\n\n자세한 내용은 메인 창의 [로그 보기]에서 볼 수 있어요.")
+            QMessageBox.warning(self, "AI 모캡", msg + "\n\n자세한 내용은 메인 창의 [로그 보기]에서 볼 수 있어요.")
         self._refresh_rows()
 
     # ---------------------------------------------------------------- ① 상태/설치
@@ -523,7 +523,7 @@ class MocapDialog(QDialog):
             return
         if not quiet:
             self.lbl_status.setText("상태를 확인하는 중...")
-        self.sjob = Job("모션 AI 상태", _status_job)
+        self.sjob = Job("AI 모캡 상태", _status_job)
         self.sjob.succeeded.connect(self._status_done)
         self.sjob.failed.connect(lambda msg, c: self.lbl_status.setText(f"⚠ 상태를 확인하지 못했어요: {msg}"))
         self.sjob.start()
@@ -544,12 +544,12 @@ class MocapDialog(QDialog):
 
     def install(self):
         if self.st and self.st.get("level") == "ok":
-            if QMessageBox.question(self, "모션 AI", "이미 설치돼 있어요. 그래도 설치 창을 다시 열어 점검/복구할까요?") != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, "AI 모캡", "이미 설치돼 있어요. 그래도 설치 창을 다시 열어 점검/복구할까요?") != QMessageBox.StandardButton.Yes:
                 return
         try:
             mocap.launch_installer()
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "모션 AI 설치", str(e))
+            QMessageBox.warning(self, "AI 모캡 설치", str(e))
             return
         self.installer_started = True
         self.poll.start()
@@ -562,7 +562,7 @@ class MocapDialog(QDialog):
     # ---------------------------------------------------------------- ② 모션 뽑기
     def extract(self):
         if not (self.st and self.st.get("level") == "ok"):
-            QMessageBox.information(self, "모션 AI", "먼저 ①에서 모션 AI 설치를 끝내 주세요.")
+            QMessageBox.information(self, "AI 모캡", "먼저 ①에서 AI 모캡 설치를 끝내 주세요.")
             return
         targets = self._target_metas()
         if not targets:
@@ -600,7 +600,7 @@ class MocapDialog(QDialog):
         if failed:
             msg += "\n\n실패한 클립:\n" + "\n".join(f"· {n}: {why[:120]}" for n, why in failed[:5])
         self.lbl_prog.setText("✅ " + msg.splitlines()[0])
-        QMessageBox.information(self, "모션 AI", msg)
+        QMessageBox.information(self, "AI 모캡", msg)
 
     # ---------------------------------------------------------------- 외부 AI 서비스
     def export_external(self):
@@ -776,7 +776,7 @@ class MocapDialog(QDialog):
     def _meta_with_motion(self):
         m = self._current_meta()
         if m is None or not motion_ok(m):
-            QMessageBox.information(self, "모션 AI", "목록에서 모션이 있는(✅) 클립을 골라 주세요.\n없다면 먼저 ②에서 [모션 뽑기]를 해 주세요.")
+            QMessageBox.information(self, "AI 모캡", "목록에서 모션이 있는(✅) 클립을 골라 주세요.\n없다면 먼저 ②에서 [모션 뽑기]를 해 주세요.")
             return None
         return m
 

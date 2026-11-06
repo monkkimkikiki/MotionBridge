@@ -78,6 +78,12 @@ class MainWindow(QMainWindow):
         self.status_progress.setMaximumWidth(220)
         self.status_progress.setVisible(False)
         self.statusBar().addPermanentWidget(self.status_progress)
+        self.btn_cancel_job = QPushButton("■ 취소")
+        self.btn_cancel_job.setToolTip("진행 중인 작업(몬스터 추측 등)을 멈춥니다. 이미 시작한 한 단계는 뒤에서 끝나도 결과는 버립니다.")
+        self.btn_cancel_job.setVisible(False)
+        self.btn_cancel_job.clicked.connect(lambda *_a: self.cancel_async())
+        self.statusBar().addPermanentWidget(self.btn_cancel_job)
+        self._zombies: list = []  # 취소했지만 아직 끝나지 않은 작업 스레드 (끝날 때까지 붙들어 둔다)
 
     # ================================================================== AnimRef 연결
     def start_link(self, directory: Optional[str] = None) -> bool:
@@ -1169,11 +1175,16 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(url if hasattr(url, "toString") else QUrl(text))
 
     # ================================================================== 비동기 작업
-    def run_async(self, fn, on_done, label: str) -> None:
+    def run_async(self, fn, on_done, label: str, cancellable: bool = False, on_cancel=None) -> None:
         if self._worker is not None:
             return
+        self._zombies = [z for z in self._zombies if z.isRunning()]
+        if self._zombies:
+            self.statusBar().showMessage("이전 작업을 멈추는 중입니다. 잠시 뒤에 다시 눌러 주세요.")
+            return
         self._set_busy(True, label)
-        self._on_done, self._busy_label = on_done, label
+        self._on_done, self._busy_label, self._on_cancel = on_done, label, on_cancel
+        self.btn_cancel_job.setVisible(bool(cancellable))
         wk = Worker(fn, self)
         self._worker = wk
         # 바인딩된 메서드로 연결해야 콜백이 GUI 스레드에서 실행된다
@@ -1181,6 +1192,26 @@ class MainWindow(QMainWindow):
         wk.failed.connect(self._worker_failed)
         wk.progress.connect(self._worker_progress)
         wk.start()
+
+    def cancel_async(self) -> bool:
+        """진행 중인 작업을 멈춘다: 작업 함수에 취소를 알리고, 화면은 바로 풀어 준다(결과는 버림)."""
+        wk = self._worker
+        if wk is None:
+            return False
+        wk.cancel.set()
+        for sig in (wk.finished_ok, wk.failed, wk.progress):
+            try:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        self._worker = None
+        self._zombies.append(wk)
+        self._set_busy(False)
+        self.statusBar().showMessage("작업을 취소했습니다")
+        cb = getattr(self, "_on_cancel", None)
+        if cb:
+            cb()
+        return True
 
     def _worker_done(self, res) -> None:
         cb = self._on_done
@@ -1204,6 +1235,8 @@ class MainWindow(QMainWindow):
         self.viewport.paused = busy
         self.viewport.update()
         self.status_progress.setVisible(busy)
+        if not busy:
+            self.btn_cancel_job.setVisible(False)
         if busy:
             self.status_progress.setRange(0, 0)
             self.statusBar().showMessage(label + " …")
