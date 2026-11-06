@@ -246,10 +246,27 @@ class LibraryTab(QWidget):
     def play(self, row):
         if row < 0 or row >= len(self.shown):
             return
-        dlg = PlayerDialog(list(self.shown), row, self.main)
-        dlg.exec()
-        if dlg.changed:
-            self.refresh()
+        # 모달이 아니다: 영상을 띄워 둔 채로 라이브러리·다른 탭을 계속 쓸 수 있다 (보면서 분류/정리). 플레이어는 하나만 두고 재사용한다.
+        dlg = getattr(self, "_player", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.clips = list(self.shown)
+            dlg.load(row)
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        dlg = self._player = PlayerDialog(list(self.shown), row, self.main)
+        dlg.setModal(False)
+        dlg.on_change = self.refresh
+
+        def closed(*_a):
+            if getattr(self, "_player", None) is dlg:
+                self._player = None
+            if dlg.changed:
+                self.refresh()
+            dlg.deleteLater()
+
+        dlg.finished.connect(closed)
+        dlg.show()
 
     def _menu(self, pos):
         idx = self.view.indexAt(pos)

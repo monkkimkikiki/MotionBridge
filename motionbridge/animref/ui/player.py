@@ -16,6 +16,8 @@ NEW_LABEL = "＋ 새 분류 만들기..."
 
 
 class PlayerDialog(QDialog):
+    on_change = None  # 분류를 바꾸는 즉시 라이브러리 목록에 반영하라고 부르는 함수 (플레이어를 띄워 둔 채 쓰므로)
+
     def __init__(self, clips, index, main):
         super().__init__(main)
         self.main = main
@@ -209,6 +211,8 @@ class PlayerDialog(QDialog):
         library.set_manual_label(self.cur, name)
         self.changed = True
         self.load(self.idx)
+        if self.on_change:
+            self.on_change()
 
     def _on_label(self, i):
         name = self.label_combo.itemData(i)

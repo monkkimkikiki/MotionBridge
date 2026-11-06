@@ -110,6 +110,12 @@ with tempfile.TemporaryDirectory() as d:
         app.processEvents()
         check(mw.tabs.pages.index(ar) == 7, "AnimRef 탭 합치기")
         check(ar.can_close(), "닫기 허용")
+        # 영상 플레이어는 모달이 아니다 (띄워 둔 채 다른 곳을 쓸 수 있음)
+        import inspect
+
+        from motionbridge.animref.ui import library_tab as _lt
+        src_play = inspect.getsource(_lt.LibraryTab.play)
+        check("exec()" not in src_play and "setModal(False)" in src_play and "show()" in src_play, "영상 플레이어 비모달")
         tb = ar.inner.library.topbar  # 좁은 화면: 글자 대신 아이콘만 (글이 잘려 안 보이는 것 방지)
         tb.set_compact(False)
         full = [b.text() for b, *_r in tb._tracked]
