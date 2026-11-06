@@ -320,6 +320,17 @@ def main():
             vt.ck_k_monster.setChecked(True)
             check(vt.anim_list.count() == 3, "몬스터도 켜면 전체 3개")
             vt.confirmed, vt.player_mode = [], False
+            # 3) 칸의 '플레이어블 캐릭터' 체크: 몬스터 추측(AI·영상)을 건너뛰고 바로 플레이어 목록
+            vt.mesh_list.clear()
+            vt.anim_list.clear()
+            vt.ck_guess_player.setChecked(True)
+            check(vt.player_mode and vt.mesh_list.count() == 2 and "플레이어블" in vt.btn_guess.text(), "체크하면 바로 플레이어 목록")
+            vt.mesh_list.clear()
+            vt.player_mode = False
+            vt.start_guess(False)  # 영상이 없어도, AI 를 부르지 않고 플레이어 목록
+            check(vt.player_mode and vt.mesh_list.count() == 2 and vt.anim_list.count() >= 2, "추측 버튼 = 플레이어 목록 (영상 없이도)")
+            vt.ck_guess_player.setChecked(False)
+            check(not vt.player_mode and vt.mesh_list.count() == 0 and vt.btn_guess.text() == "캐릭터 추측 시작", "끄면 몬스터 추측으로 복귀")
         finally:
             vt.index = saved_idx
         # ---------------- 영상 속 동작과 비슷한 순으로 정렬 (뼈 방향 + DTW). 뽑기/읽기는 가짜로 바꿔서 흐름만 확인한다

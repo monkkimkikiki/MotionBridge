@@ -237,8 +237,15 @@ class VidFindTab(QWidget):
         self.min_conf.setSuffix("%")
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮으면 메시를 자동으로 고르지 않고 '직접 고르세요'로 둡니다 (엉뚱한 캐릭터로 넘어가는 것을 막음).")
+        self.ck_guess_player = QCheckBox("플레이어블 캐릭터 (몬스터 추측 건너뛰기)")
+        self.ck_guess_player.setToolTip("영상 속 캐릭터가 플레이어블이면 켜세요. 몬스터를 AI로 추측하지 않고(영상 없이도), 플레이어 메시 목록과 플레이어 애니메이션 전체를 바로 보여 줍니다.")
+        self.ck_guess_player.setChecked(bool(self.cfg.get("vf_guess_player", False)))
+        self.ck_guess_player.toggled.connect(self._guess_player_toggled)
+        v.addWidget(self.ck_guess_player)
         self.btn_guess = QPushButton("캐릭터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
+        if self.ck_guess_player.isChecked():
+            self.btn_guess.setText("플레이어블 메시 목록 보기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.btn_guess, 1)
         h.addWidget(QLabel("자동 선택 최소 확신"))
@@ -688,7 +695,47 @@ class VidFindTab(QWidget):
             notes.append("이름 %d종 중 %d종만 AI에게 알렸습니다. '이름 필터'로 줄이면 정확해집니다." % (len(names), limit))
         return names, notes
 
+    def _guess_player_toggled(self, on: bool) -> None:
+        self.cfg["vf_guess_player"] = bool(on)
+        self.btn_guess.setText("플레이어블 메시 목록 보기" if on else "캐릭터 추측 시작")
+        if on:
+            if self._load_index_cached():
+                self.load_player_mode()
+            else:
+                self.status.setText("플레이어블 모드: 에셋 이름 목록이 아직 없어요. '플레이어블 메시 목록 보기'를 누르면 게임 파일에서 읽어 옵니다.")
+        elif self.player_mode:
+            self.player_mode = False
+            self.confirmed = []
+            self.mesh_list.clear()
+            self.anim_list.clear()
+            for ck in (self.ck_k_monster, self.ck_k_player):  # 종류 체크도 다시 둘 다
+                ck.blockSignals(True)
+                ck.setChecked(True)
+                ck.blockSignals(False)
+            self.status.setText("몬스터 추측 모드로 돌아왔습니다.")
+
+    def start_player(self, force_index: bool = False) -> None:
+        """AI 추측 없이 플레이어블 메시/애니메이션 목록만 연다 (에셋 이름 목록이 없으면 먼저 읽는다)."""
+        if not force_index and self._load_index_cached():
+            self.load_player_mode()
+            return
+        a = self.win._extract_args()
+        if a is None:
+            return
+
+        def job(w):
+            return self._ensure_index(a, w, force_index)
+
+        def done(idx):
+            self.index = idx
+            self.load_player_mode()
+
+        self.win.run_async(job, done, "에셋 이름 목록 읽는 중")
+
     def start_guess(self, force_index: bool = False) -> None:
+        if self.ck_guess_player.isChecked():  # 플레이어블이면 몬스터 추측은 건너뛴다
+            self.start_player(force_index)
+            return
         srcs = self.source_paths()
         if not srcs:
             QMessageBox.warning(self, "캐릭터 추측", "영상/이미지를 먼저 추가하세요.")
