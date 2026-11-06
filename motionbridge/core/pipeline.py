@@ -112,6 +112,20 @@ class Project:
         self.log += m.notes
         return m
 
+    def unload_target(self) -> None:
+        """타깃 모델을 뺀다 (소스 모션은 그대로)."""
+        self.tgt, self.tgt_slots = None, {}
+        self.settings.rot_offsets = {}
+        self.settings.com_joint = -1
+        self.result, self.issues = None, []
+
+    def unload_source(self) -> None:
+        """소스 모션을 뺀다 (타깃 모델은 그대로)."""
+        self.src, self.src_slots = None, {}
+        self.clip = 0
+        self.edits = {}
+        self.result, self.issues = None, []
+
     # ------------------------------------------------------------------ 매핑
     def automap(self) -> None:
         if self.src:

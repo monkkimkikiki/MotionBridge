@@ -151,6 +151,21 @@ def test_full_flow():
         assert bar.move(1) and mw.vd.n_frames == T0 and not bar.move(1) and mw.frame_slider.value() == 34
         bar.reset()
         mw._reset_settings()
+        # 열어 둔 타깃/소스를 뺄 수 있다 (다른 쪽은 그대로, 뷰어는 남은 것만 보여 줌)
+        assert mw.btn_unload_tgt.isEnabled() and mw.btn_unload_src.isEnabled()
+        mw.unload_target()
+        assert mw.pr.tgt is None and mw.pr.src is not None and mw.pr.result is None and mw.vd is not None and not mw.pr.tgt_slots
+        assert not mw.btn_unload_tgt.isEnabled() and mw.btn_unload_src.isEnabled() and "타깃" not in mw.info_label.text()
+        mw.unload_target()  # 이미 비었으면 아무 일 없음
+        QFileDialog.open_ret = (tgt, "")
+        mw.open_target()
+        assert mw.pr.tgt is not None and mw.pr.result is not None and mw.btn_unload_tgt.isEnabled(), "다시 열 수 있음"
+        mw.unload_source()
+        assert mw.pr.src is None and mw.pr.tgt is not None and mw.pr.result is None and mw.clip_combo.count() == 0
+        QFileDialog.open_ret = (src, "")
+        mw.open_source()
+        assert mw.pr.src is not None and mw.pr.result is not None
+        mw._reset_settings()
         # 타임라인 / 뷰포트 그리기
         mw.frame_slider.setValue(12)
         assert "13 / 40" in mw.frame_label.text()

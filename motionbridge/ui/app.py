@@ -140,6 +140,8 @@ class MainWindow(QMainWindow):
         spec = [
             ("파일", "open_source", "소스 모션 열기…", "open_source", ("Ctrl+O",)),
             ("파일", "open_target", "타깃 모델 열기…", "open_target", ("Ctrl+Shift+O",)),
+            ("파일", "unload_source", "소스 모션 빼기", "unload_source", ()),
+            ("파일", "unload_target", "타깃 모델 빼기", "unload_target", ()),
             ("파일", "import_animref", "AnimRef에서 가져오기…", "import_animref", ("Ctrl+Shift+A",)),
             ("파일", None, None, None, ()),
             ("파일", "load_profile", "프로필 불러오기…", "load_profile", ("Ctrl+Shift+P",)),
@@ -892,6 +894,14 @@ class MainWindow(QMainWindow):
         b2.clicked.connect(self.open_target)
         row.addWidget(b1)
         row.addWidget(b2)
+        self.btn_unload_src = QPushButton("소스 빼기")
+        self.btn_unload_src.setToolTip("열어 둔 소스 모션을 화면에서 뺍니다 (타깃 모델은 그대로)")
+        self.btn_unload_src.clicked.connect(lambda *_a: self.unload_source())
+        self.btn_unload_tgt = QPushButton("타깃 빼기")
+        self.btn_unload_tgt.setToolTip("열어 둔 타깃 모델을 화면에서 뺍니다 (소스 모션은 그대로). 다른 모델로 바꿔 보기 전에 비울 때 쓰세요.")
+        self.btn_unload_tgt.clicked.connect(lambda *_a: self.unload_target())
+        row.addWidget(self.btn_unload_src)
+        row.addWidget(self.btn_unload_tgt)
         lay.addLayout(row)
         self.info_label = QLabel("")
         self.info_label.setWordWrap(True)
@@ -1285,6 +1295,35 @@ class MainWindow(QMainWindow):
             self._remember_dir(path)
             self.run_async(lambda w: self.pr.load_target(path), lambda m: self._after_load("target"), "타깃 읽는 중")
 
+    def unload_target(self) -> None:
+        if self.pr.tgt is None:
+            return
+        name = os.path.basename(self.pr.tgt.path)
+        self.pr.unload_target()
+        self._after_unload("target")
+        self.statusBar().showMessage("타깃 모델을 뺐습니다: " + name)
+
+    def unload_source(self) -> None:
+        if self.pr.src is None:
+            return
+        name = os.path.basename(self.pr.src.path)
+        self.pr.unload_source()
+        self._after_unload("source")
+        self.statusBar().showMessage("소스 모션을 뺐습니다: " + name)
+
+    def _after_unload(self, which: str) -> None:
+        self._syncing = True
+        if which == "source":
+            self.clip_combo.clear()
+        else:
+            self.rot_combo.clear()
+            self.com_combo.clear()
+            self.com_combo.addItem("(자동)", -1)
+        self._syncing = False
+        self._fill_mapping()
+        self.recompute(reframe=True)
+        self.history.reset(self._edit_state())
+
     def _after_load(self, which: str) -> None:
         self._syncing = True
         if which == "source":
@@ -1561,6 +1600,9 @@ class MainWindow(QMainWindow):
         self._update_quality()
 
     def _update_info(self, err: Optional[str]) -> None:
+        if getattr(self, "btn_unload_src", None) is not None:
+            self.btn_unload_src.setEnabled(self.pr.src is not None)
+            self.btn_unload_tgt.setEnabled(self.pr.tgt is not None)
         lines = []
         if self.pr.src:
             a = self.pr.anim
