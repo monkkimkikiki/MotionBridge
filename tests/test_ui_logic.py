@@ -120,6 +120,8 @@ def test_full_flow():
         bar = mw.retime_bar
         T0 = mw.pr.src.animations[0].n_frames
         mw.recompute()
+        mw.history.reset(mw._edit_state())  # 앞선 설정 변경 기록은 비우고 프레임 편집만 본다
+        bar.refresh()
         assert bar.strip.blocks() and len(bar.strip.blocks()) == 1 and "원본 %d → 결과 %d" % (T0, T0) in bar.info.text(), bar.info.text()
         assert not bar.btn_undo.isEnabled() and not bar.btn_reset.isEnabled()
         # 줄 클릭 = 그 프레임으로 이동 (x -> 프레임 -> x 가 일치)
@@ -130,23 +132,75 @@ def test_full_flow():
         assert abs(bar.strip.frame_at(bar.strip.x_of(33)) - 33) <= 0
         # 표시 없이 속도 = 지금 조각 전체
         assert bar.range() == (0, T0 - 1)
-        # 시작/끝 표시 -> 그 구간만 2배 빠르게
+        # 시작/끝 표시 = 구간 선택 (끝 프레임 포함) -> 그 구간만 2배 빠르게
         mw.frame_slider.setValue(10)
         bar.mark_in()
-        mw.frame_slider.setValue(30)
+        assert bar.has_selection() and bar.strip.selection() == (10, T0 - 1) and bar.range() == (10, T0 - 1), "시작만 있으면 마지막까지"
+        mw.frame_slider.setValue(29)
         bar.mark_out()
-        assert bar.range() == (10, 30)
+        assert bar.strip.selection() == (10, 29) and bar.range() == (10, 30), "끝 프레임을 포함"
+        assert "선택한 구간 11~30프레임" in bar.info.text() and bar.len_spin.value() == 20, bar.info.text()
         assert bar.apply_speed(2.0)
         assert mw.pr.is_edited() and mw.vd.n_frames == T0 - 10 and mw.frame_slider._hi == T0 - 11
-        assert (bar.strip.m_in, bar.strip.m_out) == (10, 20), "표시가 새 구간을 따라감"
+        assert (bar.strip.m_in, bar.strip.m_out) == (10, 19), "표시가 새 구간을 따라감"
         assert len(bar.strip.blocks()) == 3 and "빠르게 1" in bar.info.text() and bar.btn_undo.isEnabled() and bar.btn_reset.isEnabled()
-        # 되돌리기 / 다시
+        # 되돌리기 / 다시 = 앱 전체 실행 취소(Ctrl+Z)와 같은 기록
         assert bar.undo() and mw.vd.n_frames == T0 and not mw.pr.is_edited()
         assert bar.redo() and mw.vd.n_frames == T0 - 10
+        mw.undo()
+        assert mw.vd.n_frames == T0 and not mw.pr.is_edited(), "Ctrl+Z 가 프레임 편집도 되돌림"
+        mw.redo()
+        assert mw.vd.n_frames == T0 - 10 and mw.pr.is_edited()
+        # 직접 길이 조절: 숫자 / 휠 / 블록 끝 끌기
+        bar.clear_marks()
+        bar.reset()
+        mw.frame_slider.setValue(10)
+        bar.mark_in()
+        mw.frame_slider.setValue(29)
+        bar.mark_out()
+        assert bar.apply_length(40) and mw.vd.n_frames == T0 + 20 and bar.range() == (10, 50), "20프레임 구간을 40프레임으로"
+        bar.wheel_adjust(3)
+        bar._wheel_flush()
+        assert bar.range()[1] - bar.range()[0] == 43 and mw.vd.n_frames == T0 + 23, "휠 한 칸 = 1프레임"
+        bar.wheel_adjust(-5)
+        bar.wheel_adjust(1)
+        bar._wheel_flush()
+        assert bar.range()[1] - bar.range()[0] == 39, "연속 휠은 모아서 적용"
+        bar.clear_marks()
+        n_pieces = len(mw.pr.frame_edit().pieces)
+        s0 = bar.strip
+        s0.resize(900, s0.H)
+        i = [k for k, (a, b) in enumerate(mw.pr.frame_edit().layout()) if a == 10][0]
+        n_old = mw.pr.frame_edit().pieces[i].n
+        tot0 = mw.vd.n_frames
+        s0.press_at(s0.edge_x(i))  # 블록 오른쪽 끝을 잡고
+        assert s0._drag == "edge"
+        ppf = s0._edge[3]
+        s0.drag_to(s0.edge_x(i) + 5 * ppf)
+        assert s0.edge_preview == (i, n_old + 5)
+        s0.release()
+        assert mw.pr.frame_edit().pieces[i].n == n_old + 5 and mw.vd.n_frames == tot0 + 5
+        assert len(mw.pr.frame_edit().pieces) == n_pieces
+        # Shift+드래그 = 줄에서 구간 선택
+        s0.press_at(s0.x_of(3), shift=True)
+        s0.drag_to(s0.x_of(8))
+        s0.release()
+        assert s0.selection() == (3, 8) and bar.has_selection()
+        bar.clear_marks()
+        assert not bar.has_selection()
+        assert bar.reset() and mw.vd.n_frames == T0
+        # 단축키: 메뉴에 등록되어 있고 눌렀을 때 막대 동작을 부른다
+        keys = {v[3]: v[1] for v in mw._actions.values()}
+        assert keys.get("구간 시작 표시 [") == ("I",) and keys.get("선택 구간 삭제") == ("Delete",)
+        mw.frame_slider.setValue(4)
+        mw._dispatch("retime_mark_in")
+        assert bar.strip.m_in == 4
+        mw._dispatch("retime_clear")
+        assert bar.strip.m_in is None
         # 자르기 / 복제 / 삭제 / 정지 / 부드럽게
         bar.clear_marks()
         mw.frame_slider.setValue(5)
-        assert bar.split() and len(mw.pr.frame_edit().pieces) == 4
+        assert bar.split() and len(mw.pr.frame_edit().pieces) == 2
         n_before = mw.vd.n_frames
         assert bar.duplicate() and mw.vd.n_frames > n_before
         assert bar.delete() and mw.vd.n_frames == n_before

@@ -11,7 +11,7 @@ from PySide6.QtCore import QLineF
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
-from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, drag_placement, render_surface,
+from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, drag_placement, overlay_names, render_surface,
                           skin_display, wire_segments)
 
 _POINT_RADIUS = {"pt_mesh": 0.0, "pt_target_joints": 2.0, "pt_plant": 6.0, "pt_bad": 6.0}
@@ -201,6 +201,11 @@ class Viewport(QWidget):
         for text, col in (("타깃(내 모델)", COLORS["seg_target"]), ("소스(원본 모션)", COLORS["seg_ghost"]), ("발 고정", COLORS["pt_plant"]), ("다리 안 닿음", COLORS["pt_bad"])):
             p.setPen(QColor(*col))
             p.drawText(12, y0, "● " + text)
+            y0 += 16
+        y0 += 6
+        p.setPen(QColor(220, 226, 238))
+        for line in overlay_names(self.pr):  # 지금 재생 중인 애니메이션 / 메시 이름
+            p.drawText(12, y0, line)
             y0 += 16
         p.setPen(QColor(120, 128, 145))
         p.drawText(12, int(h) - 10, "좌클릭 드래그: 회전   우/휠클릭 드래그: 이동   휠: 확대/축소   Shift+드래그: 애니메이션 이동   Ctrl+드래그: 애니메이션 회전   F: 화면 맞추기")

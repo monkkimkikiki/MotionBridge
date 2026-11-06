@@ -369,7 +369,24 @@ def test_heavy_mesh_performance():
     print("heavy mesh performance OK")
 
 
+def test_overlay_names():
+    from types import SimpleNamespace as NS
+    from motionbridge.ui.viewer_math import overlay_names
+
+    an = NS(name="Attack_01")
+    src = NS(path="/x/y/Attack_01.psa", animations=[an])
+    tgt = NS(path="/m/Hero.fbx", meshes=[NS(name="Body"), NS(name="Cloak")])
+    out = overlay_names(NS(src=src, tgt=tgt, clip=0))
+    assert out == ["애니메이션: Attack_01.psa", "메쉬: Hero.fbx  [Body, Cloak]"], out
+    src2 = NS(path="/x/pack.psa", animations=[NS(name="Run"), NS(name="Walk")])
+    out = overlay_names(NS(src=src2, tgt=None, clip=1))
+    assert out == ["애니메이션: pack.psa  [Walk]"], out
+    assert overlay_names(NS(src=None, tgt=None, clip=0)) == []
+    print("overlay names OK")
+
+
 if __name__ == "__main__":
+    test_overlay_names()
     test_material_colors()
     test_heavy_mesh_performance()
     test_camera()

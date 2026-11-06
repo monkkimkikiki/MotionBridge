@@ -136,6 +136,22 @@ def test_reset():
     assert e.undo() and not e.is_untouched()
 
 
+def test_resize_piece():
+    e = F.FrameEdit(61)
+    assert e.resize_piece(0, 100) == (0, 100) and e.total() == 101 and e.pieces[0].speed < 0.61
+    assert e.resize_piece(0, 100) is None, "같은 길이면 아무 일 없음"
+    assert e.resize_piece(5, 10) is None
+    e.undo()
+    assert e.total() == 61
+    e.split(20)
+    e.resize_piece(0, 10)
+    assert e.pieces[0].n == 10 and e.pieces[1].n == 40
+    e2 = F.FrameEdit(61)
+    e2.add_hold(10, 5)
+    hi = [i for i, p in enumerate(e2.pieces) if p.hold][0]
+    assert e2.resize_piece(hi, 12) is not None and e2.pieces[hi].n == 12
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

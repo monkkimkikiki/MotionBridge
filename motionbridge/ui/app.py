@@ -154,6 +154,13 @@ class MainWindow(QMainWindow):
             ("편집", "undo", "실행 취소", "undo", ("Ctrl+Z",)),
             ("편집", "redo", "다시 실행", "redo", ("Ctrl+Y", "Ctrl+Shift+Z")),
             ("편집", None, None, None, ()),
+            ("프레임 편집", "mark_in", "구간 시작 표시 [", "retime_mark_in", ("I",)),
+            ("프레임 편집", "mark_out", "구간 끝 표시 ]", "retime_mark_out", ("O",)),
+            ("프레임 편집", "mark_clear", "구간 선택 해제", "retime_clear", ("Ctrl+D",)),
+            ("프레임 편집", "retime_del", "선택 구간 삭제", "retime_delete", ("Delete",)),
+            ("프레임 편집", "retime_split", "지금 프레임에서 자르기", "retime_split", ("S",)),
+            ("프레임 편집", "retime_longer", "대상 구간 1프레임 길게 (느리게)", "retime_len:1", ("=",)),
+            ("프레임 편집", "retime_shorter", "대상 구간 1프레임 짧게 (빠르게)", "retime_len:-1", ("-",)),
             ("편집", "automap", "자동 매핑 다시 하기", "_automap", ("Ctrl+M",)),
             ("편집", "reset_settings", "리타깃 설정 모두 기본값으로", "_reset_settings", ("Ctrl+Shift+R",)),
             ("보기", "play", "재생 / 정지", "toggle_play", ("Space",)),
@@ -183,6 +190,24 @@ class MainWindow(QMainWindow):
             ("도움말", "about", "정보", "show_about", ()),
         ]
         return spec
+
+    def retime_mark_in(self) -> None:
+        self.retime_bar.mark_in()
+
+    def retime_mark_out(self) -> None:
+        self.retime_bar.mark_out()
+
+    def retime_clear(self) -> None:
+        self.retime_bar.clear_marks()
+
+    def retime_delete(self) -> None:
+        self.retime_bar.delete()
+
+    def retime_split(self) -> None:
+        self.retime_bar.split()
+
+    def retime_len(self, d: int) -> None:
+        self.retime_bar.wheel_adjust(int(d))
 
     def _dispatch(self, spec: str) -> None:
         name, _, arg = spec.partition(":")
@@ -255,12 +280,25 @@ class MainWindow(QMainWindow):
 
     # ---- 실행 취소 / 다시 실행
     def _edit_state(self) -> dict:
-        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots)}
+        """실행 취소 기록 한 칸: 설정 + 본 매핑 + 클립별 프레임 편집(조각 목록; 손대지 않은 것은 뺀다)."""
+        edits = {ci: copy.deepcopy(e.pieces) for ci, e in self.pr.edits.items() if not e.is_untouched()}
+        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots), "edits": edits}
 
     def _apply_edit_state(self, st: dict) -> None:
         self.pr.settings = copy.deepcopy(st["settings"])
         self.pr.src_slots = dict(st["src"])
         self.pr.tgt_slots = dict(st["tgt"])
+        want = st.get("edits", {})
+        before = {ci: e.pieces for ci, e in self.pr.edits.items() if not e.is_untouched()}
+        for ci in list(self.pr.edits):
+            if ci not in want:
+                del self.pr.edits[ci]
+        if self.pr.src is not None:
+            for ci, pcs in want.items():
+                if 0 <= ci < len(self.pr.src.animations):
+                    self.pr.frame_edit(ci).pieces = copy.deepcopy(pcs)
+        if before != {ci: e.pieces for ci, e in self.pr.edits.items() if not e.is_untouched()}:
+            self.retime_bar.clear_marks()  # 조각이 바뀌었으니 구간 선택은 풀어 둔다
         self._syncing = True
         self._sync_settings_ui()
         self._syncing = False

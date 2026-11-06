@@ -158,6 +158,21 @@ class FrameEdit:
         cur = max(int(r1) - int(r0), 1)
         return self._retime(r0, r1, lambda p: max(1, int(round(p.n * frames / cur))), total=frames)
 
+    def resize_piece(self, i: int, frames: int) -> Optional[Tuple[int, int]]:
+        """i 번째 조각의 결과 길이를 frames 프레임으로 (블록 끝을 끌어 늘이거나 줄일 때). 새 (시작, 끝) 결과 프레임, 못 하면 None."""
+        if not (0 <= i < len(self.pieces)):
+            return None
+        frames = max(int(frames), 1)
+        s, _ = self.layout()[i]
+        p = self.pieces[i]
+        if frames == p.n:
+            return None
+        if p.hold:
+            self._push()
+            p.n = int(min(frames, HOLD_MAX))
+            return s, s + p.n
+        return self.set_length(s, s + p.n, frames)
+
     def _retime(self, r0, r1, new_n, total=None):
         r0, r1 = int(min(r0, r1)), int(max(r0, r1))
         if r1 <= r0 or r0 < 0 or r1 > self.total() - 1:

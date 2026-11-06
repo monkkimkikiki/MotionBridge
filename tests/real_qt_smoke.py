@@ -150,13 +150,25 @@ with tempfile.TemporaryDirectory() as d:
     check(mw.frame_slider.value() == 12 and bar.strip.frame == 12, "줄 클릭 -> 프레임 이동")
     mw.frame_slider.setValue(8)
     bar.mark_in()
-    mw.frame_slider.setValue(24)
+    mw.frame_slider.setValue(23)
     bar.mark_out()
+    check(bar.strip.selection() == (8, 23) and bar.range() == (8, 24), "시작/끝 = 끝 프레임 포함 구간")
     check(bar.apply_speed(2.0) and mw.vd.n_frames == T0 - 8, "구간 속도 2배 -> 화면 반영")
     app.processEvents()
     check(not bar.strip.grab().isNull() and len(bar.strip.blocks()) == 3, "편집 후 조각 3개 그리기")
     mw.frame_slider.setValue(3)
     check(bar.hold() and bar.undo() and bar.redo() and bar.reset() and mw.vd.n_frames == T0, "정지/되돌리기/다시/원본")
+    from PySide6.QtCore import QPoint, QPointF as _QPF, Qt as _Q2  # noqa: E402
+    from PySide6.QtGui import QWheelEvent  # noqa: E402
+
+    bar.clear_marks()
+    n_a = mw.vd.n_frames
+    wev = QWheelEvent(_QPF(50, 20), _QPF(50, 20), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    bar.strip.wheelEvent(wev)
+    bar._wheel_flush()
+    check(mw.vd.n_frames == n_a + 1, "휠 한 칸 = 대상 조각 1프레임 늘림")
+    mw.undo()
+    check(mw.vd.n_frames == n_a, "Ctrl+Z 가 프레임 편집을 되돌림")
     # 뷰포트 배치 드래그: Shift+왼쪽 드래그가 진짜 마우스 이벤트로 애니메이션 위치를 바꾼다
     from PySide6.QtCore import QEvent, QPointF, Qt as _Qt  # noqa: E402
     from PySide6.QtGui import QMouseEvent  # noqa: E402

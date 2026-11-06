@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -114,6 +115,32 @@ def drag_placement(cam: "OrbitCamera", mode: str, p0, p1, w: float, h: float, y:
     d = np.degrees(np.arctan2(az, ax) - np.arctan2(bz, bx))  # Y축 양의 회전은 (x,z) 평면 각도를 줄인다
     d = (d + 180.0) % 360.0 - 180.0
     return 0.0, 0.0, float(d)
+
+
+def overlay_names(pr) -> List[str]:
+    """뷰포트 위에 적는 이름들: 지금 재생 중인 애니메이션(파일 · 클립)과 보이는 메시(파일 · 메시 이름)."""
+    out: List[str] = []
+    src, tgt = getattr(pr, "src", None), getattr(pr, "tgt", None)
+    if src is not None:
+        base = os.path.basename(str(getattr(src, "path", "") or ""))
+        clip = ""
+        try:
+            clip = str(src.animations[pr.clip].name or "")
+        except (IndexError, AttributeError):
+            pass
+        stem = os.path.splitext(base)[0]
+        if clip and clip != stem and clip != base:
+            out.append("애니메이션: %s  [%s]" % (base or "(이름 없음)", clip) if base else "애니메이션: " + clip)
+        else:
+            out.append("애니메이션: " + (base or clip or "(이름 없음)"))
+    if tgt is not None:
+        base = os.path.basename(str(getattr(tgt, "path", "") or ""))
+        names = [m.name for m in getattr(tgt, "meshes", []) if getattr(m, "name", "")]
+        txt = base or "(이름 없음)"
+        if names:
+            txt += "  [%s%s]" % (", ".join(names[:3]), " 외 %d" % (len(names) - 3) if len(names) > 3 else "")
+        out.append("메쉬: " + txt)
+    return out
 
 
 def bone_segments(skel_parents: np.ndarray, pos: np.ndarray, skip_zero: bool = True) -> np.ndarray:
