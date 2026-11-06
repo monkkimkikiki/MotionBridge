@@ -313,6 +313,20 @@ def test_worker_failure():
     mw.run_async(fn2, lambda r: called.append(r), "시험3", cancellable=True, on_cancel=lambda: cancelled.append(1))
     assert shown == [True] and not called and cancelled == [1] and mw._worker is None and mw._busy_dlg is None
     mw._zombies = []
+    # 취소할 수 없는 작업에도 '작업 중' 창이 있고(취소 버튼 없음), 끝나면 닫힌다. Esc/X(reject)는 무시된다
+    seen2 = []
+
+    def fn3(w):
+        d = mw._busy_dlg
+        seen2.append((d is not None, d.closable))
+        d.reject()
+        seen2.append(w.cancel.is_set())
+        return 9
+
+    called.clear()
+    mw.run_async(fn3, lambda r: called.append(r), "시험3b")
+    assert seen2 == [(True, False), False] and called == [9] and mw._busy_dlg is None and mw._worker is None
+    called.clear()
     mw.run_async(lambda w: 3, lambda r: called.append(r), "시험4", cancellable=True)
     assert called == [3] and mw._busy_dlg is None, "정상 종료하면 진행 창이 닫힘"
     mw.run_async(lambda w: 3, lambda r: None, "시험5")

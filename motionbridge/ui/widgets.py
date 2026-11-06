@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import traceback
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QProgressBar, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -351,8 +351,9 @@ class BusyDialog(QDialog):
 
     cancelled = Signal()
 
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, parent=None, closable: bool = True):
         super().__init__(parent)
+        self.closable = closable  # False: 취소할 수 없는 작업(파일 읽기·추출 등). 취소 버튼·X·Esc 없이 '작업 중'만 보여 준다
         self.setWindowTitle(title)
         self.setModal(True)
         self.setMinimumWidth(440)
@@ -371,13 +372,28 @@ class BusyDialog(QDialog):
         self.bar.setRange(0, 0)  # 몇 개 중 몇 번째인지 모르면 움직이는 막대
         v.addWidget(self.bar)
         row = QHBoxLayout()
-        self.hint = QLabel("오른쪽 위 ✕ 로도 취소할 수 있어요")
+        self.hint = QLabel("오른쪽 위 ✕ 로도 취소할 수 있어요" if closable else "작업이 끝나면 자동으로 닫혀요")
         self.hint.setEnabled(False)
         row.addWidget(self.hint, 1)
         self.btn = QPushButton("✕ 취소")
         self.btn.clicked.connect(lambda *_a: self.reject())
+        self.btn.setVisible(closable)
         row.addWidget(self.btn)
         v.addLayout(row)
+        self._timer = None
+        if not closable:
+            self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+
+    def show_later(self, ms: int = 300) -> None:
+        """짧게 끝나는 작업에 창이 깜빡이지 않도록, ms 뒤에도 작업 중일 때만 보여 준다."""
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._maybe_show)
+        self._timer.start(int(ms))
+
+    def _maybe_show(self) -> None:
+        if not self._done:
+            self.show()
 
     def set_progress(self, i: int, n: int, name: str, label: str = "") -> None:
         if n > 1:
@@ -387,7 +403,8 @@ class BusyDialog(QDialog):
         else:
             self.bar.setRange(0, 0)
             head = label
-        self.text.setText((head + "\n" if head else "") + name)
+        name = "" if name == label else name  # 같은 말이 두 번 나오지 않게
+        self.text.setText((head + "\n" if head and name else head) + name)
 
     def set_stopping(self) -> None:
         """취소를 눌렀지만 하던 단계가 아직 끝나지 않은 상태. 창을 닫지 않고 '멈추는 중'을 분명하게 보여 준다."""
@@ -408,9 +425,13 @@ class BusyDialog(QDialog):
         """작업이 끝났을 때(또는 멈춤이 끝났을 때) 취소 신호 없이 닫는다."""
         self._done = True
         self._stopping = False
+        if self._timer is not None:
+            self._timer.stop()
         self.hide()
 
     def reject(self) -> None:
+        if not self.closable and not self._done:  # 취소할 수 없는 작업: Esc/X 무시
+            return
         if self._stopping:  # 이미 멈추는 중: 다시 취소하거나 닫지 않는다
             return
         if not self._done:
@@ -421,6 +442,9 @@ class BusyDialog(QDialog):
         super().reject()
 
     def closeEvent(self, ev) -> None:
+        if not self.closable and not self._done:
+            ev.ignore()
+            return
         if self._stopping:
             ev.ignore()
             return

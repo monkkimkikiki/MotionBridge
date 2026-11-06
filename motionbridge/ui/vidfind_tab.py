@@ -825,7 +825,7 @@ class VidFindTab(QWidget):
             self.table.setItem(ri, 1, QTableWidgetItem("게임 속 이름: %s\n%s" % (name, ("후보 %d개 — 맨 위가 가장 유력" % len(cands)) if cands else "후보 없음")))
             self.ingame_note.setText(" ".join(notes) if notes else "후보 %d개를 선택한 줄에 채웠습니다. 맞는지 확인하세요." % len(cands))
 
-        self.win.run_async(job, done, "게임 속 이름으로 찾는 중")
+        self.win.run_async(job, done, "게임 속 이름으로 찾는 중", cancellable=True, on_cancel=lambda: self.status.setText("검색을 취소했습니다."))
 
     def _motion_index(self):
         return self.index or self._load_index_cached()
@@ -878,7 +878,7 @@ class VidFindTab(QWidget):
                 note = "알아들은 동작: %s — 애니메이션 이름에서 맞는 것을 못 찾았습니다. 다른 낱말(영어 포함)로 적어 보세요." % q.describe()
             self.motion_note.setText((note + " " + warn).strip())
 
-        self.win.run_async(job, done, "특징·패턴으로 찾는 중")
+        self.win.run_async(job, done, "특징·패턴으로 찾는 중", cancellable=True, on_cancel=lambda: self.status.setText("특징·패턴 검색을 취소했습니다."))
 
     def search_anims_by_text(self) -> None:
         text = self.anim_q.text().strip()
@@ -914,7 +914,7 @@ class VidFindTab(QWidget):
                 msg += " '모든 캐릭터에서'를 켜 보세요."
             self.anim_note.setText((msg + " " + warn).strip())
 
-        self.win.run_async(job, done, "애니메이션 찾는 중")
+        self.win.run_async(job, done, "애니메이션 찾는 중", cancellable=True, on_cancel=lambda: self.status.setText("애니메이션 검색을 취소했습니다."))
 
     def delete_selected_row(self) -> None:
         cur = self.table.currentRow()

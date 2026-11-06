@@ -1237,10 +1237,14 @@ class MainWindow(QMainWindow):
         self._set_busy(True, label)
         self._on_done, self._busy_label, self._on_cancel = on_done, label, on_cancel
         self._busy_dlg = None
-        if cancellable:  # 취소할 수 있는 작업은 작은 진행 창을 띄운다 (X 가 곧 취소)
-            self._busy_dlg = BusyDialog(label, self)
+        # 모든 작업에 작은 '작업 중' 창을 띄운다. 취소할 수 있는 작업은 X/취소/Esc 가 곧 취소, 아닌 작업은 끝날 때까지 안내만.
+        # 짧은 작업에 창이 깜빡이지 않게, 취소할 수 없는 작업은 0.3초 넘게 걸릴 때만 보인다.
+        self._busy_dlg = BusyDialog(label, self, closable=cancellable)
+        if cancellable:
             self._busy_dlg.cancelled.connect(self.cancel_async)
             self._busy_dlg.show()
+        else:
+            self._busy_dlg.show_later(300)
         wk = Worker(fn, self)
         self._worker = wk
         # 바인딩된 메서드로 연결해야 콜백이 GUI 스레드에서 실행된다
