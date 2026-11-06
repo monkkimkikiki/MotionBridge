@@ -305,6 +305,20 @@ class AssetIndex:
     def player_meshes(self) -> List[MeshEntry]:
         return [m for m in self.meshes if is_player_path(m.path)]
 
+    def player_rig_meshes(self) -> List[MeshEntry]:
+        """플레이어블 캐릭터 메시 후보: 경로에 player/pc/hero 같은 낱말이 든 메시 + 그 메시와 같은 폴더에 있는 메시
+        (같은 리그를 쓰는 의상·장비 변형은 보통 같은 폴더에 있다). 경로 순으로 정렬."""
+        base = self.player_meshes()
+        folders = {os.path.dirname(m.path.replace("\\", "/")) for m in base}
+        seen, out = set(), []
+        for m in self.meshes:
+            if is_player_path(m.path) or os.path.dirname(m.path.replace("\\", "/")) in folders:
+                if m.path not in seen:
+                    seen.add(m.path)
+                    out.append(m)
+        out.sort(key=lambda m: m.path.lower())
+        return out
+
     # ------------------------------------------------------------------ 메시 후보
     def rank_meshes(self, guess: str, description: str = "", limit: int = 8, memory: Optional[MatchMemory] = None) -> List[MeshCandidate]:
         g = (guess or "").strip()

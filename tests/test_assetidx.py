@@ -130,6 +130,9 @@ PA = ["Sparta/Content/Characters/Player/Animations/A_PC_LightAttack_01", "Sparta
 pidx = ai.AssetIndex(PM, PA)
 check(ai.is_player_path(PM[0]) and not ai.is_player_path(PM[1]), "플레이어 경로 판별")
 check([m.name for m in pidx.player_meshes()] == ["Player_Shell_Tiel"], "플레이어 메시 목록")
+PM2 = PM + ["Sparta/Content/Characters/Player/Meshes/SK_Armor_Heavy.SK_Armor_Heavy", "Sparta/Content/Characters/Monsters/Dwarf/Meshes/SK_DwarfBoss.SK_DwarfBoss"]
+rig = ai.AssetIndex(PM2, PA).player_rig_meshes()
+check([m.path for m in rig] == sorted([PM2[0], PM2[2]], key=str.lower), "같은 폴더(같은 리그) 변형까지 플레이어 후보: %s" % [m.name for m in rig])
 rp = pidx.rank_anims(PM[0], None, None, 10)
 check({c.path for c in rp} == {PA[0], PA[1], PA[3]} and all("플레이어" in c.why for c in rp), "플레이어는 공용(player/pc/hero) 애니메이션을 보여줌: %s" % [c.path for c in rp])
 rp2 = pidx.rank_anims(PM[0], "타격", None, 10)

@@ -81,6 +81,7 @@ class VidFindTab(QWidget):
         self.memory = assetidx.MatchMemory(MEMORY_FILE)
         self.rows: List[_Row] = []
         self.confirmed: List[str] = []
+        self.player_mode = False  # True 면 영상 추측과 상관없이 플레이어블 캐릭터 메시/애니메이션 전체 목록을 보여 주는 중
         self.clip_labels: Dict[str, str] = {}
         self.link_query: Optional[dict] = None  # AnimRef 가 보낸 요청 (답을 보내기 전까지)
         self.last_files: List[str] = []         # 방금 추출한 파일 (AnimRef 결과에 넣는다)
@@ -331,11 +332,19 @@ class VidFindTab(QWidget):
         # 5) 후보 / 추출
         g = QGroupBox("5) 후보에서 골라 추출")
         v = QVBoxLayout(g)
-        v.addWidget(QLabel("메시 (확정한 캐릭터)"))
+        h = QHBoxLayout()
+        h.addWidget(QLabel("메시 (확정한 캐릭터)"))
+        h.addStretch(1)
+        self.btn_player = QPushButton("플레이어블 캐릭터 목록 열기")
+        self.btn_player.setToolTip("영상 추측과 상관없이, 플레이어가 조종하는 캐릭터의 메시(player/pc/hero 이름이 든 것과 같은 폴더의 같은 리그 변형)를 나열하고 "
+                                   "플레이어 애니메이션 전체를 목록에 띄웁니다. 직접 고르거나, 이름·설명으로 검색하세요.")
+        self.btn_player.clicked.connect(lambda *_a: self.load_player_mode())
+        h.addWidget(self.btn_player)
+        v.addLayout(h)
         self.mesh_list = QListWidget()
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mesh_list.setMinimumHeight(70)
-        self.mesh_list.itemSelectionChanged.connect(self._refill_anims)
+        self.mesh_list.itemSelectionChanged.connect(self._mesh_sel_changed)
         self.mesh_list.itemDoubleClicked.connect(self._mesh_double_clicked)
         self.mesh_list.setToolTip("더블클릭: 이 메시를 바로 뷰포트(타깃)로 엽니다 — 리깅(스켈레톤·스킨)이 든 GLB 로 뽑아서 바로 불러와요.")
         v.addWidget(self.mesh_list)
@@ -961,7 +970,7 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "설명으로 찾기", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
             return
         restrict = None
-        if not self.anim_all.isChecked() and self._selected_mesh_paths():
+        if not self.anim_all.isChecked() and not self.player_mode and self._selected_mesh_paths():
             restrict = [layout.character_of(p) for p in self._selected_mesh_paths()]
         use_ai = bool(self.motion_ai.isChecked())
         kinds = self._kinds()
@@ -1032,7 +1041,35 @@ class VidFindTab(QWidget):
                 out.append(p)
         return out
 
+    def _mesh_sel_changed(self, *_a) -> None:
+        if not self.player_mode:  # 플레이어 모드의 애니메이션 목록은 메시 선택과 무관하다 (공용 애니메이션)
+            self._refill_anims()
+
+    def load_player_mode(self) -> bool:
+        """플레이어블 캐릭터 모드: 메시 = 플레이어/같은 리그 후보 전체, 애니메이션 = 플레이어 애니메이션 전체 (검수자가 직접/이름/설명으로 찾음)."""
+        idx = self.index
+        if idx is None or not idx:
+            QMessageBox.warning(self, "플레이어블 캐릭터", "에셋 이름 목록이 아직 없습니다. 0번 탭에서 게임 에셋을 한 번 읽어 오세요 (또는 '캐릭터 추측 시작').")
+            return False
+        meshes = idx.player_rig_meshes()
+        self.player_mode = True
+        self.confirmed = [m.path for m in meshes]
+        self.mesh_list.clear()
+        for m in meshes:
+            it = QListWidgetItem("%s    (%s)" % (m.name, m.path))
+            it.setData(Qt.ItemDataRole.UserRole, m.path)
+            it.setToolTip(m.path)
+            self.mesh_list.addItem(it)
+        for ck, on in ((self.ck_k_monster, False), (self.ck_k_player, True)):  # 검색이 플레이어 쪽만 훑게
+            ck.blockSignals(True)
+            ck.setChecked(on)
+            ck.blockSignals(False)
+        self._refill_anims()
+        self.status.setText("플레이어블 캐릭터 모드: 메시 %d개, 애니메이션 %d개. 아래 '목록 거르기'나 '설명으로 찾기'로 좁히세요." % (len(meshes), self.anim_list.count()))
+        return True
+
     def confirm(self) -> None:
+        self.player_mode = False
         meshes = self.chosen_meshes()
         if not meshes:
             QMessageBox.warning(self, "검수 확정", "메시가 정해진 캐릭터가 없습니다. 후보에서 고르거나 검색 칸에서 찾으세요.")
@@ -1093,9 +1130,30 @@ class VidFindTab(QWidget):
     def _picked_anims(self) -> List[str]:
         return [it.data(Qt.ItemDataRole.UserRole) for it in self.anim_list.selectedItems() if not it.isHidden()]
 
+    PLAYER_LIST_MAX = 30000
+
+    def _fill_player_anims(self) -> None:
+        """플레이어 모드: 종류 체크에 맞는 애니메이션을 이름순으로 전부 (점수·개수 제한 없음)."""
+        idx = self.index
+        paths = idx.anims_of_kinds(self._kinds() or {assetidx.KIND_PLAYER, assetidx.KIND_MONSTER}) if idx else []
+        paths = sorted(paths, key=lambda a: (os.path.basename(a).lower(), a.lower()))
+        for a in paths[: self.PLAYER_LIST_MAX]:
+            it = QListWidgetItem("%s    %s" % (os.path.basename(a).split(".")[0], os.path.dirname(a.replace("\\", "/"))))
+            it.setData(Qt.ItemDataRole.UserRole, a)
+            it.setToolTip(a)
+            self.anim_list.addItem(it)
+        msg = "플레이어블 캐릭터 애니메이션 전체 %d개 (이름순)." % len(paths)
+        if len(paths) > self.PLAYER_LIST_MAX:
+            msg += " 너무 많아 앞 %d개만 보입니다. 거르기로 좁히세요." % self.PLAYER_LIST_MAX
+        self.anim_note.setText(msg + " 목록 거르기(쉼표=모두 포함) 또는 설명으로 찾기를 쓰세요. 메시는 위에서 골라 추출합니다.")
+        self._apply_anim_filter()
+
     def _refill_anims(self, *_a) -> None:
         self.anim_list.clear()
         idx = self.index
+        if self.player_mode and idx is not None:
+            self._fill_player_anims()
+            return
         if idx is None or not self.confirmed:
             return
         label = self.label.currentData() or None
@@ -1436,6 +1494,7 @@ class VidFindTab(QWidget):
                 cur = self.known.toPlainText().strip()
                 self.known.setPlainText((cur + "\n" if cur else "") + ch["name"] + (" — %s" % ch["kind"] if ch.get("kind") else ""))
         self.rows, self.confirmed = [], []
+        self.player_mode = False
         self.table.setRowCount(0)
         self.mesh_list.clear()
         self.anim_list.clear()

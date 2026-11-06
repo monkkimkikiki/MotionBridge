@@ -306,6 +306,22 @@ def main():
         check(vt._kinds() == {"player"}, "플레이어만")
         vt.ck_k_monster.setChecked(True)
         vt.anim_filter.setText("")
+        # ---------------- 플레이어블 캐릭터 모드: 영상 추측과 상관없이 메시 후보 + 플레이어 애니메이션 전체
+        saved_idx = vt.index
+        vt.index = assetidx.AssetIndex(["G/Characters/Player/Meshes/SK_Player_A.SK_Player_A", "G/Characters/Player/Meshes/SK_Armor_B.SK_Armor_B", "G/Characters/Monsters/Golem/Meshes/SK_Golem.SK_Golem"],
+                                        ["G/Characters/Player/Animations/A_PC_Roll", "G/Characters/Player/Animations/A_PC_Attack_01", "G/Characters/Monsters/Golem/Animations/A_Golem_Slam"])
+        try:
+            check(vt.load_player_mode() and vt.player_mode, "플레이어 모드 시작")
+            check(vt.mesh_list.count() == 2 and vt.anim_list.count() == 2, "플레이어 메시 2 / 애니메이션 2(몬스터 것 제외): %d %d" % (vt.mesh_list.count(), vt.anim_list.count()))
+            check("A_PC_Attack_01" in vt.anim_list.item(0).text(), "이름순 정렬: %s" % vt.anim_list.item(0).text())
+            vt.anim_filter.setText("roll")
+            check([vt.anim_list.item(i).text() for i in range(2) if not vt.anim_list.item(i).isHidden()][0].startswith("A_PC_Roll"), "플레이어 목록도 글자로 거르기")
+            vt.anim_filter.setText("")
+            vt.ck_k_monster.setChecked(True)
+            check(vt.anim_list.count() == 3, "몬스터도 켜면 전체 3개")
+            vt.confirmed, vt.player_mode = [], False
+        finally:
+            vt.index = saved_idx
         # ---------------- 영상 속 동작과 비슷한 순으로 정렬 (뼈 방향 + DTW). 뽑기/읽기는 가짜로 바꿔서 흐름만 확인한다
         import numpy as _np
         import synth as _synth
