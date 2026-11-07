@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory() as d:
         app.processEvents()
         vis = [mw.tabs.tabText(k) for k, p in enumerate(mw.tabs.pages) if p.isVisible()]
         check(len(vis) == 1 and mw.tabs.pages[i].isVisible(), "탭 %d 에서 보이는 화면: %s" % (i, vis))
-    check(mw.tabs.currentIndex() == 7, "모든 탭 순회")
+    check(mw.tabs.currentIndex() == 8, "모든 탭 순회")
     vt = mw.vidfind
     win = mw.tabs.hub.detach(vt, None)
     app.processEvents()
