@@ -1,5 +1,6 @@
 """③ 설정 탭."""
 import copy
+from pathlib import Path
 
 import threading
 
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
                                QSlider, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from ..core import cleanup, remote, vlm
+from ..core import cleanup, remote, sources, vlm
 from ..core import settings as S
 from ..core.obs import ObsRecorder, friendly_error
 
@@ -92,8 +93,18 @@ class SettingsTab(QWidget):
                 w.addItem(name, k)
         self.pol_rec.currentIndexChanged.connect(lambda i: self._set_policy("source_policy_recorded", self.pol_rec))
         self.pol_drop.currentIndexChanged.connect(lambda i: self._set_policy("source_policy_dropped", self.pol_drop))
-        f.addRow("OBS로 녹화한 원본", self.pol_rec)
-        f.addRow("직접 넣은 영상", self.pol_drop)
+        btn_rec = QPushButton("📂 원본 위치 열기")
+        btn_rec.setToolTip("OBS로 녹화한 원본 영상이 있는 폴더를 엽니다 (원본은 '그대로 두기'면 지워지지 않아요)")
+        btn_rec.clicked.connect(lambda: self._open_original_dir("obs"))
+        btn_drop = QPushButton("📂 원본 위치 열기")
+        btn_drop.setToolTip("직접 넣었던 영상이 있는 폴더(가장 최근에 연 폴더)를 엽니다")
+        btn_drop.clicked.connect(lambda: self._open_original_dir("dropped"))
+        self.btn_open_rec, self.btn_open_drop = btn_rec, btn_drop
+        for label, combo, btn in (("OBS로 녹화한 원본", self.pol_rec, btn_rec), ("직접 넣은 영상", self.pol_drop, btn_drop)):
+            row = QHBoxLayout()
+            row.addWidget(combo, 1)
+            row.addWidget(btn)
+            f.addRow(label, row)
         f.addRow("", muted("분석이 끝까지 성공하고 클립이 1개 이상 저장됐을 때만 정리해요. "
                            "취소·오류가 나거나 클립이 0개면 원본은 그대로 남아요.\n"
                            "※ USB·네트워크 드라이브의 파일은 휴지통 없이 바로 지워질 수 있어요."))
@@ -492,6 +503,29 @@ class SettingsTab(QWidget):
         model = vlm.model_of(self.main.s)
         self.main.start_job("모델 내려받기", vlm.pull, (copy.deepcopy(self.main.s), model),
                             on_done=lambda _: self.refresh_vlm_status())
+
+    def original_dir(self, kind):
+        """원본 영상이 있는 폴더. kind: 'obs'(OBS 녹화 폴더) / 'dropped'(직접 넣은 영상: 마지막에 연 폴더). 못 찾으면 ''."""
+        st = self.main.s
+        if kind == "obs" and not (st.get("obs_record_dir") and Path(st["obs_record_dir"]).is_dir()):
+            try:
+                self.main.collect.remember_obs_dir()  # OBS 가 켜져 있으면 녹화 폴더를 물어본다
+            except Exception:
+                pass
+        keys = ["obs_record_dir", "last_dir"] if kind == "obs" else ["last_dir", "obs_record_dir"]
+        for k in keys:
+            d = st.get(k)
+            if d and Path(d).is_dir():
+                return str(d)
+        dirs = sources.candidate_dirs(st)
+        return dirs[0] if dirs else ""
+
+    def _open_original_dir(self, kind):
+        d = self.original_dir(kind)
+        if not d:
+            QMessageBox.information(self, "원본 위치", "원본 폴더를 아직 알 수 없어요.\n[수집하기] 탭에서 OBS로 녹화하거나 영상을 한 번 열면 알게 돼요.")
+            return
+        open_path(d)
 
     def _set_policy(self, key, combo):
         if self._loading:
