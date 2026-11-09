@@ -287,6 +287,21 @@ def main():
         check(vt._picked_anims() == ["X/Player/Animations/A_PC_HeavyAttack"], "가려진 것은 선택에서 빠짐: %s" % vt._picked_anims())
         vt.anim_filter.setText("player,attack")  # 쉼표도 모두 포함
         check(vt._picked_anims() == [] or vt._picked_anims() == ["X/Player/Animations/A_PC_HeavyAttack"], "쉼표 검색")
+        # 목록에서 뷰포트로 끌어다 놓기: 메시/애니메이션 목록이 끌 수 있고, 놓으면 영상찾기가 직접 열며 탭은 옮기지 않는다
+        check(vt.mesh_list.drag_kind == "mesh" and vt.anim_list.drag_kind == "anim", "목록 종류 표시")
+        opened = []
+        vt.open_mesh_in_viewport = lambda m: opened.append(("mesh", m))
+        vt.open_in_viewport = lambda a=None: opened.append(("anim", list(a) if a is not None else None))
+        tab_before = mw.tabs.currentIndex() if hasattr(mw, "tabs") else None
+        mw._asset_dropped_from("vidfind", "mesh", ["X/SK_A.uasset", "X/SK_B.uasset"])
+        mw._asset_dropped_from("vidfind", "anim", ["X/A_1.uasset", "X/A_2.uasset"])
+        check(opened == [("mesh", "X/SK_A.uasset"), ("anim", ["X/A_1.uasset", "X/A_2.uasset"])], "영상찾기에서 놓은 것은 영상찾기가 연다: %s" % opened)
+        check((mw.tabs.currentIndex() if hasattr(mw, "tabs") else None) == tab_before, "열어도 탭은 그대로")
+        calls_c = []
+        mw.extract_for_char = lambda paths, kind: calls_c.append((list(paths), kind))
+        mw._asset_dropped_from("char", "anim", ["G/A.uasset"])
+        check(calls_c == [(["G/A.uasset"], "anim")], "다른 출처는 기존 방식")
+        del mw.extract_for_char, vt.open_mesh_in_viewport, vt.open_in_viewport
         vis = [i for i in range(3) if not vt.anim_list.item(i).isHidden()]
         check(vis == [2], "쉼표: player 와 attack 둘 다 든 것만: %s" % vis)
         vt.anim_filter.setText("zzz")

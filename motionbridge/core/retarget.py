@@ -63,6 +63,8 @@ class RetargetSettings:
     tgt_fwd: str = "auto"
     # 본별 회전 보정: 타깃 관절 -> (x,y,z) 도. 표준 프레임 축(X=좌우, Y=위, Z=앞) 기준, 하위 본 전체에 적용.
     rot_offsets: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
+    # 소스와 타깃이 같은 스켈레톤(본 이름·계층·모양이 같음)이고 사람 모양이 아니면 사람 본 매핑·좌표축 추정을 거치지 않고 본 이름대로 그대로 적용한다 (core/rigmatch)
+    same_rig: bool = True
 
 
 @dataclass
@@ -171,10 +173,16 @@ def retarget(
     chains: Optional[Sequence[IKChain]] = None,
     src_slots: Optional[Dict[str, int]] = None,
     tgt_slots: Optional[Dict[str, int]] = None,
+    rig=None,
 ) -> RetargetResult:
+    """rig: core.rigmatch.RigMatch. 주면 '같은 스켈레톤' 모드 — pairs 는 rig.pairs 를 쓰고, 소스→타깃 좌표축·스케일은 rig 에서 가져오며
+    본 방향 보정은 하지 않고 발 IK 도 쓰지 않는다 (사람이 아닌 캐릭터에서 사람 기준 추정이 엉뚱하게 돌아가는 것을 막는다)."""
     st = st or RetargetSettings()
-    chains = list(chains or [])
+    chains = [] if rig is not None else list(chains or [])
     warnings: List[str] = []
+    if rig is not None:
+        pairs = list(rig.pairs)
+        warnings.append("ℹ " + rig.describe())
     T = sanim.n_frames
     Jt = tgt.n
     fps = float(sanim.fps)
@@ -192,12 +200,17 @@ def retarget(
     wr_s, wp_s = fk(src, sanim.rot, sanim.pos)
     bwr_s, bwp_s = src.bind_world()
     bwr_t, bwp_t = tgt.bind_world()
-    Fs, desc_s = _resolve_frame(src, st.src_up, st.src_fwd, src_slots)
-    if st.src_up == "auto" and st.src_fwd == "auto" and src_slots:
-        Fs, desc_s, note = refine_frame_with_anim(src, sanim, src_slots, Fs, desc_s)
-        if note:
-            warnings.append(note)
-    Ft, desc_t = _resolve_frame(tgt, st.tgt_up, st.tgt_fwd, tgt_slots)
+    if rig is not None:
+        # 같은 스켈레톤: 타깃은 파일이 가진 그대로 쓰고(보통 Y-up), 소스는 겹쳐 본 회전으로 타깃 좌표축에 맞춘다
+        Ft, desc_t = _resolve_frame(tgt, st.tgt_up, st.tgt_fwd, None)
+        Fs, desc_s = Q.mul(Ft, rig.q), "같은 스켈레톤(타깃 좌표축에 맞춤)"
+    else:
+        Fs, desc_s = _resolve_frame(src, st.src_up, st.src_fwd, src_slots)
+        if st.src_up == "auto" and st.src_fwd == "auto" and src_slots:
+            Fs, desc_s, note = refine_frame_with_anim(src, sanim, src_slots, Fs, desc_s)
+            if note:
+                warnings.append(note)
+        Ft, desc_t = _resolve_frame(tgt, st.tgt_up, st.tgt_fwd, tgt_slots)
     FtI = Q.conj(Ft)
 
     rs = Q.mul(Fs, wr_s)
@@ -247,6 +260,9 @@ def retarget(
     corr: Dict[int, np.ndarray] = {}
     primary: Dict[int, int] = {}
     for t in mapped_t:
+        if rig is not None:       # 같은 바인드 포즈라 보정이 필요 없다
+            corr[t] = Q.identity(())
+            continue
         d = primary_child(t)
         if d is not None:
             dt = bpt[d] - bpt[t]
@@ -272,7 +288,9 @@ def retarget(
         posdriven.add(com)
 
     # ---- 스케일
-    if st.auto_scale:
+    if rig is not None:
+        k = rig.scale * st.scale_mult if st.auto_scale else st.manual_scale
+    elif st.auto_scale:
         ground_s = min(bps[pair_of[t], 1] for t in mapped_t)
         ground_t = min(bpt[t, 1] for t in mapped_t)
         hs = bps[pair_of[com], 1] - ground_s

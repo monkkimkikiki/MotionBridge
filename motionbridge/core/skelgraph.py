@@ -123,6 +123,7 @@ class Group:
     player: bool = False         # 플레이어블 캐릭터인가 (직접 표시했거나, 이름/경로로 추정)
     player_why: str = ""         # 그렇게 본 이유 (화면 툴팁에 보여 준다)
     player_manual: Optional[bool] = None   # 사람이 직접 정했으면 True/False, 자동 판정이면 None
+    player_src: str = ""         # 근거: "manual"(직접 표시) / "data"(게임 데이터로 확인) / "name"(이름·폴더 추정) / ""(플레이어 아님)
 
 
 # 플레이어 쪽 / 몬스터 쪽 이름 조각. 폴더·파일 이름을 '_ . - /' 와 숫자로 쪼갠 토막이 아래 낱말과 같을 때만 센다 (예: 'Player_Hero' 의 player, hero).
@@ -183,12 +184,14 @@ def guess_group_name(g: Group) -> str:
     return _clean_name(os.path.splitext(base)[0]) or g.skeleton
 
 
-def build_groups(records: Iterable[Rec], query: str = "", touch=None, marks: Optional[Dict[str, bool]] = None) -> List[Group]:
+def build_groups(records: Iterable[Rec], query: str = "", touch=None, marks: Optional[Dict[str, bool]] = None,
+                 proofs: Optional[Dict[str, str]] = None) -> List[Group]:
     """records -> 스켈레톤별 그룹. query(쉼표 = 모두 포함, 대소문자 무시)가 있으면 그 말이 이름/경로에 든 그룹만.
 
     touch: 이번 검색에 걸린 에셋 경로 집합. 주면 '걸린 파일이 하나라도 든 그룹'도 보인다 (검색어가 애니메이션 이름에만 있어도 그 캐릭터가 나오게).
     marks: 스켈레톤 키 -> True/False. 사람이 직접 '플레이어블이다/아니다' 로 정한 것 (자동 추정보다 우선).
-    플레이어블 캐릭터는 항상 맨 위로 올린다.
+    proofs: 스켈레톤 키 -> 이유. 게임 데이터(기본 게임모드의 플레이어 폰 등)에서 플레이어블이라고 확인된 것. 이름 추정보다 우선.
+    플레이어블 캐릭터는 항상 맨 위로 올린다 (직접 표시 / 데이터로 확인 → 이름으로 추정 순).
     """
     groups: Dict[str, Group] = {}
     by_key: Dict[str, Rec] = {}
@@ -239,15 +242,20 @@ def build_groups(records: Iterable[Rec], query: str = "", touch=None, marks: Opt
         if g.meshes or g.anims or g.skeleton_assets:
             out.append(g)
     marks = marks or {}
+    proofs = proofs or {}
     for g in out:
         m = marks.get(g.skeleton)
-        if m is None:
-            g.player, g.player_why = player_guess(g)
-            g.player_manual = None
-        else:
+        if m is not None:
             g.player, g.player_manual = bool(m), bool(m)
+            g.player_src = "manual" if m else ""
             g.player_why = "직접 표시함" if m else "직접 '플레이어블 아님' 으로 정함"
-    out.sort(key=lambda g: (-int(g.player), -(len(g.meshes) > 0), -len(g.anims), g.name.lower()))
+        elif g.skeleton in proofs:
+            g.player, g.player_manual, g.player_src, g.player_why = True, None, "data", proofs[g.skeleton]
+        else:
+            g.player, g.player_why = player_guess(g)
+            g.player_manual, g.player_src = None, ("name" if g.player else "")
+    rank = {"manual": 0, "data": 0, "name": 1, "": 2}
+    out.sort(key=lambda g: (rank.get(g.player_src, 2), -(len(g.meshes) > 0), -len(g.anims), g.name.lower()))
     return out
 
 
@@ -269,6 +277,73 @@ def summarize(groups: List[Group]) -> str:
     return "캐릭터 %d명%s · 재생 가능한 애니메이션 %d개%s" % (len(groups), (" (🎮 플레이어블 %d명)" % n_p) if n_p else "", n_a, (" (재생 불가라 뺀 것 %d개)" % n_r) if n_r else "")
 
 
+def _pkg_key(path: str) -> str:
+    """'/Game/A/BP_X.BP_X_C' 와 'Proj/Content/A/BP_X.uasset' 를 같은 패키지 키로."""
+    return norm_key(path)
+
+
+def player_proofs(pawns: List[dict], configs: List[dict], records: Iterable[Rec]) -> Dict[str, str]:
+    """게임 데이터에서 플레이어가 조종하는 폰을 찾아, 그 폰이 쓰는 스켈레톤을 {스켈레톤 키: 이유} 로 돌려준다.
+
+    근거(강한 것부터):
+      1. 게임모드 블루프린트의 DefaultPawnClass 가 가리키는 폰 (게임 설정의 GlobalDefaultGameMode 가 있으면 그 게임모드의 것만)
+         - 그 폰의 부모 클래스, 그 폰을 물려받은 자식 폰의 메시도 포함 (기본 폰의 변형까지)
+      2. AutoPossessPlayer(플레이어 0 이 자동으로 조종) 로 설정된 폰
+      3. 카메라/스프링암 컴포넌트가 달린 폰 (조종하는 캐릭터는 카메라가 붙는다)
+    폰이 쓰는 스켈레탈 메시 -> 검사 기록(records) 의 메시가 연결된 스켈레톤으로 바꾼다. 검사 기록에 없는 메시는 건너뛴다.
+    """
+    by_key = {_pkg_key(p.get("path", "")): p for p in pawns if p.get("path")}
+    mesh_skel: Dict[str, str] = {}
+    for r in records:
+        if r.kind == "mesh" and r.skel_key:
+            mesh_skel[r.key] = r.skel_key
+
+    def chain_up(node: dict) -> List[dict]:
+        out, seen, cur = [], set(), node
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            out.append(cur)
+            cur = by_key.get(_pkg_key(cur.get("parent", ""))) if cur.get("parent") else None
+        return out
+
+    def family(node: dict) -> List[dict]:
+        """이 폰 + 부모들 + 이 폰을 물려받은 자식들."""
+        fam = {id(n): n for n in chain_up(node)}
+        for other in pawns:
+            if any(a is node or _pkg_key(a.get("path", "")) == _pkg_key(node.get("path", "")) for a in chain_up(other)):
+                fam[id(other)] = other
+        return list(fam.values())
+
+    gm_keys = set()
+    for c in configs:
+        if str(c.get("key", "")).lower() == "globaldefaultgamemode" and c.get("value"):
+            gm_keys.add(_pkg_key(c["value"]))
+
+    out: Dict[str, str] = {}
+
+    def add(nodes: List[dict], why: str, gm: str = "") -> None:
+        for n in nodes:
+            for m in n.get("meshes", []):
+                sk = mesh_skel.get(norm_key(m))
+                if sk and sk not in out:
+                    out[sk] = why.format(pawn=os.path.basename((n.get("path", "") or "").split(".")[0]), gm=gm)
+
+    # 1) 기본 폰
+    gms = [n for n in pawns if n.get("default_pawn")]
+    if gm_keys:
+        gms_cfg = [n for n in gms if _pkg_key(n.get("path", "")) in gm_keys or any(_pkg_key(a.get("path", "")) in gm_keys for a in chain_up(n))]
+        gms = gms_cfg or gms
+    for gm in gms:
+        node = by_key.get(_pkg_key(gm["default_pawn"]))
+        if node is not None:
+            add(family(node), "게임 데이터 확인: 게임모드({gm})의 기본 플레이어 폰 {pawn} 이(가) 쓰는 메시", os.path.basename(gm.get("path", "").split(".")[0]))
+    # 2) 자동 빙의
+    add([n for n in pawns if "player" in str(n.get("auto_possess", "")).lower()], "게임 데이터 확인: AutoPossessPlayer 로 플레이어가 조종하는 폰 {pawn} 이(가) 쓰는 메시")
+    # 3) 카메라
+    add([n for n in pawns if n.get("camera") and n.get("meshes")], "게임 데이터 확인: 카메라가 달린 폰 {pawn} 이(가) 쓰는 메시 (조종하는 캐릭터로 추정)")
+    return out
+
+
 # ---------------------------------------------------------------- 캐시
 class SkelIndex:
     """검사한 기록을 모아 두는 곳 (게임 폴더마다 하나). 한 번 검사한 파일은 다시 읽지 않는다."""
@@ -280,6 +355,7 @@ class SkelIndex:
         self.seen: set = set()                 # 검사를 마친 에셋 경로 (알아볼 개체가 없던 파일 포함)
         self.rechecked: set = set()            # 스켈레톤 연결이 비어 있어서 지금 도우미로 다시 읽어 본 파일 (한 번만 다시 읽는다)
         self.marks: Dict[str, bool] = {}       # 스켈레톤 키 -> 사람이 직접 정한 '플레이어블 여부' (검사 기록을 지워도 남긴다)
+        self.proofs: Dict[str, str] = {}       # 스켈레톤 키 -> 게임 데이터로 플레이어블임을 확인한 이유 (검사 기록을 지우면 같이 지움)
 
     def add(self, r: Rec) -> None:
         if r.kind == "unreadable":
@@ -322,7 +398,7 @@ class SkelIndex:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump({"v": 1, "recs": [r.to_json() for r in self.all()], "unreadable": self.unreadable, "seen": sorted(self.seen),
-                       "rechecked": sorted(self.rechecked), "marks": self.marks}, f, ensure_ascii=False)
+                       "rechecked": sorted(self.rechecked), "marks": self.marks, "proofs": self.proofs}, f, ensure_ascii=False)
 
     @staticmethod
     def load(path: str) -> "SkelIndex":
@@ -336,6 +412,7 @@ class SkelIndex:
             idx.seen.update(d.get("seen", []))
             idx.rechecked.update(d.get("rechecked", []))
             idx.marks.update({str(k): bool(v) for k, v in (d.get("marks") or {}).items()})
+            idx.proofs.update({str(k): str(v) for k, v in (d.get("proofs") or {}).items()})
         except (OSError, ValueError):
             pass
         return idx

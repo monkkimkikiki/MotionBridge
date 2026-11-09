@@ -183,5 +183,32 @@ with tempfile.TemporaryDirectory() as _d:
     _ix.save()
     check(S.SkelIndex.load(_ix.path).marks == {S.norm_key(SK_EN): True}, "플레이어블 표시 저장/불러오기")
 
+# ---- 게임 데이터로 플레이어 찾기 (기본 게임모드 -> 기본 폰 -> 메시 -> 스켈레톤)
+SKP = "/Game/Chars/Zed/SKEL_Zed.SKEL_Zed"
+SKB = "/Game/Chars/Blob/SKEL_Blob.SKEL_Blob"
+SKV = "/Game/Chars/ZedAlt/SKEL_ZedAlt.SKEL_ZedAlt"
+pr_recs = [R("P/Content/Chars/Zed/SK_Zed.uasset", "mesh", "SK_Zed", SKP, bones=70), R("P/Content/Chars/Blob/SK_Blob.uasset", "mesh", "SK_Blob", SKB, bones=40),
+           R("P/Content/Chars/ZedAlt/SK_ZedAlt.uasset", "mesh", "SK_ZedAlt", SKV, bones=70)]
+pawns = [{"path": "P/Content/Core/BP_GM.uasset", "parent": "", "meshes": [], "default_pawn": "/Game/Core/BP_Base.BP_Base_C"},
+         {"path": "P/Content/Core/BP_Base.uasset", "parent": "", "meshes": ["/Game/Chars/Zed/SK_Zed.SK_Zed"]},
+         {"path": "P/Content/Core/BP_Alt.uasset", "parent": "/Game/Core/BP_Base.BP_Base_C", "meshes": ["/Game/Chars/ZedAlt/SK_ZedAlt.SK_ZedAlt"]},
+         {"path": "P/Content/Mon/BP_Blob.uasset", "parent": "", "meshes": ["/Game/Chars/Blob/SK_Blob.SK_Blob"]}]
+pf = S.player_proofs(pawns, [{"key": "GlobalDefaultGameMode", "value": "/Game/Core/BP_GM.BP_GM_C"}], pr_recs)
+check(S.norm_key(SKP) in pf and S.norm_key(SKV) in pf and S.norm_key(SKB) not in pf, "기본 폰(과 그 자식 폰)의 스켈레톤만 플레이어: %s" % list(pf))
+check("게임모드" in pf[S.norm_key(SKP)], "이유에 게임모드: " + pf[S.norm_key(SKP)])
+pf2 = S.player_proofs([dict(p, camera=(p["path"].endswith("BP_Blob.uasset"))) for p in pawns if "GM" not in p["path"]], [], pr_recs)
+check(S.norm_key(SKB) in pf2 and "카메라" in pf2[S.norm_key(SKB)], "게임모드를 못 찾으면 카메라 단서로 (약한 근거 표시)")
+pf3 = S.player_proofs([{"path": "P/Content/X/BP_P.uasset", "parent": "", "meshes": ["/Game/Chars/Zed/SK_Zed.SK_Zed"], "auto_possess": "EAutoReceiveInput::Player0"}], [], pr_recs)
+check(S.norm_key(SKP) in pf3 and "AutoPossess" in pf3[S.norm_key(SKP)], "AutoPossessPlayer 단서")
+gg = {g.skeleton: g for g in S.build_groups(pr_recs, "", None, None, pf)}
+check(gg[S.norm_key(SKP)].player_src == "data" and not gg[S.norm_key(SKB)].player, "데이터 근거가 그룹에 반영")
+mk = {g.skeleton: g for g in S.build_groups(pr_recs, "", None, {S.norm_key(SKP): False}, pf)}
+check(not mk[S.norm_key(SKP)].player, "직접 해제가 데이터 근거보다 우선")
+with tempfile.TemporaryDirectory() as _d:
+    _ix = S.SkelIndex(os.path.join(_d, "i.json"))
+    _ix.proofs = dict(pf)
+    _ix.save()
+    check(S.SkelIndex.load(_ix.path).proofs == pf, "확인 결과 저장/불러오기")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

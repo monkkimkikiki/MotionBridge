@@ -43,6 +43,7 @@ class Viewport(QWidget):
     key_action = Signal(str)  # 뷰포트에 포커스가 있을 때의 키: prev next first last play
     placement_dragged = Signal(float, float, float)  # 드래그로 바뀐 애니메이션 배치 (dx, dz, dyaw°)
     asset_dropped = Signal(str, list)  # 에셋 목록에서 끌어다 놓음: (종류 "anim"|"mesh", 게임 안 경로들)
+    asset_dropped_from = Signal(str, str, list)  # 출처를 밝힌 채 끌어다 놓음 (예: "vidfind"): (출처, 종류, 경로들) — 출처가 있으면 asset_dropped 는 보내지 않는다
     bone_picked = Signal(int)  # 본 편집 모드에서 뷰포트의 본을 클릭함: 타깃 본 번호
     bone_dragged = Signal(int, object)  # 본을 끌어 돌림: (타깃 본 번호, 화면 기준 회전 쿼터니언 (w,x,y,z) — 표준 프레임)
     bone_drag_started = Signal()
@@ -93,11 +94,15 @@ class Viewport(QWidget):
         try:
             d = json.loads(bytes(md.data(ASSET_MIME)).decode("utf-8"))
             kind, paths = str(d.get("kind", "")), [str(x) for x in d.get("paths", [])]
+            origin = str(d.get("origin", ""))
         except (ValueError, AttributeError):
             return
         if kind in ("anim", "mesh") and paths:
             e.acceptProposedAction()
-            self.asset_dropped.emit(kind, paths)
+            if origin:
+                self.asset_dropped_from.emit(origin, kind, paths)
+            else:
+                self.asset_dropped.emit(kind, paths)
 
     # --------------------------------------------------------------- 데이터
     def set_data(self, pr, vd: Optional[ViewData], reframe: bool = False) -> None:

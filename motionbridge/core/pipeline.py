@@ -15,6 +15,7 @@ from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
 from .quality import Issue, analyze
+from .rigmatch import RigMatch, explain_rig, is_humanoid
 from .retarget import IKChain, RetargetResult, RetargetSettings, default_chains, retarget
 
 
@@ -54,6 +55,8 @@ class Project:
         self.log: List[str] = []
         self.edit_info: Optional[animops.EditInfo] = None
         self.edits: Dict[int, frameedit.FrameEdit] = {}  # 클립별 프레임 조각 편집(영상 편집기식)
+        self._rig_cache: Tuple[int, int, Optional[RigMatch], str] = (0, 0, None, "")
+        self.rig_note = ""   # 같은 스켈레톤으로 못 알아본 이유 (이름은 거의 같은데 모양이 안 맞을 때 화면에 알린다)
 
     # ------------------------------------------------------------------ 불러오기
     def load_source(self, path: str) -> Model:
@@ -135,10 +138,28 @@ class Project:
         if self.tgt:
             self.tgt_slots = auto_map(self.tgt.skeleton)
 
+    def rig(self) -> Optional[RigMatch]:
+        """소스와 타깃이 같은 스켈레톤(본 이름·계층·모양이 같음)이고 사람 모양이 아니면 그 정보 (몬스터 등을 본 이름대로 그대로 적용). 설정에서 끄면 None."""
+        if not (self.settings.same_rig and self.src and self.tgt):
+            return None
+        if is_humanoid(self.src_slots) and is_humanoid(self.tgt_slots):
+            return None      # 양쪽 다 사람이면 사람 리타깃(발 IK 포함)을 쓴다. 같은 이름 규칙이어도 프로필/매핑을 바꿔 쓸 수 있게
+        a, b, m, note = self._rig_cache
+        if a != id(self.src.skeleton) or b != id(self.tgt.skeleton):
+            m, note = explain_rig(self.src.skeleton, self.tgt.skeleton)
+            self._rig_cache = (id(self.src.skeleton), id(self.tgt.skeleton), m, note)
+        self.rig_note = note if (m is None and "본 이름은 같지만" in note) else ""
+        return m
+
     def pairs(self) -> List[Tuple[int, int]]:
+        r = self.rig()
+        if r is not None:
+            return list(r.pairs)
         return pairs_from_slots(self.src_slots, self.tgt_slots)
 
     def chains(self) -> List[IKChain]:
+        if self.rig() is not None:
+            return []
         out = []
         for c in default_chains(self.src_slots, self.tgt_slots):
             side = "L" if c.label.startswith("왼") else "R"
@@ -182,7 +203,7 @@ class Project:
             raise ValueError("소스 모션과 타깃 모델을 먼저 불러오세요.")
         if clip is not None:
             self.clip = clip
-        res = retarget(self.src.skeleton, self.anim, self.tgt.skeleton, self.pairs(), self.settings, self.chains(), self.src_slots, self.tgt_slots)
+        res = retarget(self.src.skeleton, self.anim, self.tgt.skeleton, self.pairs(), self.settings, self.chains(), self.src_slots, self.tgt_slots, rig=self.rig())
         self.result = res
         self.issues = analyze(self.tgt.skeleton, res, self.settings) if analyze_quality else []
         return res

@@ -20,7 +20,8 @@ from ..core.skelgraph import Group, Rec
 from .viewer import ASSET_MIME
 
 ROLE = Qt.ItemDataRole.UserRole
-PLAYER_MARK = "🎮 [플레이어블]  "      # 플레이어블 캐릭터 이름 앞에 붙는 표시 (목록 맨 위에 모아 보여 준다)
+PLAYER_MARK = "🎮 [플레이어블]  "      # 플레이어블 캐릭터(직접 표시 / 게임 데이터로 확인) 이름 앞에 붙는 표시 (목록 맨 위에 모아 보여 준다)
+PLAYER_GUESS = "🎮? [플레이어블 추정]  "  # 이름·폴더만 보고 추정한 것 (게임 데이터로 확인하지 못함)
 MAX_FIRST = 4000        # 한 번의 검색에서 파일 안을 열어 볼 최대 개수 (넘으면 알리고 앞부분만)
 ANIM_ALL = r"(?i)(anim|/A[SM]?_[^/]*$)"   # 애니메이션 후보 (폴더 이름에 anim 이 없어도 A_/AS_/AM_ 이름은 포함)
 RIG_ALL = r"(?i)(anim|/A[SM]?_[^/]*$|/SKM?_[^/]*$|skeleton|skeletal|/SKEL_|character|/char[a-z]*/|mesh)"   # 자동 찾기: 애니메이션 + 메쉬/스켈레톤 후보
@@ -123,6 +124,11 @@ class CharAssetPanel(QWidget):
         h.addWidget(self.btn_send)
         v.addLayout(h)
         h = QHBoxLayout()
+        self.btn_find_player = QPushButton("🎮  플레이어 자동 확인")
+        self.btn_find_player.setToolTip("게임 데이터에서 플레이어가 조종하는 캐릭터를 직접 찾습니다: 게임 설정의 기본 게임모드 → 기본 폰 블루프린트가 쓰는 메시 → 그 스켈레톤. "
+                                        "이름이 아니라 데이터로 확인하며, 확인된 캐릭터는 🎮 로 표시되어 맨 위로 올라갑니다.")
+        self.btn_find_player.clicked.connect(lambda *_a: self.find_players())
+        h.addWidget(self.btn_find_player)
         self.btn_player = QPushButton("🎮  플레이어블 표시/해제")
         self.btn_player.setToolTip("고른 캐릭터를 '플레이어블 캐릭터' 로 직접 표시하거나(맨 위로 올라갑니다) 해제합니다. 이름으로 잘못 짐작한 것을 바로잡을 때 쓰세요. 한 번 정하면 기억합니다.")
         self.btn_player.clicked.connect(lambda *_a: self.toggle_player())
@@ -166,6 +172,7 @@ class CharAssetPanel(QWidget):
         idx.unreadable.clear()
         idx.seen.clear()
         idx.rechecked.clear()
+        idx.proofs.clear()
         idx.save()
         self.groups = []
         self.tree.clear()
@@ -215,7 +222,11 @@ class CharAssetPanel(QWidget):
             self._run_inspect(w, a, idx, todo)
             return len(todo)
 
-        self.win.run_async(job, lambda n: self._show(idx, self.query.text().strip(), None, extra=" (새로 읽은 파일 %d개)" % n), "캐릭터 자동 찾는 중 (파일 안 읽기)", cancellable=True)
+        def done(n):
+            self._show(idx, self.query.text().strip(), None, extra=" (새로 읽은 파일 %d개)" % n)
+            self.find_players(quiet=True)     # 캐릭터 목록이 만들어졌으면 이어서 게임 데이터로 플레이어도 확인한다
+
+        self.win.run_async(job, done, "캐릭터 자동 찾는 중 (파일 안 읽기)", cancellable=True)
 
     def _run_inspect(self, w, a, idx: skelgraph.SkelIndex, todo: List[str]) -> None:
         if not todo:
@@ -241,7 +252,7 @@ class CharAssetPanel(QWidget):
 
     # ------------------------------------------------------------------ 보이기
     def _show(self, idx: skelgraph.SkelIndex, q: str, touch: Optional[Set[str]], extra: str = "") -> None:
-        groups = skelgraph.build_groups(idx.all(), q, touch, idx.marks)
+        groups = skelgraph.build_groups(idx.all(), q, touch, idx.marks, idx.proofs)
         self.groups = groups
         self.tree.clear()
         for g in groups:
@@ -259,11 +270,12 @@ class CharAssetPanel(QWidget):
         self.status.setText(msg)
 
     def _group_item(self, g: Group) -> QTreeWidgetItem:
-        top = QTreeWidgetItem(["%s%s   (메쉬 %d · 애니메이션 %d)" % (PLAYER_MARK if g.player else "", g.name, len(g.meshes), len(g.anims))])
+        top = QTreeWidgetItem(["%s%s   (메쉬 %d · 애니메이션 %d)" % ((PLAYER_GUESS if g.player_src == "name" else PLAYER_MARK) if g.player else "", g.name, len(g.meshes), len(g.anims))])
         top.setData(0, ROLE, ("group", g.skeleton))
         tip = "스켈레톤: " + (g.skeleton_path or g.skeleton)
         if g.player:
-            tip = "🎮 플레이어블 캐릭터 — %s\n(아니면 [🎮 플레이어블 표시/해제] 로 바로잡을 수 있습니다)\n" % g.player_why + tip
+            tip = ("🎮 플레이어블 캐릭터 — %s\n" if g.player_src != "name" else "🎮? 이름·폴더만 보고 추정 — %s (게임 데이터로 확인하지 못함)\n") % g.player_why \
+                + "(아니면 [🎮 플레이어블 표시/해제] 로 바로잡을 수 있습니다)\n" + tip
         elif g.player_why:
             tip += "\n플레이어블 아님 — " + g.player_why
         top.setToolTip(0, tip)
@@ -296,6 +308,39 @@ class CharAssetPanel(QWidget):
                 rj.addChild(it)
             top.addChild(rj)
         return top
+
+    def find_players(self, quiet: bool = False) -> None:
+        """게임 데이터(기본 게임모드 → 기본 폰 → 폰이 쓰는 메시 → 스켈레톤)로 플레이어블 캐릭터를 확인한다."""
+        a = self.win._extract_args()
+        if a is None:
+            return
+        idx = self._index()
+        if not idx.recs:
+            if not quiet:
+                self.status.setText("먼저 [자동으로 캐릭터 찾기] 로 캐릭터 목록을 만든 뒤 눌러 주세요 (폰이 쓰는 메시를 캐릭터에 연결하려면 검사 기록이 필요합니다).")
+            return
+
+        def job(w):
+            try:
+                info = extractor.find_players(*a)
+            except Exception:  # noqa: BLE001 - 자동으로 이어서 돌릴 때는 실패해도 캐릭터 목록은 그대로 둔다
+                if not quiet:
+                    raise
+                return None, None
+            return info, skelgraph.player_proofs(info.get("pawns", []), info.get("configs", []), idx.all())
+
+        def done(res):
+            info, proofs = res
+            if info is None:
+                return
+            idx.proofs = dict(proofs)
+            idx.save()
+            n_pawn, n_cfg = len(info.get("pawns", [])), len(info.get("configs", []))
+            note = " (플레이어 확인: 폰 %d개·설정 %d개를 읽음 → %s)" % (n_pawn, n_cfg, ("캐릭터 %d명을 플레이어블로 확인" % len(proofs)) if proofs else
+                                                              "데이터로는 플레이어 폰을 찾지 못함 — 이름 추정 또는 [🎮 플레이어블 표시/해제] 로 직접 정해 주세요")
+            self._show(idx, self.query.text().strip(), None, extra=note)
+
+        self.win.run_async(job, done, "플레이어 캐릭터 찾는 중 (게임 데이터 읽기)", cancellable=True)
 
     def toggle_player(self) -> None:
         """고른 캐릭터를 플레이어블로 표시/해제 (자동 추정을 사람이 바로잡는다). 여러 개를 골랐으면 첫 캐릭터 기준으로 한꺼번에 바꾼다."""

@@ -145,6 +145,18 @@ def inspect_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: O
     return recs, seen
 
 
+def find_players(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], on_event=None, filter_regex: Optional[str] = None) -> dict:
+    """게임 데이터에서 '플레이어가 조종하는 폰' 단서를 읽는다 (게임 설정 .ini 의 기본 게임모드, 게임모드의 DefaultPawnClass, 폰이 쓰는 메시/카메라/AutoPossess).
+
+    돌려주는 값: {"configs": [{file,key,value}], "pawns": [{path,name,parent,meshes,anim_classes,camera,auto_possess,default_pawn,controller}]}
+    """
+    args = ["players"] + _base_args(game, ue, aes, usmap)
+    if filter_regex:
+        args += ["--filter", filter_regex]
+    evs = run_helper(helper, args, on_event)
+    return {"configs": [e for e in evs if e.get("type") == "config"], "pawns": [e for e in evs if e.get("type") == "pawn"]}
+
+
 def _export_events(helper, game, ue, aes, usmap, paths, out_dir, on_event, kind, mesh_format, textures) -> List[dict]:
     if kind not in ("anim", "mesh"):
         raise ExtractError("알 수 없는 종류: " + kind)

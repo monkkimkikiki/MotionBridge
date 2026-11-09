@@ -126,26 +126,42 @@ def main():
         pn.query.setText("")
         pn._show(pidx, "", None)
         t0, t1 = pn.tree.topLevelItem(0).text(0), pn.tree.topLevelItem(1).text(0)
-        check(t0.startswith(C.PLAYER_MARK) and "Hero" in t0 and not t1.startswith(C.PLAYER_MARK), "플레이어블은 아이콘이 붙고 맨 위(애니가 적어도): %s / %s" % (t0, t1))
-        check("플레이어블" in pn.tree.topLevelItem(0).tip, "툴팁에 이유")
+        check(t0.startswith(C.PLAYER_GUESS) and "Hero" in t0 and not t1.startswith(("🎮")), "이름으로 추정한 플레이어블은 '추정' 아이콘 + 맨 위(애니가 적어도): %s / %s" % (t0, t1))
+        check("추정" in pn.tree.topLevelItem(0).tip, "툴팁에 이유")
         # 몬스터를 직접 플레이어블로 표시
         pn.tree.setCurrentItem(pn.tree.topLevelItem(1))
         pn.toggle_player()
         tt = [pn.tree.topLevelItem(i).text(0) for i in range(pn.tree.topLevelItemCount())]
-        check(all(x.startswith(C.PLAYER_MARK) for x in tt), "직접 표시: 둘 다 플레이어블 %s" % tt)
+        check(tt[0].startswith(C.PLAYER_MARK) and "Ogre" in tt[0] and tt[1].startswith(C.PLAYER_GUESS), "직접 표시한 것이 추정보다 위: %s" % tt)
         check(S.norm_key(SKM) in pidx.marks and pidx.marks[S.norm_key(SKM)] is True, "표시를 색인에 저장")
         # 하위 항목(메쉬)을 골라도 해제된다
         sub = pn.tree.topLevelItem(0).child(0).child(0)
         pn.tree.setCurrentItem(sub)
         pn.toggle_player()
         tt = [pn.tree.topLevelItem(i).text(0) for i in range(pn.tree.topLevelItemCount())]
-        check(sum(1 for x in tt if x.startswith(C.PLAYER_MARK)) == 1, "하위 항목을 골라도 그 캐릭터가 해제: %s" % tt)
+        check(sum(1 for x in tt if x.startswith("🎮")) == 1 and "Hero" in tt[0], "하위 항목을 골라도 그 캐릭터가 해제: %s" % tt)
         pn.tree.clear()
         pn.toggle_player()
         check("먼저 고르세요" in pn.status.text(), "선택 없으면 안내")
-        # 검사 기록을 지워도 직접 정한 표시는 남는다
+        # 게임 데이터로 플레이어 확인: 기본 게임모드 -> 기본 폰 -> 메시 -> 스켈레톤. 이름이 전혀 달라도 찾는다
+        pidx.marks.clear()
+        pidx.add(S.Rec("Proj/Content/Characters/Monster/SK_Blob.uasset", "mesh", "SK_Blob", "/Game/Characters/Monster/SKEL_Blob.SKEL_Blob", bones=40))
+        pidx.add(S.Rec("Proj/Content/Chars/Zed/SK_Zed.uasset", "mesh", "SK_Zed", "/Game/Chars/Zed/SKEL_Zed.SKEL_Zed", bones=70))
+        C.extractor.find_players = lambda helper, game, ue, aes, usmap, on_event=None, filter_regex=None: {
+            "configs": [{"file": "Config/DefaultEngine.ini", "key": "GlobalDefaultGameMode", "value": "/Game/Core/BP_GM.BP_GM_C"}],
+            "pawns": [{"path": "Proj/Content/Core/BP_GM.uasset", "name": "BP_GM_C", "parent": "", "meshes": [], "default_pawn": "/Game/Core/BP_Hero.BP_Hero_C"},
+                      {"path": "Proj/Content/Core/BP_Hero.uasset", "name": "BP_Hero_C", "parent": "", "meshes": ["/Game/Chars/Zed/SK_Zed.SK_Zed"], "camera": True},
+                      {"path": "Proj/Content/Monsters/BP_Blob.uasset", "name": "BP_Blob_C", "parent": "", "meshes": ["/Game/Characters/Monster/SK_Blob.SK_Blob"]}]}
+        pn.find_players()
+        tt = [pn.tree.topLevelItem(i).text(0) for i in range(pn.tree.topLevelItemCount())]
+        zed = [x for x in tt if "Zed" in x]
+        check(zed and zed[0].startswith(C.PLAYER_MARK) and tt.index(zed[0]) == 0, "게임 데이터로 확인한 플레이어가 맨 위(이름과 무관): %s" % tt)
+        check(not any(("Blob" in x) and x.startswith("🎮") for x in tt), "몬스터 폰은 표시 안 함")
+        check(pidx.proofs and "기본 플레이어 폰" in list(pidx.proofs.values())[0], "이유 기록: %s" % pidx.proofs)
+        # 검사 기록을 지워도 직접 정한 표시는 남고, 데이터 확인 결과는 같이 지워진다
+        pidx.marks[S.norm_key(SKM)] = True
         pn.clear_index()
-        check(S.norm_key(SKM) in pn._index().marks, "검사 기록 지워도 표시 유지")
+        check(S.norm_key(SKM) in pn._index().marks and not pn._index().proofs, "검사 기록 지워도 직접 표시 유지, 확인 결과는 지움")
 
         # 기록 지우기
         pn.clear_index()

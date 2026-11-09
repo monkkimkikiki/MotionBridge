@@ -348,6 +348,20 @@ try:
     check(_d == {"kind": "anim", "paths": ["G/A_Slash.uasset"]}, "끌기 데이터: %s" % _d)
     _vp = _VP()
     check(_vp.acceptDrops(), "뷰포트가 끌어다 놓기를 받음")
+    # 영상찾기 목록에서 끌기: 출처(origin) 가 실려 가고, 숨겨진 항목은 빠진다
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtWidgets import QListWidgetItem as _LI
+    from motionbridge.ui import vidfind_tab as _VF
+    _al = _VF._AssetList("anim")
+    _i1, _i2 = _LI("a"), _LI("b")
+    _i1.setData(_Qt.ItemDataRole.UserRole, "G/A_1.uasset")
+    _i2.setData(_Qt.ItemDataRole.UserRole, "G/A_2.uasset")
+    _al.addItem(_i1)
+    _al.addItem(_i2)
+    _i2.setHidden(True)
+    _d2 = _j3.loads(bytes(_al.mimeData([_i1, _i2]).data(_AM)).decode("utf-8"))
+    check(_d2 == {"kind": "anim", "paths": ["G/A_1.uasset"], "origin": "vidfind"}, "영상찾기 끌기 데이터: %s" % _d2)
+    check(_al.dragEnabled(), "영상찾기 목록은 끌기 가능")
 except Exception as _e:  # noqa: BLE001
     check(False, "끌어다 놓기 스모크 예외: %r" % (_e,))
 

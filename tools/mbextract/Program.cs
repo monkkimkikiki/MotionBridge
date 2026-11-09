@@ -4,6 +4,9 @@
 //   (공통) --kind anim|mesh  --format glb|psk (mesh)  --textures (mesh, 텍스처 포함)
 //   mbextract inspect --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] (--paths-file FILE | --filter REGEX [--limit N])
 //        파일 안을 실제로 읽어 종류(skeleton/mesh/static/anim/montage)와 연결(스켈레톤 경로, 프레임·트랙 수)을 한 줄씩 알려준다.
+//   mbextract players --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] (--paths-file FILE | --filter REGEX [--limit N])
+//        '플레이어가 조종하는 캐릭터' 를 데이터로 찾는다: 게임 설정(.ini)의 기본 게임모드, 게임모드의 DefaultPawnClass, 폰(블루프린트)이 쓰는 스켈레탈 메시,
+//        카메라/스프링암 컴포넌트, AutoPossessPlayer 를 한 줄씩 알려준다 (type = config | pawn).
 //   mbextract export --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR --paths-file FILE
 // 표준 출력: 한 줄에 JSON 하나 (type = asset | exported | skip | log | done | error)
 //
@@ -145,6 +148,84 @@ try
                 }
             }
             catch (Exception e) { Emit(new { type = "node", path = p, kind = "unreadable", reason = e.GetType().Name + ": " + e.Message }); }
+            if (done % 25 == 0) Emit(new { type = "progress", done, total = targets.Count });
+        }
+        Emit(new { type = "done", count = found });
+    }
+    else if (cmd == "players")
+    {
+        // 1) 게임 설정(.ini): 기본 게임모드/폰 클래스. 파일이 없거나 지워져 있을 수 있다.
+        try
+        {
+            foreach (var key in provider.Files.Keys.Where(k => Regex.IsMatch(k, @"(?i)(^|/)(Default)?(Engine|Game)\.ini$")))
+            {
+                try
+                {
+                    if (!provider.TrySaveAsset(key, out var data) || data is null || data.Length == 0) continue;
+                    foreach (var line in System.Text.Encoding.UTF8.GetString(data).Split('\n'))
+                    {
+                        var ln = line.Trim();
+                        var m = Regex.Match(ln, @"(?i)^[+.]?(GlobalDefaultGameMode|GameDefaultMap|DefaultPawnClass|DefaultPlayerControllerClass|GameInstanceClass)\s*=\s*(.+)$");
+                        if (m.Success) Emit(new { type = "config", file = key, key = m.Groups[1].Value, value = m.Groups[2].Value.Trim().Trim('"') });
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        // 2) 블루프린트: 대상 목록은 파일 이름 규칙으로 좁히되(전부 열면 너무 오래 걸림), 플레이어인지는 안에 든 데이터로 판단한다.
+        var listFile = Opt("--paths-file");
+        List<string> targets;
+        if (!string.IsNullOrEmpty(listFile)) targets = File.ReadAllLines(listFile).Where(x => x.Trim().Length > 0).ToList();
+        else
+        {
+            var frx = new Regex(Opt("--filter") ?? @"(?i)/(bp|b|bpc|gm|pc|abp)_[^/]*\.uasset$|gamemode|pawn|player|character|hero|protagonist", RegexOptions.Compiled);
+            int lim = int.TryParse(Opt("--limit"), out var l3) ? l3 : 30000;
+            targets = provider.Files.Keys.Where(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) && frx.IsMatch(k))
+                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase).Take(lim).ToList();
+        }
+        int done = 0, found = 0;
+        foreach (var p in targets)
+        {
+            done++;
+            try
+            {
+                if (!provider.TryLoadPackage(p, out var pkg) || pkg is null) continue;
+                var meshes = new List<string>(); var animClasses = new List<string>();
+                bool camera = false; string parent = "", autoPossess = "", defPawn = "", ctrl = "", className = "";
+                foreach (var obj in pkg.GetExports())
+                {
+                    var et = Convert.ToString(Get2(obj, "ExportType")) ?? obj.GetType().Name;
+                    var tn = obj.GetType().Name;
+                    if (et.Contains("SkeletalMeshComponent") || tn.Contains("SkeletalMeshComponent"))
+                    {
+                        var mp = PathOf(Get(obj, "SkeletalMeshAsset"));
+                        if (mp.Length == 0) mp = PathOf(Get(obj, "SkeletalMesh"));
+                        if (mp.Length > 0 && !meshes.Contains(mp)) meshes.Add(mp);
+                        var ac = PathOf(Get(obj, "AnimClass"));
+                        if (ac.Length > 0 && !animClasses.Contains(ac)) animClasses.Add(ac);
+                    }
+                    else if (et.Contains("CameraComponent") || et.Contains("SpringArmComponent") || tn.Contains("CameraComponent") || tn.Contains("SpringArmComponent")) camera = true;
+                    else if (et.Contains("BlueprintGeneratedClass") || tn.Contains("BlueprintGeneratedClass"))
+                    {
+                        parent = PathOf(Get(obj, "SuperStruct")); className = obj.Name;
+                    }
+                    if (obj.Name.StartsWith("Default__", StringComparison.Ordinal))
+                    {
+                        var ap = Convert.ToString(Unwrap(Get(obj, "AutoPossessPlayer"))) ?? "";
+                        if (ap.Length > 0) autoPossess = ap;
+                        var dp = PathOf(Get(obj, "DefaultPawnClass"));
+                        if (dp.Length > 0) defPawn = dp;
+                        var pc = PathOf(Get(obj, "PlayerControllerClass"));
+                        if (pc.Length > 0) ctrl = pc;
+                    }
+                }
+                if (meshes.Count == 0 && !camera && defPawn.Length == 0 && autoPossess.Length == 0) continue;
+                Emit(new { type = "pawn", path = p, name = className, parent, meshes, anim_classes = animClasses, camera, auto_possess = autoPossess,
+                           default_pawn = defPawn, controller = ctrl });
+                found++;
+            }
+            catch (Exception e) { Emit(new { type = "log", message = "플레이어 확인 중 건너뜀 " + p + ": " + e.GetType().Name }); }
             if (done % 25 == 0) Emit(new { type = "progress", done, total = targets.Count });
         }
         Emit(new { type = "done", count = found });

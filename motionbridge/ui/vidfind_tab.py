@@ -9,13 +9,14 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import tempfile
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QMimeData, QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, skelgraph, textmatch, vision
+from .viewer import ASSET_MIME
 from .widgets import EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
@@ -71,6 +73,28 @@ def _thumb(frame: str, box) -> Optional[object]:
 
 
 MAX_MOTION_RANK = 40  # 동작 비교로 한 번에 임시로 뽑아 비교하는 최대 개수 (뽑는 데 시간이 든다)
+
+
+class _AssetList(QListWidget):
+    """고른 메시/애니메이션을 뷰포트로 끌어다 놓을 수 있는 목록 (항목의 UserRole = 게임 안 경로). 놓으면 영상찾기가 직접 열고 탭은 옮기지 않는다."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__()
+        self.drag_kind = kind                       # "mesh" | "anim"
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+
+    def mimeData(self, items):  # noqa: N802
+        md = QMimeData()
+        paths: List[str] = []
+        for it in items:
+            if it.isHidden():
+                continue
+            p = it.data(Qt.ItemDataRole.UserRole)
+            if p and p not in paths:
+                paths.append(p)
+        md.setData(ASSET_MIME, json.dumps({"kind": self.drag_kind, "paths": paths, "origin": "vidfind"}).encode("utf-8"))
+        return md
 
 
 class VidFindTab(QWidget):
@@ -376,14 +400,14 @@ class VidFindTab(QWidget):
         g = QGroupBox("5) 후보에서 골라 추출")
         v = QVBoxLayout(g)
         v.addWidget(QLabel("메시 (확정한 캐릭터 / 캐릭터 메쉬 검색 결과)"))
-        self.mesh_list = QListWidget()
+        self.mesh_list = _AssetList("mesh")
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mesh_list.setMinimumHeight(70)
         self.mesh_list.itemSelectionChanged.connect(self._mesh_sel_changed)
         self.mesh_list.itemDoubleClicked.connect(self._mesh_double_clicked)
-        self.mesh_list.setToolTip("더블클릭: 이 메시를 바로 뷰포트(타깃)로 엽니다 — 리깅(스켈레톤·스킨)이 든 GLB 로 뽑아서 바로 불러와요.")
+        self.mesh_list.setToolTip("더블클릭 또는 오른쪽 뷰포트로 끌어다 놓기: 이 메시를 바로 뷰포트(타깃)로 엽니다 — 리깅(스켈레톤·스킨)이 든 GLB 로 뽑아서 바로 불러와요. 탭은 그대로 있습니다.")
         v.addWidget(self.mesh_list)
-        v.addWidget(QLabel("↑ 더블클릭하면 그 메시가 바로 뷰포트에 열려요 (추출 없이 확인)"))
+        v.addWidget(QLabel("↑ 더블클릭하거나 뷰포트로 끌어다 놓으면 그 메시가 바로 뷰포트에 열려요 (추출 없이 확인)"))
         h = QHBoxLayout()
         h.addWidget(QLabel("애니메이션 분류"))
         self.label = QComboBox()
@@ -437,7 +461,7 @@ class VidFindTab(QWidget):
         self.anim_count.setStyleSheet("color:#8a93a6")
         h.addWidget(self.anim_count)
         v.addLayout(h)
-        self.anim_list = QListWidget()
+        self.anim_list = _AssetList("anim")
         self.anim_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.anim_list.setMinimumHeight(200)
         v.addWidget(self.anim_list)
@@ -469,7 +493,7 @@ class VidFindTab(QWidget):
         v.addWidget(self.btn_mrank)
         self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타깃 작업)")
         self.btn_view.setMinimumHeight(34)
-        self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 열고 '1. 파일·매핑' 탭으로 이동합니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
+        self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 엽니다. 뷰포트로 끌어다 놓아도 같고, 탭은 옮기지 않습니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
                                  "같은 스켈레톤(같은 캐릭터)의 애니메이션만 함께 열립니다.")
         self.btn_view.clicked.connect(lambda *_a: self.open_in_viewport())
         v.addWidget(self.btn_view)
@@ -1501,6 +1525,17 @@ class VidFindTab(QWidget):
             win.statusBar().showMessage(msg)
 
         win.run_async(job, done, "애니메이션 뽑는 중")
+
+    def open_dropped(self, kind: str, paths: List[str]) -> None:
+        """이 탭의 목록에서 뷰포트로 끌어다 놓았을 때: 더블클릭과 같은 방식으로 열고, 탭은 그대로 둔다 (파일·매핑 탭으로 이동하지 않음)."""
+        if not paths:
+            return
+        if kind == "mesh":
+            if len(paths) > 1:
+                self.win.statusBar().showMessage("메시는 한 번에 하나만 열 수 있어 첫 번째(%s)를 열었습니다" % assetidx.mesh_name(paths[0]))
+            self.open_mesh_in_viewport(paths[0])
+        else:
+            self.open_in_viewport(list(paths))
 
     def _mesh_double_clicked(self, item, *_a) -> None:
         self.open_mesh_in_viewport(item.data(Qt.ItemDataRole.UserRole))

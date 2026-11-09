@@ -368,6 +368,7 @@ class MainWindow(QMainWindow):
         self.viewport = Viewport()
         self.viewport.key_action.connect(self._viewport_key)
         self.viewport.asset_dropped.connect(lambda kind, paths: self.extract_for_char(paths, kind))  # 에셋 목록에서 끌어다 놓으면 바로 열기
+        self.viewport.asset_dropped_from.connect(self._asset_dropped_from)
         rl.addWidget(self.viewport, 1)
         opts = QHBoxLayout()
         self._view_checks: Dict[str, object] = {}
@@ -931,6 +932,13 @@ class MainWindow(QMainWindow):
             return
         self._extract_paths(paths)
 
+    def _asset_dropped_from(self, origin: str, kind: str, paths) -> None:
+        """출처가 있는 에셋을 뷰포트에 놓았을 때. 영상찾기 목록에서 온 것은 영상찾기가 직접 열고, 탭은 옮기지 않는다."""
+        if origin == "vidfind":
+            self.vidfind.open_dropped(kind, list(paths))
+        else:
+            self.extract_for_char(paths, kind)
+
     def extract_for_char(self, paths, kind: str) -> None:
         """캐릭터 보기에서 고른 에셋을 바로 추출하고 뷰포트에 연다 (애니메이션 = PSA, 메쉬 = 타깃으로 열 GLB 포함)."""
         i = self.ex_kind.findData("anim" if kind == "anim" else "mesh")
@@ -1158,6 +1166,7 @@ class MainWindow(QMainWindow):
             f.addRow(lab, nf)
         f.addRow("루트 회전(Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
         f.addRow(self._chk("transfer_root_motion", "제자리(인플레이스) — 수평 이동 제거", "체크하면 캐릭터가 앞으로 나아가지 않고 제자리에서 움직입니다", invert=True))
+        f.addRow(self._chk("same_rig", "같은 스켈레톤이면 본 이름대로 그대로 적용 (사람 모양이 아닌 캐릭터)", "몬스터처럼 사람 본(골반·팔·다리)이 아닌 캐릭터는 사람 기준 매핑·좌표축 추정이 엉뚱하게 돌아갑니다. 소스 모션과 타깃 메시가 같은 스켈레톤(본 이름·계층·모양이 같음)이면 그 추정을 건너뛰고 본 이름대로 1:1 로 적용합니다. 꺼 두면 항상 사람 기준 리타깃을 씁니다."))
         f.addRow(self._chk("start_at_origin", "시작 위치를 모델 원점에 맞춤", "게임 모션은 월드 좌표에서 시작하는 경우가 많습니다. 켜면 첫 프레임의 수평 위치를 모델이 서 있는 자리로 옮기고 이동량만 따라갑니다. 끄면 원본 절대 위치를 그대로 씁니다."))
         self.com_combo = QComboBox()
         self.com_combo.currentIndexChanged.connect(self._com_changed)
@@ -2095,12 +2104,14 @@ class MainWindow(QMainWindow):
         if res is not None:
             lines.append("매핑 %d쌍 · 스케일 k=%.3f · 소스 %s · 타깃 %s · IK %s" % (len(res.pairs), res.k, res.frame_src[1], res.frame_tgt[1], "켬" if res.ik_applied else "끔"))
             warns = list(res.warnings)
+            if getattr(self.pr, "rig_note", ""):
+                warns.append(self.pr.rig_note)
         elif self.pr.src and self.pr.tgt and not self.pr.pairs():
             lines.append("<span style='color:#e0a050'>자동 매핑된 본이 없습니다. 아래 표에서 직접 연결하세요.</span>")
         if err:
             warns.append("리타깃 실패: " + err)
         self.info_label.setText("<br>".join(lines))
-        self.warn_label.setText("\n".join("⚠ " + w for w in warns))
+        self.warn_label.setText("\n".join(w if w.startswith("ℹ") else "⚠ " + w for w in warns))
 
     def _update_quality(self) -> None:
         self.issue_list.clear()
