@@ -137,6 +137,42 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         pipeline.process_videos, pipeline.process_ranges, remote.should_offload = orig_pv2, orig_pr, orig_off
 
+    # 부품(모듈) 하나가 빠졌다는 오류가 나면 자동 설치 후 한 번 더 시도한다 (예: No module named 'lap')
+    check(remote.missing_module("RuntimeError: ModuleNotFoundError: No module named 'lap'") == "lap" and remote.missing_module("다른 오류") is None, "빠진 모듈 이름 읽기")
+    calls = {"run": 0, "pip": []}
+    orig_run, orig_rep, orig_find2 = remote.run, remote.repair, remote.find_env
+    def flaky_run(py, fn, params, s, log=None, progress=None, cancel=None):
+        calls["run"] += 1
+        if calls["run"] == 1:
+            raise RuntimeError("ModuleNotFoundError: No module named 'lap'")
+        return {"ok": 1}
+    remote.run = flaky_run
+    remote.find_env = lambda s=None: ("pyx", "시험")
+    remote.repair = lambda py, mod, log=None, runner=None: calls["pip"].append(mod) or True
+    try:
+        check(remote.process("selftest", {}, {}) == {"ok": 1} and calls["pip"] == ["lap"] and calls["run"] == 2, "lap 이 빠지면 자동 설치 후 다시 분석: %s" % calls)
+        calls.update(run=0, pip=[])
+        remote.repair = lambda py, mod, log=None, runner=None: False
+        try:
+            remote.process("selftest", {}, {})
+            check(False, "자동 설치 실패면 안내 오류")
+        except RuntimeError as e:
+            check("부품" in str(e) and "자동 설치" in str(e), "자동 설치 실패 안내")
+        def other_err(py, fn, params, s, log=None, progress=None, cancel=None):
+            raise RuntimeError("전혀 다른 오류")
+        remote.run = other_err
+        try:
+            remote.process("selftest", {}, {})
+            check(False, "다른 오류는 그대로 전달")
+        except RuntimeError as e:
+            check("전혀 다른 오류" in str(e), "다른 오류는 그대로")
+    finally:
+        remote.run, remote.repair, remote.find_env = orig_run, orig_rep, orig_find2
+    from motionbridge.animref.core import envsetup
+    check("lapx" in envsetup.PACKAGES, "분석 환경 설치 목록에 lapx(추적용) 포함")
+    pcalls = []
+    check(remote.repair("pyx", "lap", runner=lambda cmd, log: pcalls.append(cmd) or 0) and pcalls and pcalls[0][-1] == "lapx" and not remote.repair("pyx", "엉뚱한", runner=lambda c, l: 0), "repair: lap -> lapx 설치, 모르는 모듈은 안 함")
+
     cands = remote.candidates({"analysis_python": "C:/x/python.exe"})
     check(str(cands[0]).replace("\\", "/").endswith("x/python.exe") and len(cands) > 3, "후보 경로: 설정값이 먼저")
 

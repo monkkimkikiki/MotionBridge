@@ -15,7 +15,7 @@ from . import Cancelled, noop
 from . import settings as S
 
 MIN_PY, MAX_PY = (3, 9), (3, 12)       # torch/ultralytics 휠이 있는 범위
-PACKAGES = ["numpy<2", "opencv-python-headless", "Pillow", "ultralytics", "ftfy", "regex", "tqdm", "clip-anytorch"]
+PACKAGES = ["numpy<2", "opencv-python-headless", "Pillow", "ultralytics", "lapx", "ftfy", "regex", "tqdm", "clip-anytorch"]   # lapx: 사람/캐릭터 추적(ByteTrack)에 필요 (모듈 이름은 lap)
 
 
 def venv_dir() -> Path:
@@ -146,7 +146,7 @@ def install(log=noop, progress=noop, cancel=None, runner=_run) -> str:
     if runner(pip + PACKAGES, log, cancel) != 0:
         raise RuntimeError("ultralytics 등 패키지 설치에 실패했어요. 로그를 확인하세요.")
     progress(0.95, "확인 중")
-    r = subprocess.run([str(vp), "-c", "import torch, ultralytics, cv2, numpy, clip; print(torch.__version__)"], capture_output=True, text=True, timeout=300, creationflags=_flags())
+    r = subprocess.run([str(vp), "-c", "import torch, ultralytics, cv2, numpy, clip, lap; print(torch.__version__)"], capture_output=True, text=True, timeout=300, creationflags=_flags())
     if r.returncode != 0:
         tail = (r.stderr.strip().splitlines() or ["?"])[-1]
         raise RuntimeError("설치는 됐지만 불러오지 못해요: " + tail)

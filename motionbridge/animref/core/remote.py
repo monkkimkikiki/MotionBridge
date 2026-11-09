@@ -209,10 +209,54 @@ def run(py, fn, params, s, log=noop, progress=noop, cancel=None):
     return final.get("result") or {}
 
 
+# 분석 중 "No module named 'X'" 가 나면, 부족한 부품을 그 환경에 자동으로 설치하고 한 번 더 시도한다. (모듈 이름 -> pip 패키지)
+REPAIR = {"lap": "lapx", "ftfy": "ftfy", "regex": "regex", "tqdm": "tqdm", "clip": "clip-anytorch", "PIL": "Pillow",
+          "cv2": "opencv-python-headless", "ultralytics": "ultralytics"}
+
+
+def missing_module(msg):
+    """오류 메시지에서 'No module named X' 의 X(최상위 모듈 이름). 없으면 None."""
+    import re
+    m = re.search(r"No module named ['\"]?([A-Za-z0-9_]+)", str(msg or ""))
+    return m.group(1) if m else None
+
+
+def repair(py, module, log=noop, runner=None):
+    """부족한 모듈을 그 환경의 pip 로 설치한다. 성공하면 True. (REPAIR 목록에 있는 것만)"""
+    pkg = REPAIR.get(module)
+    if not pkg:
+        return False
+    log("[분석 환경] 부족한 부품 '%s'(%s)을 자동으로 설치합니다 (1~2분)" % (module, pkg))
+    cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check", pkg]
+    if runner is not None:
+        return runner(cmd, log) == 0
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, env=_clean_env(), creationflags=_flags())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("자동 설치 실패: %s" % e)
+        return False
+    for line in (r.stdout + r.stderr).strip().splitlines()[-6:]:
+        log(line[:300])
+    _CHECKED.pop(str(py), None)
+    return r.returncode == 0
+
+
 def process(fn, params, s, log=noop, progress=noop, cancel=None):
-    """분석 환경을 찾아 run() 한다. 없으면 안내 오류."""
+    """분석 환경을 찾아 run() 한다. 없으면 안내 오류. 부품(모듈) 하나가 빠졌으면 자동 설치 후 한 번 더 시도한다."""
     py, why = find_env(s)
     if py is None:
         raise RuntimeError(NEED_MSG + ("\n\n(" + why + ")" if why else ""))
     log("[분석 환경] %s 로 분석합니다 (%s)" % (py, _CHECKED.get(py, (True, ""))[1]))
-    return run(py, fn, params, s, log, progress, cancel)
+    tried = set()
+    while True:
+        try:
+            return run(py, fn, params, s, log, progress, cancel)
+        except RuntimeError as e:
+            mod = missing_module(e)
+            if mod is None or mod in tried or mod not in REPAIR:
+                raise
+            tried.add(mod)
+            if not repair(py, mod, log):
+                raise RuntimeError("분석에 필요한 부품 '%s'이(가) 없고 자동 설치도 못 했어요.\n"
+                                   "[⚙ 설정] → 분석 환경 → [자동 설치]를 다시 눌러 보세요 (이어서 설치돼요).\n\n원래 오류: %s" % (mod, e))
+            progress(-1, "부품을 설치했어요. 분석을 다시 시작합니다...")
