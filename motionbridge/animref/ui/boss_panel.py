@@ -107,17 +107,23 @@ def _qimage(bgr) -> QImage:
 class CalibDialog(QDialog):
     """체력바 영역 지정: OBS 에서 지금 화면을 가져오거나 스크린샷 파일을 열고, 체력바를 끌어서 고른다."""
 
-    def __init__(self, panel):
+    def __init__(self, panel, photo=False):
         super().__init__(panel)
         self.panel = panel
+        self.photo = bool(photo)
         self.frame = None
         self.result = None
-        self.setWindowTitle("보스 체력바 영역 지정")
+        self.setWindowTitle("체력바 사진으로 정확하게 알려 주기" if self.photo else "보스 체력바 영역 지정")
         self.resize(900, 600)
         v = QVBoxLayout(self)
-        v.addWidget(muted("보스전 화면이 없어도 돼요. ① 화면을 하나 가져오세요(아무 때나). ② 보스 체력바가 뜨는 자리를 넉넉하게 마우스로 끌어 네모로 잡으세요 "
-                       "(바 위아래 여백은 조금 있어도 괜찮아요). ③ [이 영역으로 저장]. 이 영역 안에 가로로 긴 체력바가 나타나면 자동으로 알아봐요. "
-                       "보스전 중 화면으로 잡으면 체력바 모양도 함께 배워서 더 정확해져요."))
+        if self.photo:
+            v.addWidget(muted("① 보스 체력바가 또렷하게 보이는 스크린샷을 여세요 (체력바가 가득 찬 화면이 가장 좋아요. 직접 찍은 사진, 다른 사람이 구한 스크린샷, "
+                              "OBS 현재 화면 모두 괜찮아요). ② 체력바 전체를 틀까지 감싸게 마우스로 끌어 네모로 잡으세요. ③ [이 사진으로 저장]. "
+                              "체력바의 테두리 모양과 채움 색을 배워서, 일반 감지보다 정확하게 알아봐요. 게임이 바뀌면 그 게임 사진으로 다시 한 번 해 주세요."))
+        else:
+            v.addWidget(muted("보스전 화면이 없어도 돼요. ① 화면을 하나 가져오세요(아무 때나). ② 보스 체력바가 뜨는 자리를 넉넉하게 마우스로 끌어 네모로 잡으세요 "
+                              "(바 위아래 여백은 조금 있어도 괜찮아요). ③ [이 영역으로 저장]. 이 영역 안에 가로로 긴 체력바가 나타나면 자동으로 알아봐요. "
+                              "보스전 중 화면으로 잡으면 체력바 모양도 함께 배워서 더 정확해져요."))
         self.region = _RegionLabel()
         v.addWidget(self.region, 1)
         row = QHBoxLayout()
@@ -128,7 +134,7 @@ class CalibDialog(QDialog):
         b.clicked.connect(self._from_file)
         row.addWidget(b)
         row.addStretch(1)
-        self.btn_save = QPushButton("이 영역으로 저장")
+        self.btn_save = QPushButton("이 사진으로 저장" if self.photo else "이 영역으로 저장")
         self.btn_save.setObjectName("primary")
         self.btn_save.clicked.connect(self._save)
         row.addWidget(self.btn_save)
@@ -170,6 +176,18 @@ class CalibDialog(QDialog):
         if self.frame is None or roi is None:
             QMessageBox.information(self, "영역", "화면을 불러오고 체력바를 끌어서 고르세요.")
             return
+        if self.photo:
+            try:
+                res = boss.calibrate_photo(self.frame, roi)
+            except ValueError as e:
+                QMessageBox.warning(self, "체력바를 못 찾았어요", str(e))
+                return
+            out = boss.save_calibration(res["cal"], str(S.app_dir() / "boss_ref.png"))
+            out["baseline"] = 0.0
+            QMessageBox.information(self, "저장", "체력바의 모양과 색을 배웠어요 (정밀 인식). [지금 화면으로 시험]이나 [녹화본으로 감지 시험…]으로 확인해 보세요.")
+            self.result = out
+            self.accept()
+            return
         res = boss.calibrate_any(self.frame, roi)
         if res["mode"] == "exact":
             out = boss.save_calibration(res["cal"], str(S.app_dir() / "boss_ref.png"))
@@ -209,6 +227,15 @@ class BossPanel(QWidget):
         b.setToolTip("보스 체력바가 어디에 어떻게 나오는지 한 번 알려 주는 단계(필수). 보스전 화면 한 장이 필요해요.")
         b.clicked.connect(self.calibrate)
         row.addWidget(b)
+        b = QPushButton("📷 사진으로 정확하게 (선택)")
+        b.setToolTip("보스 체력바가 보이는 스크린샷(직접 찍거나 구한 것)으로 체력바의 모양과 색을 배워요. 안 해도 쓸 수 있지만, 하면 더 정확해요.\n"
+                     "게임이 바뀌면 그 게임 사진으로 다시 한 번 해 주세요.")
+        b.clicked.connect(self.calibrate_photo)
+        row.addWidget(b)
+        self.btn_unphoto = QPushButton("사진 지정 해제")
+        self.btn_unphoto.setToolTip("사진으로 배운 모양을 지우고, 영역만으로 알아보는 일반 방식으로 돌아가요.")
+        self.btn_unphoto.clicked.connect(self.clear_photo)
+        row.addWidget(self.btn_unphoto)
         b = QPushButton("녹화본으로 감지 시험…")
         b.setToolTip("이미 녹화한 영상으로, 보스전 시작/끝을 제대로 찾는지 미리 확인해요 (녹화하지 않고 안전하게 시험)")
         b.clicked.connect(self.test_video)
@@ -300,7 +327,16 @@ class BossPanel(QWidget):
     def _refresh_ready(self):
         c = boss.cfg(self.main.s)
         ok = boss.make_detector(c) is not None
-        self.ready_note.setText("✔ 체력바 영역이 지정돼 있어요." if ok else "⚠ 먼저 [체력바 영역 지정…]으로 보스 체력바가 나오는 자리를 알려 주세요 (한 번만).")
+        m = boss.mode_of(c)
+        if m == "photo":
+            txt = "✔ 체력바 영역 지정됨 · 정밀 모드 (사진/화면으로 체력바 모양을 배웠어요)"
+        elif m == "area":
+            txt = "✔ 체력바 영역 지정됨 · 일반 모드. 더 정확하게 하려면 [📷 사진으로 정확하게]를 눌러 체력바 스크린샷을 알려 주세요 (선택)."
+        else:
+            txt = "⚠ 먼저 [체력바 영역 지정…]으로 보스 체력바가 나오는 자리를 알려 주세요 (한 번만). 체력바 스크린샷이 있으면 [📷 사진으로 정확하게]가 더 정확해요."
+        self.ready_note.setText(txt)
+        if hasattr(self, "btn_unphoto"):
+            self.btn_unphoto.setEnabled(m == "photo")
         return ok
 
     def calibrate(self):
@@ -312,6 +348,26 @@ class BossPanel(QWidget):
             self.main.save_settings()
             self._refresh_ready()
             self.main.flash("체력바 영역을 저장했어요. [녹화본으로 감지 시험…]으로 확인해 보세요.")
+
+    def calibrate_photo(self):
+        """(선택) 체력바 스크린샷으로 정밀 기준 만들기. 사진은 OBS 화면이나 구해 온 파일 모두 가능."""
+        dlg = CalibDialog(self, photo=True)
+        dlg._from_file()   # 먼저 사진 고르는 창부터 띄운다 (취소하면 OBS 가져오기 버튼으로도 가능)
+        if dlg.exec() and dlg.result:
+            b = dict(self.main.s.get("boss") or {})
+            b.update(dlg.result)
+            self.main.s["boss"] = b
+            self.main.save_settings()
+            self._refresh_ready()
+            self.main.flash("체력바 모양을 배웠어요 (정밀 모드). 시험해 보세요.")
+
+    def clear_photo(self):
+        b = dict(self.main.s.get("boss") or {})
+        b.update(boss.clear_photo(b))
+        self.main.s["boss"] = b
+        self.main.save_settings()
+        self._refresh_ready()
+        self.main.flash("사진 지정을 해제했어요. 영역만으로 알아보는 일반 모드예요.")
 
     # ------------------------------------------------------------------ 감지 켜기/끄기
     def toggle(self):

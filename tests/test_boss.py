@@ -120,6 +120,25 @@ rw = B.calibrate_any(weak, AR)
 gw = B.make_detector(dict(B.DEFAULTS, roi=AR, baseline=rw["baseline"]))
 check(rw["mode"] == "area" and not gw.present(weak)[0], "영역만: 약한 상시 요소는 기준에 반영돼 감지 안 됨 (기준 %.2f)" % rw["baseline"])
 
+# ---------- 사진으로 정확하게 지정(선택): 체력바가 보이는 사진이면 정밀 기준을 만들고, 없으면 이유를 알려 준다
+rp = B.calibrate_photo(scene(bar=1.0, seed=101), AR)
+check(rp["mode"] == "exact" and rp["cal"] is not None and rp["baseline"] == 0.0, "사진 지정: 체력바가 보이는 사진 -> 정밀 기준")
+try:
+    B.calibrate_photo(scene(bar=None, seed=102), AR)
+    check(False, "사진 지정: 체력바 없는 사진은 거절돼야 함")
+except ValueError as e:
+    check("체력바" in str(e), "사진 지정: 거절 이유 안내: %s" % e)
+with tempfile.TemporaryDirectory() as _d:
+    _c = dict(B.DEFAULTS)
+    check(B.mode_of(_c) == "none" or B.mode_of(dict(_c, roi=[])) == "none", "모드: 영역 없으면 none")
+    _c.update(roi=AR)
+    check(B.mode_of(_c) == "area", "모드: 영역만 -> area")
+    _c.update(B.save_calibration(rp["cal"], os.path.join(_d, "ref.png")))
+    _c["roi"] = AR
+    check(B.mode_of(_c) == "photo" and B.make_detector(_c) is not None, "모드: 사진으로 배움 -> photo")
+    _c.update(B.clear_photo(_c))
+    check(B.mode_of(_c) == "area" and B.make_detector(_c) is not None, "사진 지정 해제 -> 영역만(area)으로 복귀")
+
 # ---------- 실제 게임(Mortal Shell 2) 화면 맨 위 16% 조각: 얇고(4px) 붉은 보스 체력바. 사용자 PC 의 녹화 클립에서 떼어 온 것
 def real_frame(name):
     strip = cv2.imread(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ms2_top_%s.png" % name))

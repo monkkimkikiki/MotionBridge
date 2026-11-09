@@ -373,6 +373,29 @@ def calibrate_any(frame: np.ndarray, roi) -> dict:
     return {"cal": None, "baseline": float(round(baseline, 3)), "mode": "area", "roi": [round(float(x), 4) for x in roi]}
 
 
+def calibrate_photo(frame: np.ndarray, roi) -> dict:
+    """체력바가 보이는 사진(스크린샷)으로 정밀 기준을 만든다. 체력바를 못 찾으면 ValueError(이유 포함).
+    돌려주는 값: 설정에 넣을 dict 의 재료 {'cal':..., 'baseline': 0.0, 'mode': 'exact'}."""
+    cal = calibrate(frame, roi)
+    base = AutoDetector(roi).parts(frame)
+    if max(base[0], base[1]) < 0.5 and not cal.hsv:
+        raise ValueError("이 영역에서 체력바로 보이는 길고 색이 채워진 띠를 찾지 못했어요. 체력바가 또렷하게 보이는 사진으로, 체력바 전체를 감싸게 다시 지정해 주세요.")
+    return {"cal": cal, "baseline": 0.0, "mode": "exact"}
+
+
+def mode_of(c: dict) -> str:
+    """지금 설정이 어떤 방식인지: 'none'(영역 없음) | 'photo'(사진/화면으로 모양을 배움) | 'area'(영역만)."""
+    import os
+    if len(c.get("roi") or []) != 4:
+        return "none"
+    return "photo" if (c.get("ref") and os.path.isfile(c["ref"])) else "area"
+
+
+def clear_photo(c: dict) -> dict:
+    """사진으로 배운 모양을 지우고 영역만 남긴다 (일반 감지로 돌아감). 설정에 합칠 dict."""
+    return {"ref": "", "hsv": [], "full_cols": 0, "fill_rows": 0, "baseline": 0.0}
+
+
 def make_detector(c: dict):
     """설정(cfg 결과)에서 판단기를 만든다. 기준을 아직 안 만들었거나 그림 파일이 없으면 None."""
     import os
