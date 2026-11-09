@@ -18,7 +18,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from .assetidx import DESC_STOP, UNKNOWN_WORDS, norm_key, tokens
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_MODELS = ["qwen2.5vl:7b", "llama3.2-vision", "gemma3:12b", "minicpm-v"]
+OLLAMA_MODELS = ["qwen2.5vl:7b", "qwen3-vl:30b", "llama3.2-vision", "gemma3:12b", "minicpm-v"]   # qwen3-vl:30b = MoE(30B 중 3B 활성, 약 20GB, 이미지 입력 가능)
 # GPT-OSS: OpenAI 의 열린 가중치 모델. 글만 다룬다(이미지 못 봄) -> 이름·설명으로 찾기 전용. 20B 는 메모리 16GB 이상 권장.
 GPTOSS_MODEL = "gpt-oss:20b"
 TEXT_ONLY_PREFIXES = ("gpt-oss",)
