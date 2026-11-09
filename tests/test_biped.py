@@ -130,3 +130,23 @@ if __name__ == "__main__":
     test_parts()
     test_compute_and_files()
     print("test_biped ALL OK")
+
+
+def test_template_script():
+    with tempfile.TemporaryDirectory() as d:
+        pr = _project(d)
+        res = pr.run()
+        skel, anim, F = pr.tgt.skeleton, res.anim, res.frame_tgt[0]
+        files, _w = biped.export_biped(d, "t", skel, anim, pr.tgt_slots, F, 100.0, template="C:\\work\\내 캐릭터\\skinned.max")
+        ms = open(files[0], encoding="utf-8").read()
+        assert 'local tmplFile = "C:/work/내 캐릭터/skinned.max"' in ms and "__TEMPLATE__" not in ms, "템플릿 경로(슬래시)가 스크립트에 들어감"
+        assert "loadMaxFile tmplFile" in ms and "saveMaxFile outMax" in ms and "Vertical_Horizontal_Turn" in ms
+        files2, _w = biped.export_biped(d, "u", skel, anim, pr.tgt_slots, F, 100.0)
+        assert 'local tmplFile = ""' in open(files2[0], encoding="utf-8").read(), "템플릿이 없으면 예전처럼 Biped 를 새로 만든다"
+        data = open(files[1], encoding="utf-8").read().splitlines()
+        assert any(l.startswith("lr ") for l in data), "좌우 축 벡터가 데이터에 들어감"
+    print("biped template OK")
+
+
+if __name__ == "__main__" and True:
+    test_template_script()

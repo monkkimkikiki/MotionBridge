@@ -12,7 +12,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton,
     QScrollArea, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
     QWidget, QLineEdit, QButtonGroup, QAbstractItemView, QTreeWidget, QTreeWidgetItem,
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import quat as Q
-from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit, textmatch
+from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -662,6 +662,14 @@ class MainWindow(QMainWindow):
         b.clicked.connect(lambda: self._pick_dir_into(self.ex_out))
         h.addWidget(b)
         v.addLayout(h)
+        self.ex_exist = self._make_exist_combo()
+        self.ex_exist.setToolTip("추출한 파일이 이미 있을 때의 처리입니다. 기본은 이전 파일을 지우지 않고 '이름_old_날짜' 로 보관한 뒤 새 파일을 원래 이름으로 저장합니다.")
+        v.addWidget(self.ex_exist)
+        lb = QLabel(safesave.EXPLAIN[safesave.DEFAULT])
+        lb.setWordWrap(True)
+        lb.setStyleSheet("color:#8a93a6")
+        self.__dict__.setdefault("_exist_labels", []).append(lb)
+        v.addWidget(lb)
         self.btn_extract = QPushButton("선택한 애니메이션 추출 (PSA)")
         self._kind_changed()
         self.btn_extract.setMinimumHeight(34)
@@ -909,11 +917,46 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("참고: 언리얼 5 게임은 보통 mappings(.usmap) 가 필요합니다.")
         return helper, sc.root, ue, aes, usmap
 
+    # ---- 같은 이름의 파일이 이미 있을 때 (추출·내보내기 공통 설정)
+    def _make_exist_combo(self) -> QComboBox:
+        cb = QComboBox()
+        for k in (safesave.KEEP_OLD, safesave.NEW_NAME, safesave.OVERWRITE):
+            cb.addItem(safesave.LABELS[k], k)
+        cb.setCurrentIndex(max(cb.findData(safesave.norm(self.cfg.get("on_exist"))), 0))
+        cb.currentIndexChanged.connect(lambda *_a, _cb=cb: self._exist_changed(_cb))
+        self.__dict__.setdefault("_exist_combos", []).append(cb)
+        return cb
+
+    def _exist_policy(self) -> str:
+        cbs = self.__dict__.get("_exist_combos") or []
+        return safesave.norm(cbs[0].currentData() if cbs else self.cfg.get("on_exist"))
+
+    def _exist_changed(self, src=None) -> None:
+        cbs = self.__dict__.get("_exist_combos", [])
+        pol = safesave.norm((src or cbs[0]).currentData())      # 바꾼 콤보의 값이 기준
+        for cb in cbs:                                          # 다른 쪽도 같이 (하나의 설정)
+            if cb is not src and cb.currentData() != pol:
+                cb.blockSignals(True)
+                cb.setCurrentIndex(max(cb.findData(pol), 0))
+                cb.blockSignals(False)
+        self.cfg["on_exist"] = pol
+        bridge.save_config(self.cfg)
+        self._update_exist_texts()
+
+    def _update_exist_texts(self) -> None:
+        pol = self._exist_policy()
+        for lb in self.__dict__.get("_exist_labels", []):
+            lb.setText(safesave.EXPLAIN[pol])
+        if getattr(self, "btn_export", None) is not None:
+            self.btn_export.setText("내보내기 (%s)" % safesave.SHORT[pol])
+
     def make_layout(self, force_char: Optional[str] = None) -> "layout.Layout":
         """추출 폴더 규칙: 출력 폴더 / 게임 이름 / 캐릭터 이름 / Animations 또는 Models."""
         name = self.ex_gname.text().strip() or layout.detect_game_name(self.ex_game.text().strip())
         self.cfg["game_name"] = name
-        return layout.Layout(self.ex_out.text().strip(), name, force_char=force_char)
+        lay = layout.Layout(self.ex_out.text().strip(), name, force_char=force_char, on_exist=self._exist_policy())
+        self._last_layout = lay
+        return lay
 
     def _search_anims(self) -> None:
         a = self._extract_args()
@@ -1022,6 +1065,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "추출", "추출된 파일이 없습니다. 화면의 모션은 바뀌지 않습니다.\n\n" + ("\n".join(why) if why else "도우미가 이유를 알려주지 않았습니다. 종류(애니메이션/메시)와 선택한 에셋을 확인하세요."))
             return
         msg = "추출 완료: %d개 — 위 '출력 폴더' 링크를 누르면 폴더가 열립니다" % len(files)
+        kept = list(getattr(getattr(self, "_last_layout", None), "backups", []) or [])
+        if kept:
+            msg += " · 같은 이름의 이전 파일 %d개를 '_old_날짜' 로 보관했습니다" % len(kept)
         # 방금 추출한 모션/메시를 바로 화면에 보여준다 (여러 개면 첫 번째. 나머지는 아래 목록에서 더블클릭)
         psa = next((f for f in files if f.lower().endswith(".psa")), None)
         glb = next((f for f in files if f.lower().endswith(".glb") and "_static" not in f), None) or next((f for f in files if f.lower().endswith(".glb")), None)
@@ -1364,6 +1410,17 @@ class MainWindow(QMainWindow):
         h.addWidget(self.char_edit, 1)
         lay.addWidget(g)
 
+        g = QGroupBox("같은 이름의 파일이 이미 있을 때")
+        v = QVBoxLayout(g)
+        self.out_exist = self._make_exist_combo()
+        v.addWidget(self.out_exist)
+        lb = QLabel(safesave.EXPLAIN[safesave.DEFAULT])
+        lb.setWordWrap(True)
+        lb.setStyleSheet("color:#8a93a6")
+        self.__dict__.setdefault("_exist_labels", []).append(lb)
+        v.addWidget(lb)
+        lay.addWidget(g)
+
         g = QGroupBox("무엇을 내보낼까")
         v = QVBoxLayout(g)
         self.rb_retarget = QRadioButton("리타깃 결과 (내 모델용)")
@@ -1406,6 +1463,17 @@ class MainWindow(QMainWindow):
             self.cb_fmt[key] = cb
             h.addWidget(cb)
         lay.addWidget(g)
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("Biped 템플릿 .max (선택)"))
+        self.biped_tpl = QLineEdit(self.cfg.get("biped_template", ""))
+        self.biped_tpl.setPlaceholderText("스키닝된 .max (bip > refbone 구조). 지정하면 Biped 를 새로 만들지 않고 이 파일의 Biped 에 키를 구워 .max 로 저장")
+        self.biped_tpl.setToolTip("3ds Max Biped(.ms) 형식에만 쓰입니다. 이미 메시가 스키닝된 .max 를 지정하면, 만들어지는 .ms 를 3ds Max 에서 실행할 때 그 파일을 열어\n"
+                                  "그 안의 Biped(COM 포함)에 모션을 굽고 새 .max 와 .bip 로 저장합니다. 타깃 모델의 바인드 포즈와 템플릿 Biped 의 기본 자세가 같아야 합니다.")
+        h2.addWidget(self.biped_tpl, 1)
+        b2 = QPushButton("찾아보기…")
+        b2.clicked.connect(self._pick_biped_template)
+        h2.addWidget(b2)
+        lay.addLayout(h2)
         self.blender_label = QLabel("")
         self.blender_label.setWordWrap(True)
         lay.addWidget(self.blender_label)
@@ -1428,8 +1496,14 @@ class MainWindow(QMainWindow):
 
         self.btn_export = QPushButton("내보내기")
         self.btn_export.setMinimumHeight(38)
-        self.btn_export.clicked.connect(self.do_export)
+        self.btn_export.setToolTip("위 '같은 이름의 파일이 이미 있을 때' 설정대로 저장합니다. 덮어쓰기를 고르면 같은 이름의 이전 파일이 사라집니다.")
+        self.btn_export.clicked.connect(lambda *_a: self.do_export())
         lay.addWidget(self.btn_export)
+        self.btn_export_as = QPushButton("다른 이름으로 내보내기…")
+        self.btn_export_as.setToolTip("파일 이름을 직접 정해 내보냅니다 (클립이 여러 개면 '이름_클립이름'). 같은 이름이 있을 때의 처리는 위 설정을 따릅니다.")
+        self.btn_export_as.clicked.connect(self.do_export_as)
+        lay.addWidget(self.btn_export_as)
+        self._update_exist_texts()
         self.export_log = QPlainTextEdit()
         self.export_log.setReadOnly(True)
         self.export_log.setMinimumHeight(140)
@@ -2346,12 +2420,26 @@ class MainWindow(QMainWindow):
             self.viewport.update()
 
     # ================================================================== 내보내기
+    def _pick_biped_template(self) -> None:
+        f, _x = QFileDialog.getOpenFileName(self, "스키닝된 3ds Max 파일 (Biped 가 든 템플릿)", self.biped_tpl.text() or self.cfg.get("last_dir", ""), "3ds Max (*.max);;모든 파일 (*)")
+        if f:
+            self.biped_tpl.setText(f)
+
     def _pick_out(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "출력 폴더", self.out_edit.text())
         if d:
             self.out_edit.setText(d)
 
-    def do_export(self) -> None:
+    def do_export_as(self) -> None:
+        if self.pr.src is None:
+            QMessageBox.warning(self, "내보내기", "먼저 소스 모션을 여세요.")
+            return
+        cur = self.pr.src.animations[self.pr.clip].name if self.pr.src.animations else "motion"
+        name, ok = QInputDialog.getText(self, "다른 이름으로 내보내기", "파일 이름 (확장자 제외):", text=cur)
+        if ok and name.strip():
+            self.do_export(name.strip())
+
+    def do_export(self, name: str = "") -> None:
         if self.pr.src is None:
             QMessageBox.warning(self, "내보내기", "먼저 소스 모션을 여세요.")
             return
@@ -2382,7 +2470,9 @@ class MainWindow(QMainWindow):
             out_dir=out, presets=presets or ["blender"], formats=fmts or ["bvh"], include_skeleton=skel, what=what, clips=clips,
             include_mesh=self.cb_mesh.isChecked(), write_skeleton_json=self.cb_skel_json.isChecked(), blender=self.pr.blender,
             edit=self._export_edit(), organize=bool(self.cb_organize.isChecked()), char_name=self.char_edit.text().strip(),
+            on_exist=self._exist_policy(), name=name if isinstance(name, str) else "", biped_template=self.biped_tpl.text().strip(),
         )
+        self.cfg["biped_template"] = self.biped_tpl.text().strip()
         self.edit_panel.save()
         self.rt_edit.save()
         bridge.save_config(self.cfg)
@@ -2401,6 +2491,8 @@ class MainWindow(QMainWindow):
                 self.export_log.appendPlainText("가공(%s): %s" % (opt.edit.describe(), self.pr.edit_info.summary()))
             for f in files:
                 self.export_log.appendPlainText("  " + f)
+            for bk in self.pr.backups:
+                self.export_log.appendPlainText("이전 파일 보관: " + bk)
             for wmsg in warns:
                 self.export_log.appendPlainText("경고: " + wmsg)
             self.recompute()

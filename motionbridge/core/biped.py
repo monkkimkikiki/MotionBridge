@@ -117,10 +117,20 @@ def compute(skel: Skeleton, anim: Animation, slots: Dict[str, int], frame_to_can
             n = float(np.linalg.norm(v))
             dirs[i] = v / n if n > 1e-9 else 0.0
     allp = Q.rotate(C, bwp) / units_per_meter
-    height = float(np.ptp(allp[:, 2]))
-    hip_h = float(Q.rotate(C, bwp[hips])[2] / units_per_meter - allp[:, 2].min())
+    mj = [slots[p["slot"]] for p in parts]                    # 매핑된 관절만: 무기·소품·IK 본이 키를 부풀리지 않게
+    z = allp[mj, 2]
+    ground = float(min([allp[slots[s], 2] for s in ("L_Toe", "R_Toe", "L_Foot", "R_Foot") if s in slots] or [z.min()]))
+    top = float(allp[slots["Head"], 2]) if "Head" in slots else float(z.max())
+    height = max((top - ground) * 1.12, 1e-3)                 # 머리 관절은 정수리보다 낮다
+    hip_h = float(allp[hips, 2] - ground)
+    lr = np.zeros(3)                                          # 왼쪽 -> 오른쪽이 아니라 '오른쪽 허벅지 -> 왼쪽 허벅지' 방향 (3ds Max 프레임)
+    if "L_UpLeg" in slots and "R_UpLeg" in slots:
+        lr = allp[slots["L_UpLeg"]] - allp[slots["R_UpLeg"]]
+        lr[2] = 0.0
+        n = float(np.linalg.norm(lr))
+        lr = lr / n if n > 1e-9 else np.zeros(3)
     return {"parts": parts, "info": info, "deltas": deltas, "com": com, "dirs": dirs, "height_m": height, "hip_height_m": hip_h,
-            "fps": float(anim.fps), "frames": T, "name": anim.name}
+            "fps": float(anim.fps), "frames": T, "name": anim.name, "lr": lr}
 
 
 def write_data(path: str, d: dict) -> None:
@@ -132,6 +142,8 @@ def write_data(path: str, d: dict) -> None:
         f.write("frames %d\n" % d["frames"])
         f.write("height_m %.6f\n" % d["height_m"])
         f.write("hip_height_m %.6f\n" % d["hip_height_m"])
+        lr = d.get("lr", (0.0, 0.0, 0.0))
+        f.write("lr %.6f %.6f %.6f\n" % (lr[0], lr[1], lr[2]))
         f.write("spine_links %d\n" % d["info"]["spine_links"])
         f.write("fingers %d\n" % d["info"]["fingers"])
         f.write("toes %d\n" % d["info"]["toes"])
@@ -161,6 +173,7 @@ fn mbRun =
 	local f = openFile dataFile mode:"r"
 	local pSlot = #(), pArr = #(), pLink = #(), pAim = #(), pDir = #()
 	local lines = #()
+	local lrDir = [0,0,0]
 	local fps = 30.0, nFrames = 0, heightM = 1.7, hipM = 0.9, spineN = 3, fingN = 0, toesN = 0, clipName = "clip"
 	local ln = readLine f   -- 형식 이름
 	local inData = false
@@ -180,6 +193,7 @@ fn mbRun =
 					"frames": nFrames = tk[2] as integer
 					"height_m": heightM = tk[2] as float
 					"hip_height_m": hipM = tk[2] as float
+					"lr": lrDir = [tk[2] as float, tk[3] as float, tk[4] as float]
 					"spine_links": spineN = tk[2] as integer
 					"fingers": fingN = tk[2] as integer
 					"toes": toesN = tk[2] as integer
@@ -193,8 +207,21 @@ fn mbRun =
 	local nParts = pSlot.count
 	if lines.count < 1 or nParts < 1 do ( messageBox "데이터 파일이 비어 있습니다." ; return undefined )
 
-	local outBip = getSaveFileName caption:"저장할 .bip 파일" filename:(clipName + ".bip") types:"Biped (*.bip)|*.bip"
-	if outBip == undefined do return undefined
+	-- 템플릿 모드(__TEMPLATE__ 가 비어 있지 않을 때): 스키닝된 .max 를 열어 그 안의 Biped 에 키를 굽고 .max 로 저장한다 (Biped 를 새로 만들지 않음)
+	local tmplFile = "__TEMPLATE__"
+	local outBip = undefined, outMax = undefined
+	if tmplFile != "" then
+	(
+		if not (doesFileExist tmplFile) do ( messageBox ("템플릿 .max 파일을 찾지 못했습니다:\n" + tmplFile) ; return undefined )
+		outMax = getSaveFileName caption:"저장할 .max 파일 (템플릿에 모션을 구워 저장)" filename:(clipName + ".max") types:"3ds Max (*.max)|*.max"
+		if outMax == undefined do return undefined
+		outBip = (getFilenamePath outMax) + (getFilenameFile outMax) + ".bip"
+	)
+	else
+	(
+		outBip = getSaveFileName caption:"저장할 .bip 파일" filename:(clipName + ".bip") types:"Biped (*.bip)|*.bip"
+		if outBip == undefined do return undefined
+	)
 
 	local U = units.decodeValue "1.0m"      -- 3ds Max 시스템 단위로 1 미터
 	local msgs = #()
@@ -209,31 +236,59 @@ fn mbRun =
 		if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] ) catch () )
 		b
 	)
-	local bip = makeBiped (heightM * U) 0 spineN fingN toesN
+	local bip = undefined
+	if tmplFile != "" then
+	(
+		loadMaxFile tmplFile quiet:true useFileUnits:true
+		U = units.decodeValue "1.0m"
+		-- Biped 의 중심(COM, Bip01): 컨트롤러가 Vertical_Horizontal_Turn 인 노드
+		for o in objects where bip == undefined do ( try ( if classof o.controller == Vertical_Horizontal_Turn do bip = o ) catch () )
+		if bip == undefined do ( messageBox "템플릿 .max 안에서 Biped 를 찾지 못했습니다." ; return undefined )
+	)
+	else bip = makeBiped (heightM * U) 0 spineN fingN toesN
 	if bip == undefined do ( messageBox "Biped 를 만들지 못했습니다." ; return undefined )
 	local ctrl = bip.transform.controller
 	ctrl.figureMode = true
 
-	-- 정면 방향 맞추기: 이 프로그램의 데이터는 캐릭터가 -Y 를 바라보는 것을 기준으로 한다.
-	local fi = findItem pSlot "L_Foot"
-	local ti = findItem pSlot "L_Toe"
-	if fi > 0 and ti > 0 do
+	-- 정면 방향 맞추기: 오른쪽 허벅지 -> 왼쪽 허벅지 방향(좌우 축)이 데이터와 같아지게 Biped 를 돌려서 다시 만든다.
+	-- (발끝이 없는 모델에서도 되도록 발끝 대신 허벅지를 쓴다. 만든 뒤 실제로 재서 확인하고, 틀리면 반대 방향으로 한 번 더 시도한다.)
+	fn lrAngle b =
 	(
-		local nf = tryGetNode bip pArr[fi] pLink[fi]
-		local nt = tryGetNode bip pArr[ti] pLink[ti]
-		if nf != undefined and nt != undefined do
+		local li = findItem pSlot "L_UpLeg"
+		local ri = findItem pSlot "R_UpLeg"
+		if li == 0 or ri == 0 then undefined else
 		(
-			local v = nt.transform.pos - nf.transform.pos
-			local a = atan2 v.y v.x
-			local need = -90.0 - a
-			if abs (mod (need + 540.0) 360.0 - 180.0) > 5.0 do
+			local nl = tryGetNode b pArr[li] pLink[li]
+			local nr = tryGetNode b pArr[ri] pLink[ri]
+			if nl == undefined or nr == undefined then undefined else
+			(
+				local v = nl.transform.pos - nr.transform.pos
+				atan2 v.y v.x
+			)
+		)
+	)
+	fn angDiff a b = ( (mod (a - b + 540.0) 360.0) - 180.0 )
+	local facingMsg = ""
+	if tmplFile == "" and length lrDir > 0.5 do
+	(
+		local target = atan2 lrDir.y lrDir.x
+		local cur = lrAngle bip
+		if cur != undefined and abs (angDiff target cur) > 5.0 do
+		(
+			local need = angDiff target cur
+			local tryAng = #(need, -need)
+			local okAng = false
+			for k = 1 to 2 while not okAng do
 			(
 				local old = for o in objects where (matchPattern o.name pattern:(bip.name + "*")) collect o
 				delete old
-				bip = makeBiped (heightM * U) need spineN fingN toesN
+				bip = makeBiped (heightM * U) tryAng[k] spineN fingN toesN
 				ctrl = bip.transform.controller
 				ctrl.figureMode = true
+				local now = lrAngle bip
+				if now != undefined and abs (angDiff target now) <= 5.0 do okAng = true
 			)
+			if okAng then facingMsg = "정면 방향 맞춤 완료" else append msgs "⚠ Biped 정면 방향을 데이터와 맞추지 못했습니다 (좌우 축 불일치) — 캐릭터가 돌아가 보일 수 있습니다."
 		)
 	)
 
@@ -246,10 +301,36 @@ fn mbRun =
 	)
 
 	-- ---------------------------------------------------------------- Figure 모드에서 내 모델의 바인드 포즈 방향에 맞추기
+	-- (템플릿 모드에서는 이미 스키닝된 기본 자세를 건드리지 않고, 타깃 바인드 포즈와 얼마나 다른지만 알려 준다)
+	local figMsg = ""
+	if tmplFile != "" do
+	(
+		local offList = #()
+		for i = 1 to nParts do
+		(
+			local c = pAim[i]
+			if c > 0 and nodes[i] != undefined and nodes[c] != undefined and length pDir[i] > 0.5 do
+			(
+				local db = nodes[c].transform.pos - nodes[i].transform.pos
+				if length db > 1e-6 do
+				(
+					local e = acos (amax -1.0 (amin 1.0 (dot (normalize db) pDir[i])))
+					if e > 10.0 do append offList (pSlot[i] + ":" + ((floor e) as integer) as string + "도")
+				)
+			)
+		)
+		if offList.count > 0 then
+		(
+			figMsg = "⚠ 템플릿 Biped 의 기본(Figure) 자세가 타깃 모델의 바인드 포즈와 다른 부위: "
+			for k = 1 to (amin 12 offList.count) do figMsg += offList[k] + "  "
+			figMsg += "\n   (타깃 모델과 템플릿의 기본 자세가 같아야 모션이 정확합니다)"
+		)
+		else figMsg = "템플릿 Biped 의 기본 자세가 타깃 모델의 바인드 포즈와 일치합니다."
+	)
 	for i = 1 to nParts do
 	(
 		local c = pAim[i]
-		if c > 0 and nodes[i] != undefined and nodes[c] != undefined and length pDir[i] > 0.5 do
+		if tmplFile == "" and c > 0 and nodes[i] != undefined and nodes[c] != undefined and length pDir[i] > 0.5 do
 		(
 			local db = nodes[c].transform.pos - nodes[i].transform.pos
 			if length db > 1e-6 do
@@ -307,12 +388,60 @@ fn mbRun =
 	)
 	sliderTime = 0
 
+	-- ---------------------------------------------------------------- 자가 점검: 키를 넣은 Biped 의 뼈 방향 = 데이터가 말하는 방향?
+	local checkMsg = ""
+	local worst = #()
+	local chkFrames = #(1, (nFrames + 1) / 2, nFrames)
+	for t in chkFrames do
+	(
+		if t >= 1 and t <= nFrames do
+		(
+			sliderTime = (t - 1)
+			local tk = filterString lines[t] " "
+			for i = 1 to nParts do
+			(
+				local c = pAim[i]
+				if c > 0 and nodes[i] != undefined and nodes[c] != undefined and length pDir[i] > 0.5 and tk.count >= 3 + 4 * nParts do
+				(
+					local o = 3 + (i - 1) * 4
+					local ang = tk[o + 4] as float
+					local dm = if abs ang < 1e-4 then (matrix3 1) else ((angleaxis ang [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]) as matrix3)
+					local want = normalize (pDir[i] * dm)
+					local got = nodes[c].transform.pos - nodes[i].transform.pos
+					if length got > 1e-6 do
+					(
+						got = normalize got
+						local e = acos (amax -1.0 (amin 1.0 (dot want got)))
+						if e > 15.0 do append worst (pSlot[i] + "@" + (t as string) + ":" + ((floor e) as integer) as string + "도")
+					)
+				)
+			)
+		)
+	)
+	sliderTime = 0
+	if worst.count == 0 then checkMsg = "자가 점검: 뼈 방향이 데이터와 일치합니다 (프레임 1·중간·끝, 오차 15도 이하)"
+	else
+	(
+		checkMsg = "⚠ 자가 점검: 뼈 방향이 데이터와 다른 부위 (부위@프레임:오차) — "
+		for k = 1 to (amin 12 worst.count) do checkMsg += worst[k] + "  "
+	)
+
 	-- ---------------------------------------------------------------- 저장
 	local saved = false
 	try ( biped.saveBipFile ctrl outBip ; saved = true ) catch ( append msgs ("저장 실패: " + (getCurrentException())) )
+	local savedMax = false
+	if outMax != undefined do
+	(
+		try ( saveMaxFile outMax quiet:true ; savedMax = true ) catch ( append msgs (".max 저장 실패: " + (getCurrentException())) )
+	)
 	local secs = (timeStamp() - t0) / 1000.0
 	local msg = "MotionBridge: Biped 모션 " + (nFrames as string) + "프레임 적용 (" + (secs as string) + "초)\n"
 	if saved do msg += "저장: " + outBip + "\n"
+	if savedMax do msg += "저장: " + outMax + "\n"
+	if figMsg != "" do msg += figMsg + "\n"
+	if facingMsg != "" do msg += facingMsg + "\n"
+	msg += checkMsg + "\n"
+	msg += "Biped 키 " + (heightM as string) + "m · 골반 높이 비율 " + (r as string) + "\n"
 	if failed.count > 0 do msg += "키를 넣지 못한 부위: " + (failed as string) + "\n"
 	for l in msgs do msg += l + "\n"
 	format "%\n" msg
@@ -322,19 +451,20 @@ mbRun()
 '''
 
 
-def write_script(path: str, data_name: str) -> None:
+def write_script(path: str, data_name: str, template: str = "") -> None:
+    tpl = (template or "").replace("\\", "/").replace('"', "")      # MaxScript 문자열: 슬래시 경로
     with open(path, "w", encoding="utf-8", newline="\r\n") as f:
-        f.write(SCRIPT.replace("__DATA__", data_name))
+        f.write(SCRIPT.replace("__DATA__", data_name).replace("__TEMPLATE__", tpl))
 
 
 def export_biped(out_dir: str, base: str, skel: Skeleton, anim: Animation, slots: Dict[str, int], frame_to_canon: np.ndarray,
-                 units_per_meter: float) -> Tuple[List[str], List[str]]:
+                 units_per_meter: float, template: str = "") -> Tuple[List[str], List[str]]:
     """(만든 파일 목록, 경고 목록)"""
     d = compute(skel, anim, slots, frame_to_canon, units_per_meter)
     ms = os.path.join(out_dir, base + "_biped.ms")
     data = os.path.join(out_dir, base + "_biped.mbbip")
     write_data(data, d)
-    write_script(ms, os.path.basename(data))
+    write_script(ms, os.path.basename(data), template)
     warns = []
     missing = [s for s in ("Hips", "Spine", "Head", "L_UpperArm", "R_UpperArm", "L_UpLeg", "R_UpLeg") if s not in slots]
     if missing:

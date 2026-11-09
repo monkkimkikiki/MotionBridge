@@ -95,6 +95,8 @@ class Layout:
     game: str
     force_char: Optional[str] = None         # 정해 주면 모든 에셋을 이 캐릭터 폴더로
     chars: Dict[str, str] = field(default_factory=dict)   # 에셋 경로 -> 캐릭터 (직접 지정)
+    on_exist: str = "overwrite"              # 같은 이름의 파일이 이미 있을 때: overwrite | keep_old | new_name (core.safesave)
+    backups: List[str] = field(default_factory=list)      # 이번에 보관해 둔 이전 파일들 (keep_old)
 
     def char(self, asset_path: str) -> str:
         return safe_name(self.chars.get(asset_path) or self.force_char or character_of(asset_path))

@@ -561,6 +561,12 @@ class QInputDialog(Stub):
         QInputDialog.calls.append((title, label, list(items), current))
         return QInputDialog.item_ret
 
+    text_ret = ("", False)
+
+    @staticmethod
+    def getText(parent, title, label, *a, **k):
+        return QInputDialog.text_ret
+
 
 class QFileDialog(Stub):
     open_ret = ("", "")

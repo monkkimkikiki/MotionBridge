@@ -745,9 +745,30 @@ def test_extract_tab():
     print("extract tab OK")
 
 
+def test_exist_policy_ui():
+    from motionbridge.core import safesave
+    mw = A.MainWindow()
+    # 기본값은 '이전 파일 보관' — 두 탭의 콤보가 같은 설정
+    assert mw._exist_policy() == safesave.KEEP_OLD
+    assert mw.ex_exist.currentData() == mw.out_exist.currentData() == safesave.KEEP_OLD
+    assert "보관" in mw.btn_export._text
+    # 내보내기 탭에서 덮어쓰기로 바꾸면 추출 탭도 따라가고 버튼/설명이 바뀐다
+    mw.out_exist.setCurrentIndex(mw.out_exist.findData(safesave.OVERWRITE))
+    assert mw._exist_policy() == safesave.OVERWRITE and mw.ex_exist.currentData() == safesave.OVERWRITE
+    assert "덮어쓰기" in mw.btn_export._text and mw.cfg["on_exist"] == safesave.OVERWRITE
+    # 추출 레이아웃에 정책이 전달된다
+    mw.ex_out.setText("/tmp/mb_x")
+    assert mw.make_layout().on_exist == safesave.OVERWRITE
+    # Biped 템플릿 필드가 있다
+    mw.biped_tpl.setText("/tmp/skinned.max")
+    assert mw.biped_tpl.text().endswith("skinned.max")
+    print("exist policy UI OK")
+
+
 if __name__ == "__main__":
     test_full_flow()
     test_worker_failure()
     test_undo_shortcuts_meshmode()
     test_extract_tab()
+    test_exist_policy_ui()
     print("test_ui_logic ALL OK")

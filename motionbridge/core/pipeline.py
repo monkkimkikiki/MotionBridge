@@ -4,13 +4,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import animops, bridge, biped, frameedit, layout, export as X
+from . import animops, bridge, biped, frameedit, layout, safesave, export as X
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -38,11 +39,33 @@ class ExportOptions:
     edit: Optional[animops.EditOptions] = None  # 자르기/늘리기/fps/루프/키 압축
     organize: bool = False  # True: out_dir / 캐릭터 / Animations(모션 파일) · Models(메시·본 구조) 로 나눠 담는다
     char_name: str = ""     # organize 일 때 캐릭터 폴더 이름 (비우면 소스 경로/클립 이름에서 자동)
+    biped_template: str = ""      # Biped(.ms) 내보내기: 스키닝된 템플릿 .max (있으면 Biped 를 새로 만들지 않고 이 파일 안의 Biped 에 키를 굽는다)
+    on_exist: str = "overwrite"   # 같은 이름의 파일이 이미 있을 때: overwrite | keep_old | new_name (core.safesave)
+    name: str = ""                # 다른 이름으로 저장: 파일 이름(확장자 제외). 클립이 여러 개면 '이름_클립이름'
+
+
+def _free_base(base: str, dirs: Sequence[str]) -> str:
+    """dirs 안의 기존 파일(이름이 base 이거나 base_ 로 시작)과 겹치지 않는 base, base_2, base_3 …"""
+    names = set()
+    for d in dict.fromkeys(dirs):
+        if os.path.isdir(d):
+            names |= {os.path.splitext(n)[0].lower() for n in os.listdir(d)}
+
+    def clash(b: str) -> bool:
+        b = b.lower()
+        return any(n == b or n.startswith(b + "_") for n in names)
+
+    cand, n = base, 1
+    while clash(cand):
+        n += 1
+        cand = "%s_%d" % (base, n)
+    return cand
 
 
 class Project:
     def __init__(self) -> None:
         self.src: Optional[Model] = None
+        self.backups: List[str] = []   # 마지막 내보내기에서 보관해 둔 이전 파일들
         self.tgt: Optional[Model] = None
         self.src_slots: Dict[str, int] = {}
         self.tgt_slots: Dict[str, int] = {}
@@ -321,6 +344,7 @@ class Project:
         if opt.what == "retargeted" and not self.tgt:
             raise ValueError("리타깃 결과를 내보내려면 타깃 모델이 필요합니다.")
         os.makedirs(opt.out_dir, exist_ok=True)
+        self.backups = []
         clips = list(opt.clips) if opt.clips is not None else [self.clip]
         files: List[str] = []
         warns: List[str] = []
@@ -333,6 +357,8 @@ class Project:
                 progress(n, len(clips), self.src.animations[ci].name)
             anim_src = self.edited(ci)
             base = _safe(anim_src.name)
+            if (opt.name or "").strip():      # 다른 이름으로 저장
+                base = _safe(opt.name.strip()) if len(clips) == 1 else "%s_%s" % (_safe(opt.name.strip()), base)
             used[base] = used.get(base, 0) + 1
             if used[base] > 1:
                 base = "%s_%d" % (base, used[base])
@@ -358,12 +384,37 @@ class Project:
                 anim, keys, info = animops.apply_edit(anim, opt.edit, upm, skel.parents)
                 self.edit_info = info
                 warns += ["[%s] %s" % (anim_src.name, w) for w in info.notes]
-            files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys, adir, mdir)
+            policy = safesave.norm(opt.on_exist)
+            if policy == safesave.NEW_NAME:     # 이미 있는 파일과 겹치지 않는 이름(base_2 …)을 먼저 고른다
+                base = _free_base(base, [adir, mdir])
+            if policy == safesave.KEEP_OLD:     # 임시 폴더에 만들고, 이미 있는 파일은 '_old_날짜' 로 보관한 뒤 제자리로 옮긴다
+                stage = tempfile.mkdtemp(prefix="mb_exp_", dir=opt.out_dir)
+                try:
+                    sa, sm = os.path.join(stage, "a"), os.path.join(stage, "m")
+                    os.makedirs(sa)
+                    os.makedirs(sm)
+                    made = self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys, sa, sm)
+                    for f in made:
+                        under_a = os.path.commonpath([os.path.abspath(f), sa]) == sa
+                        root = sa if under_a else sm
+                        dst = os.path.join(adir if under_a else mdir, os.path.relpath(f, root))
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        dst, bk = safesave.claim(dst, policy)
+                        if bk:
+                            self.backups.append(bk)
+                        os.replace(f, dst)
+                        files.append(dst)
+                finally:
+                    shutil.rmtree(stage, ignore_errors=True)
+            else:
+                files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys, adir, mdir)
         if opt.write_skeleton_json:
             skel = self.tgt.skeleton if opt.what == "retargeted" else self.src.skeleton
             sdir = os.path.join(opt.out_dir, self.export_char(clips[-1] if clips else self.clip, opt), layout.MODEL_DIR) if opt.organize else opt.out_dir
             os.makedirs(sdir, exist_ok=True)
-            p = os.path.join(sdir, _safe(skel.name) + "_skeleton.json")
+            p, bk = safesave.claim(os.path.join(sdir, _safe(skel.name) + "_skeleton.json"), opt.on_exist)
+            if bk:
+                self.backups.append(bk)
             X.write_json(p, X.skeleton_dict(skel))
             files.append(p)
         return files, warns
@@ -382,7 +433,7 @@ class Project:
         if "bip" in fmts:  # 3ds Max Biped: 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
             slots = self.tgt_slots if opt.what == "retargeted" else self.src_slots
             try:
-                files, w = biped.export_biped(adir, base, skel, anim, slots, F, upm)
+                files, w = biped.export_biped(adir, base, skel, anim, slots, F, upm, opt.biped_template)
                 out += files
                 warns += w
             except ValueError as e:

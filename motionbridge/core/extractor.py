@@ -20,7 +20,7 @@ import sys
 import tempfile
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import animops, bridge, layout, meshconv
+from . import animops, bridge, layout, meshconv, safesave
 from .gamescan import normalize_aes_key
 
 HELPER_NAMES = ["mbextract.exe", "mbextract"]
@@ -189,9 +189,14 @@ def _stage_dir(out_dir: str) -> str:
     return tempfile.mkdtemp(prefix=".mb_stage_", dir=out_dir if os.path.isdir(out_dir) else None)
 
 
-def _move_into(src: str, dest_dir: str, taken: set) -> str:
+def _move_into(src: str, dest_dir: str, taken: set, lay: Optional["layout.Layout"] = None) -> str:
     os.makedirs(dest_dir, exist_ok=True)
     dst = os.path.join(dest_dir, layout.unique_name(dest_dir, os.path.basename(src), taken))
+    if lay is not None:      # 같은 이름이 이미 디스크에 있으면 설정대로 (이전 파일 보관 / 다른 이름 / 덮어쓰기)
+        dst, bk = safesave.claim(dst, lay.on_exist)
+        if bk:
+            lay.backups.append(bk)
+        taken.add(dst.lower())
     os.replace(src, dst)
     return dst
 
@@ -215,7 +220,7 @@ def export_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
     try:
         ev = _exported(_export_events(helper, game, ue, aes, usmap, paths, stage, on_event, kind, mesh_format, textures))
         taken: set = set()
-        return [_move_into(f, lay.dest(kind, p), taken) for p, f in ev if os.path.isfile(f)]
+        return [_move_into(f, lay.dest(kind, p), taken, lay) for p, f in ev if os.path.isfile(f)]
     finally:
         _drop_stage(stage)
 
@@ -259,7 +264,7 @@ def export_meshes(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
             if lay is None:
                 return [f for _p, f in raw_items]
             taken: set = set()
-            return [_move_into(f, lay.model_dest(p), taken) for p, f in raw_items]
+            return [_move_into(f, lay.model_dest(p), taken, lay) for p, f in raw_items]
         made: List[str] = []
         errors: List[str] = []
         taken = set()
@@ -272,11 +277,11 @@ def export_meshes(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
                 errors.append(str(e))
                 log(str(e))
                 continue
-            made += conv if lay is None else [_move_into(c, dest, taken) for c in conv]
+            made += conv if lay is None else [_move_into(c, dest, taken, lay) for c in conv]
         if not made and errors:
             raise ExtractError(errors[0])
         if keep_raw:
-            made += [f for _p, f in raw_items] if lay is None else [_move_into(f, lay.model_dest(p), taken) for p, f in raw_items if os.path.isfile(f)]
+            made += [f for _p, f in raw_items] if lay is None else [_move_into(f, lay.model_dest(p), taken, lay) for p, f in raw_items if os.path.isfile(f)]
         elif lay is None:
             for _p, f in raw_items:
                 try:
