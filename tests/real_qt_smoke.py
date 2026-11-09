@@ -293,6 +293,10 @@ try:
     check(not _ct.boss._refresh_ready(), "보스 패널: 영역 미지정이면 준비 안 됨")
     _ct.boss.spins["end_grace"].setValue(45)
     check(_bs.cfg(_main2.s)["end_grace"] == 45, "보스 패널: 설정이 저장 값에 반영")
+    _ct.boss.spins["match"].setValue(65)
+    check(abs(_bs.cfg(_main2.s)["match"] - 0.35) < 1e-6, "보스 패널: 민감도 65%% = 내부 기준 0.35 (%s)" % _bs.cfg(_main2.s)["match"])
+    _ct.boss.spins["defeat_hp"].setValue(8)
+    check(abs(_bs.cfg(_main2.s)["defeat_hp"] - 0.08) < 1e-6, "보스 패널: 처치 체력 8%% = 0.08")
     _run = _br.BossRun(_main2.s)
     _smp = _br.Sample(0.0, True, 0.9, 1.0, False)
     _ev = []

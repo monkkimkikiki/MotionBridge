@@ -237,15 +237,28 @@ class BossPanel(QWidget):
         f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         f.setVerticalSpacing(8)
         self.spins = {}
-        for key, label, lo, hi, step, suffix, tip in (
-                ("start_hold", "시작: 체력바가 계속 보인 시간", 0.5, 30, 0.5, " 초", "이만큼 계속 보여야 보스전 시작으로 봐요 (잠깐 스친 화면 무시)"),
-                ("end_grace", "종료: 체력바가 계속 안 보인 시간", 5, 600, 5, " 초", "페이즈 변경 연출 등을 기다려 주는 시간. 이만큼 안 보이면 끝으로 봐요 (기본 60초)"),
-                ("defeat_grace", "종료(처치): 체력 0 근처에서 사라진 뒤", 2, 300, 1, " 초", "체력이 거의 0 으로 줄었다가 사라지면 처치로 보고 이만큼만 기다려요"),
-                ("defeat_hp", "처치로 보는 남은 체력", 0.0, 0.3, 0.01, "", "이 비율 이하로 줄었다 사라지면 처치 (0.04 = 4%)"),
-                ("match", "체력바 인식 기준", 0.2, 0.95, 0.05, "", "높을수록 엄격해요. 보스전인데 안 잡히면 낮추고, 평소에 잘못 잡히면 높이세요"),
-                ("poll", "화면 확인 간격", 0.3, 5, 0.1, " 초", "OBS 에서 화면을 받는 간격"),
-                ("max_minutes", "최대 녹화 시간", 1, 120, 1, " 분", "안전장치: 이보다 길면 강제로 끝내요"),
-                ("min_seconds", "이보다 짧으면 분석 안 함", 0, 300, 5, " 초", "잠깐 잘못 감지돼 녹화된 것을 분석하지 않아요 (영상은 남겨요)")):
+        # (설정 이름, 보이는 이름, 최소, 최대, 한 칸, 단위, 설명, 화면값<-저장값, 저장값<-화면값)
+        ident = (lambda v: v, lambda v: v)
+        sens = (lambda v: (1.0 - v) * 100.0, lambda v: 1.0 - v / 100.0)     # 저장은 '엄격함(0~1)', 화면은 '민감도(%)'
+        pct = (lambda v: v * 100.0, lambda v: v / 100.0)
+        for key, label, lo, hi, step, suffix, tip, (to_ui, from_ui) in (
+                ("match", "민감도 — 체력바를 얼마나 잘 알아볼까", 5, 80, 5, " %",
+                 "높을수록 체력바가 흐리거나 배경이 복잡해도 잡아요. 대신 체력바가 아닌 것을 잘못 잡을 수 있어요.\n"
+                 "· 보스전인데 감지가 안 되면 → 올리세요\n· 보스전이 아닌데 녹화가 시작되면 → 내리세요\n(처음엔 기본값 그대로 두고, [지금 화면으로 시험]으로 확인하세요)", sens),
+                ("start_hold", "녹화 시작: 체력바가 이만큼 계속 보이면", 0.5, 30, 0.5, " 초",
+                 "체력바가 이 시간 동안 끊기지 않고 보이면 '보스전이 시작됐다'고 보고 녹화를 시작해요. 잠깐 스치는 화면에는 반응하지 않게 하는 값이에요.", ident),
+                ("end_grace", "녹화 종료: 체력바가 이만큼 안 보이면", 5, 600, 5, " 초",
+                 "체력바가 이 시간 동안 안 보이면 '보스전이 끝났다'고 보고 녹화를 끝내요. 페이즈가 바뀔 때 연출로 체력바가 잠깐 사라져도 기다려 주는 시간이라, 너무 짧게 하면 중간에 끊겨요. (기본 60초)", ident),
+                ("defeat_grace", "쓰러뜨린 것 같으면: 이만큼만 기다리고 종료", 2, 300, 1, " 초",
+                 "보스 체력이 거의 0 이 된 채로 체력바가 사라지면 '쓰러뜨렸다'고 보고, 위의 긴 시간 대신 이 짧은 시간만 기다린 뒤 끝내요.", ident),
+                ("defeat_hp", "'쓰러뜨림'으로 보는 남은 체력", 0, 30, 1, " % 이하",
+                 "체력바가 이 % 이하로 줄어든 채 사라지면 쓰러뜨린 것으로 봐요. (4% = 거의 다 깎인 상태)", pct),
+                ("poll", "화면 확인 간격", 0.3, 5, 0.1, " 초마다",
+                 "OBS 화면을 몇 초마다 한 번 확인할지예요. 짧을수록 빨리 반응하지만 컴퓨터가 조금 더 바빠져요.", ident),
+                ("max_minutes", "최대 녹화 시간 (안전장치)", 1, 120, 1, " 분",
+                 "혹시 끝을 못 알아봐도, 이 시간이 지나면 강제로 녹화를 끝내요.", ident),
+                ("min_seconds", "너무 짧은 녹화는 분석 안 함", 0, 300, 5, " 초 미만",
+                 "체력바를 잘못 알아봐서 아주 짧게 녹화된 경우, 이보다 짧으면 분석하지 않아요 (영상 파일은 그대로 남겨요).", ident)):
             sp = QDoubleSpinBox()
             sp.setRange(lo, hi)
             sp.setSingleStep(step)
@@ -255,11 +268,12 @@ class BossPanel(QWidget):
             sp.setMinimumWidth(150)
             sp.setMinimumHeight(34)
             sp.setStyleSheet("QDoubleSpinBox { padding: 4px 26px 4px 10px; }")   # 위아래 버튼이 숫자를 가리지 않게 오른쪽을 비움
-            sp.setValue(float(boss.cfg(self.main.s)[key]))
-            sp.valueChanged.connect(lambda v, k=key: self._set(k, float(v)))
+            sp.setValue(float(to_ui(float(boss.cfg(self.main.s)[key]))))
+            sp.valueChanged.connect(lambda v, k=key, fu=from_ui: self._set(k, float(fu(float(v)))))
             self.spins[key] = sp
             lb = QLabel(label)
             lb.setWordWrap(True)
+            lb.setToolTip(tip)
             f.addRow(lb, sp)
         self.ck_letter = QCheckBox("연출(위아래 검은 띠) 중에는 '안 보인 시간'을 세지 않기")
         self.ck_letter.setChecked(bool(boss.cfg(self.main.s)["letterbox_pause"]))
@@ -390,9 +404,9 @@ class BossPanel(QWidget):
             QMessageBox.warning(self, "지금 화면 시험", r.error)
             return
         hp = "알 수 없음" if r.hp is None else "%d%%" % round(r.hp * 100)
-        QMessageBox.information(self, "지금 화면 시험", "체력바: %s\n남은 체력: %s\n연출(검은 띠) 중: %s\n\n점수 — %s\n\n"
-                                "보스전 중인데 '없음'이면: [인식 기준]을 낮추거나(0.35~0.45), 체력바 영역을 다시 지정하세요. "
-                                "보스전이 아닌데 '있음'이면 기준을 높이세요." % ("있음" if r.present else "없음", hp, "예" if r.cutscene else "아니요", r.detail))
+        QMessageBox.information(self, "지금 화면 시험", "체력바: %s\n남은 체력: %s\n연출(검은 띠) 중: %s\n\n%s\n\n"
+                                "보스전 중인데 '없음'이면: [민감도]를 올리거나 체력바 영역을 다시 지정하세요. "
+                                "보스전이 아닌데 '있음'이면 민감도를 내리세요." % ("있음" if r.present else "없음", hp, "예" if r.cutscene else "아니요", r.detail))
 
     # ------------------------------------------------------------------ 녹화본으로 시험
     def test_video(self):
@@ -423,5 +437,5 @@ class BossPanel(QWidget):
         tail = "\n\n체력바 인식 점수: 최고 %.2f / 가운데값 %.2f (기준 %.2f). 체력바가 보인 화면 %d/%d장." % (
             st["score_max"], st["score_median"], boss.cfg(self.main.s)["match"], st["present"], st["frames"])
         if not segs:
-            tail += "\n\n못 찾았어요. 점수 최고가 기준보다 낮으면 [인식 기준]을 낮추거나 체력바 영역을 다시 지정해 보세요."
+            tail += "\n\n못 찾았어요. '최고'가 판단 기준보다 낮으면 [민감도]를 올리거나 체력바 영역을 다시 지정해 보세요."
         QMessageBox.information(self, "감지 시험 결과", head + ("\n\n" + "\n".join(lines) if lines else "") + tail)

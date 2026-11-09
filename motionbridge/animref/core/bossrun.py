@@ -56,7 +56,7 @@ class BossSampler:
             return Sample(t, error="OBS 화면을 읽지 못했어요")
         present, sc, hp = self.det.present(img)
         cut = boss.letterbox(boss.normalize(img)) if self.cfg.get("letterbox_pause") else False
-        return Sample(t, present, sc, hp, cut, detail="윤곽 %.2f · 색띠 %.2f (기준 %.2f)" % (self.det.last_edge, self.det.last_color, self.cfg["match"]))
+        return Sample(t, present, sc, hp, cut, detail="체력바 닮은 정도 %d%% (%d%% 이상이면 체력바로 판단)" % (round(max(self.det.last_edge, self.det.last_color) * 100), round(self.cfg["match"] * 100)))
 
     def close(self) -> None:
         if self._obs is not None:
