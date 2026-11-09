@@ -14,6 +14,8 @@ from motionbridge.ui import app as A  # noqa: E402
 from motionbridge.ui import vidfind_tab as V  # noqa: E402
 from qt_stub import QFileDialog, QMessageBox  # noqa: E402
 
+vision_real_make = vision.make_provider
+
 MESHES = [
     "Sparta/Content/Characters/Monsters/Dwarf/Meshes/SK_Dwarf",
     "Sparta/Content/Characters/Monsters/Hexapod/Meshes/SK_Hexapod",
@@ -304,6 +306,19 @@ def main():
         del mw.extract_for_char, vt.open_mesh_in_viewport, vt.open_in_viewport
         vis = [i for i in range(3) if not vt.anim_list.item(i).isHidden()]
         check(vis == [2], "쉼표: player 와 attack 둘 다 든 것만: %s" % vis)
+        # AI 회의: 참가자 만들기, 결과로 목록 다시 줄 세우기
+        from motionbridge.core import panel as P
+        _fake_mp = V.vision.make_provider
+        V.vision.make_provider = vision_real_make
+        ms = vt._panel_members({"ollama": True, "ollama2": True, "gptoss": True, "claude": False}, "gemma3:12b")
+        check([m.provider.key for m in ms] == ["ollama", "ollama", "gptoss"] and [m.sees for m in ms] == [True, True, False]
+              and ms[1].provider.model == "gemma3:12b", "회의 참가자: %s" % [m.name for m in ms])
+        V.vision.make_provider = _fake_mp
+        verdict = P.Verdict([("A_PC_HeavyAttack", 0.8, ["Qwen", "GPT-OSS"])], [P.Turn(1, "Qwen", "t")], {}, [])
+        V.QDialog.exec = lambda self_: 0
+        vt._after_panel((verdict, "sheet.jpg"))
+        first = vt.anim_list.item(0)
+        check("A_PC_HeavyAttack" in first.text() and "80%" in first.text(), "합의 1위가 목록 맨 위로: %s" % first.text())
         vt.anim_filter.setText("zzz")
         check(vt._picked_anims() == [] and "0 / 3" in vt.anim_count.text(), "없는 글자")
         vt.anim_filter.setText("")

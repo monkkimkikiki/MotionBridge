@@ -19,12 +19,12 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QMimeData, QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, skelgraph, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, panel, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
 from .widgets import EditPanel, fit_widths, wrappable
 
@@ -72,6 +72,7 @@ def _thumb(frame: str, box) -> Optional[object]:
         return None
 
 
+MAX_PANEL_NAMES = 150  # AI 회의에 알려 주는 애니메이션 이름 수 (많으면 작은 모델이 헷갈린다)
 MAX_MOTION_RANK = 40  # 동작 비교로 한 번에 임시로 뽑아 비교하는 최대 개수 (뽑는 데 시간이 든다)
 
 
@@ -497,6 +498,11 @@ class VidFindTab(QWidget):
                                   "다시 줄 세웁니다. 이름이 비슷해도 동작이 다른 것, 이름이 달라도 동작이 같은 것을 가려냅니다. 좌우 반전(거울) 동작도 같이 봅니다." % MAX_MOTION_RANK)
         self.btn_mrank.clicked.connect(lambda *_a: self.rank_by_motion())
         v.addWidget(self.btn_mrank)
+        self.btn_panel = QPushButton("🧑‍⚖ AI 회의로 찾기… (여러 AI 가 영상과 목록을 보며 토론)")
+        self.btn_panel.setToolTip("고른 영상 장면을 한 장의 시트로 붙여, 이미지를 보는 AI(Qwen-VL·Claude·Gemini …)가 직접 보고, 글 전용 AI(GPT-OSS)는 그 묘사를 읽고,\n"
+                                  "모두 지금 목록(위쪽 %d개)에서 맞는 애니메이션을 고르고 서로의 이유를 보며 고칩니다. 합의 순위로 목록을 다시 줄 세웁니다." % MAX_PANEL_NAMES)
+        self.btn_panel.clicked.connect(lambda *_a: self.open_panel())
+        v.addWidget(self.btn_panel)
         self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타깃 작업)")
         self.btn_view.setMinimumHeight(34)
         self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 엽니다. 뷰포트로 끌어다 놓아도 같고, 탭은 옮기지 않습니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
@@ -1438,6 +1444,150 @@ class VidFindTab(QWidget):
         """고른 메시가 한 캐릭터뿐이면 애니메이션도 그 캐릭터 폴더에 모은다 (애니 경로가 달라도)."""
         names = {layout.character_of(it.data(Qt.ItemDataRole.UserRole)) for it in self.mesh_list.selectedItems()}
         return names.pop() if len(names) == 1 else None
+
+    # ================================================================== AI 회의
+    def _panel_members(self, picked: Dict[str, bool], second_model: str):
+        """고른 참가자마다 Provider 를 만든다 (모델/키는 위 '인식 방식' 설정을 따른다)."""
+        self._save_settings()
+        cfg = dict(self.cfg)
+        cfg["vf_claude_key"] = self._keys.get("claude", "").strip()
+        cfg["vf_openai_key"] = self._keys.get("openai", "").strip()
+        out = []
+        if picked.get("ollama"):
+            out.append(panel.Member("Ollama 비전 (%s)" % (cfg.get("vf_ollama_model") or vision.OLLAMA_MODELS[0]), vision.make_provider("ollama", cfg)))
+        if picked.get("ollama2") and second_model.strip():
+            c2 = dict(cfg)
+            c2["vf_ollama_model"] = second_model.strip()
+            out.append(panel.Member("Ollama 비전 (%s)" % second_model.strip(), vision.make_provider("ollama", c2)))
+        if picked.get("gptoss"):
+            out.append(panel.Member("GPT-OSS", vision.make_provider("gptoss", cfg)))
+        if picked.get("claude"):
+            out.append(panel.Member("Claude", vision.make_provider("claude", cfg)))
+        if picked.get("openai"):
+            out.append(panel.Member("다른 AI (%s)" % (cfg.get("vf_oa_model") or self._preset()[2]), vision.make_provider("openai", cfg)))
+        return out
+
+    def open_panel(self) -> None:
+        names = []
+        for i in range(self.anim_list.count()):
+            it = self.anim_list.item(i)
+            if not it.isHidden():
+                names.append(os.path.splitext(os.path.basename(str(it.data(Qt.ItemDataRole.UserRole))))[0])
+        names = names[:MAX_PANEL_NAMES]
+        if not names:
+            QMessageBox.warning(self, "AI 회의", "회의에 올릴 애니메이션 목록이 비어 있습니다. 먼저 캐릭터를 고르거나 검색해서 후보를 만드세요.")
+            return
+        if not self.source_paths(True):
+            QMessageBox.warning(self, "AI 회의", "영상/이미지를 먼저 추가하세요.")
+            return
+        d = QDialog(self)
+        d.setWindowTitle("AI 회의로 찾기")
+        lay = QVBoxLayout(d)
+        lay.addWidget(wrappable(QLabel("회의에 참가할 AI 를 고르세요. 이미지를 보는 AI 가 한 명 이상 필요합니다. 모델과 키는 위 '인식 방식' 설정을 따릅니다.\n"
+                                       "회의에 올리는 애니메이션: 지금 목록 위쪽 %d개." % len(names))))
+        opts = [("ollama", "Ollama 비전 모델 (설정의 모델, 예: qwen2.5vl:7b) — 이미지 봄", True),
+                ("ollama2", "Ollama 두 번째 비전 모델 — 이미지 봄", False),
+                ("gptoss", "GPT-OSS-20B — 글 전용 (다른 AI 의 묘사를 읽고 추론)", True),
+                ("claude", "Claude (API 키) — 이미지 봄", False),
+                ("openai", "다른 AI (Gemini·GPT·Groq … 설정의 서비스) — 이미지 모델이어야 함", False)]
+        boxes = {}
+        for k, t, on in opts:
+            cb = QCheckBox(t)
+            cb.setChecked(bool(self.cfg.get("vf_panel_" + k, on)))
+            boxes[k] = cb
+            lay.addWidget(cb)
+        h = QHBoxLayout()
+        h.addWidget(QLabel("두 번째 비전 모델"))
+        second = QLineEdit(self.cfg.get("vf_panel_model2", "gemma3:12b"))
+        h.addWidget(second, 1)
+        h.addWidget(QLabel("라운드"))
+        rounds = QSpinBox()
+        rounds.setRange(1, 4)
+        rounds.setValue(int(self.cfg.get("vf_panel_rounds", 2)))
+        h.addWidget(rounds)
+        lay.addLayout(h)
+        bh = QHBoxLayout()
+        ok, cancel = QPushButton("회의 시작"), QPushButton("취소")
+        ok.clicked.connect(d.accept)
+        cancel.clicked.connect(d.reject)
+        bh.addStretch(1)
+        bh.addWidget(ok)
+        bh.addWidget(cancel)
+        lay.addLayout(bh)
+        if not d.exec():
+            return
+        picked = {k: bool(cb.isChecked()) for k, cb in boxes.items()}
+        for k, v_ in picked.items():
+            self.cfg["vf_panel_" + k] = v_
+        self.cfg["vf_panel_model2"] = second.text().strip()
+        self.cfg["vf_panel_rounds"] = int(rounds.value())
+        bridge.save_config(self.cfg)
+        members = self._panel_members(picked, second.text())
+        if not members:
+            QMessageBox.warning(self, "AI 회의", "참가자를 한 명 이상 고르세요.")
+            return
+        if not any(m.sees for m in members):
+            QMessageBox.warning(self, "AI 회의", "이미지를 볼 수 있는 AI 를 한 명 이상 고르세요 (GPT-OSS 는 그림을 못 봅니다).")
+            return
+        for m in members:
+            ok_, msg, _n = m.provider.check() if m.provider.key in ("claude", "openai", "ollama", "gptoss") else (True, "", [])
+            if not ok_:
+                QMessageBox.warning(self, "AI 회의 — %s" % m.name, msg)
+                return
+        srcs = self.source_paths(True)
+        hint = self.hint.text().strip() or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")
+        ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
+        n_rounds = int(rounds.value())
+
+        def job(w):
+            shutil.rmtree(FRAME_DIR, ignore_errors=True)
+            w.progress.emit(0, 1, "장면 시트 만드는 중")
+            fr = frames.sample_sources(ff, srcs, FRAME_DIR, 12, 12)
+            sheet = panel.make_sheet([f.path for f in fr], os.path.join(FRAME_DIR, "panel_sheet.jpg"))
+            return panel.run_panel(members, sheet, names, hint, n_rounds, lambda m: w.progress.emit(0, 1, m)), sheet
+
+        self.win.run_async(job, self._after_panel, "AI 회의 중 (AI 가 느리면 몇 분 걸립니다)", cancellable=True,
+                           on_cancel=lambda: self.anim_note.setText("AI 회의를 취소했습니다 (목록은 그대로)."))
+
+    def _after_panel(self, out) -> None:
+        verdict, sheet = out
+        lines = []
+        for t in verdict.transcript:
+            lines.append("[라운드 %d] %s\n%s\n" % (t.round, t.speaker, t.text))
+        lines.append("— 합의 순위 —")
+        for i, (nm_, sc, who) in enumerate(verdict.ranking[:10], 1):
+            lines.append("%d. %s  (점수 %d%%, 지지: %s)" % (i, nm_, round(sc * 100), ", ".join(who)))
+        if verdict.errors:
+            lines.append("\n⚠ " + " / ".join(verdict.errors))
+        text = "\n".join(lines)
+        rank = {nm_: (sc, who) for nm_, sc, who in verdict.ranking}
+        keep = []
+        for i in range(self.anim_list.count()):
+            it = self.anim_list.item(i)
+            pth = it.data(Qt.ItemDataRole.UserRole)
+            base = os.path.splitext(os.path.basename(str(pth)))[0]
+            keep.append((rank.get(base), it.text(), pth, str(it.toolTip() or "")))
+        keep.sort(key=lambda t: -(t[0][0] if t[0] else -1.0))
+        self.anim_list.clear()
+        for r, txt, pth, tip in keep:
+            it = QListWidgetItem(("🧑‍⚖ %3d%%  " % round(r[0] * 100) if r else "") + txt)
+            it.setData(Qt.ItemDataRole.UserRole, pth)
+            it.setToolTip(tip + (("\nAI 회의 지지: " + ", ".join(r[1])) if r else ""))
+            self.anim_list.addItem(it)
+        self.last_panel_text = text
+        d = QDialog(self)
+        d.setWindowTitle("AI 회의 결과")
+        lay = QVBoxLayout(d)
+        box = QPlainTextEdit()
+        box.setReadOnly(True)
+        box.setPlainText(text)
+        box.setMinimumSize(720, 480)
+        lay.addWidget(box)
+        b = QPushButton("닫기")
+        b.clicked.connect(d.accept)
+        lay.addWidget(b)
+        self.anim_note.setText("AI 회의 완료 — 합의 1위: %s. 목록을 합의 순으로 다시 줄 세웠습니다. 눈으로 확인하고 고르세요." % (verdict.ranking[0][0] if verdict.ranking else "없음"))
+        d.exec()
 
     # ================================================================== 동작으로 비교해 정렬
     def rank_by_motion(self, query_path: Optional[str] = None) -> None:
