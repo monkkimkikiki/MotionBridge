@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import Cancelled, media, noop
+from . import Cancelled, media, noop, titles
 from .signals import FrameCues
 from . import sessions
 from .library import game_dir, safe_name
@@ -358,7 +358,7 @@ def make_manual_clip(path, t0, t1, s, label=None, log=noop, progress=noop, cance
         raise ValueError("구간이 너무 짧아요.")
     gdir = game_dir(s)
     cdir = gdir / "clips"
-    stem = safe_name(Path(path).stem)[:40]
+    stem = safe_name(titles.display(path))[:40]       # 영상에 제목을 붙였으면 클립 파일 이름도 그 제목으로 시작
     base = f"{stem}_manual_{int(t0 * 1000):08d}_full"
     name, k = base, 2
     while (cdir / f"{name}.mp4").exists() or (cdir / f"{name}.json").exists():

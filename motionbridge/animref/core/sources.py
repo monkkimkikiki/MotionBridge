@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from . import media
+from . import media, titles
 from .library import file_of, game_dir, load_clips
 from .settings import app_dir
 
@@ -85,6 +85,7 @@ def list_sources(s, queue_paths=()):
         except Exception:
             pass
         src["thumb"] = thumb
+        src["title"] = titles.title_of(src["path"])
     return sorted(found.values(), key=lambda x: x["mtime"], reverse=True)
 
 

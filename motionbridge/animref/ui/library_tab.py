@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QTreeWidget, QTreeWidgetItem, 
                                QLineEdit, QListView, QListWidget, QListWidgetItem, QMenu, QMessageBox,
                                QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
-from ..core import classify, library, sessions
+from ..core import classify, library, sessions, titles
 from ..core.settings import label_names
 
 from .player import PlayerDialog
@@ -307,7 +307,7 @@ class LibraryTab(QWidget):
                       and label in (ALL, library.final_label(m))
                       and group in (ALL, m.get("group") or library.OTHER_GROUP)
                       and view in (ALL, m.get("view"))
-                      and all(q in m.get("source_name", "").lower() or q in Path(m["_json"]).stem.lower() for q in qs)]
+                      and all(q in m.get("source_name", "").lower() or q in Path(m["_json"]).stem.lower() or q in titles.clip_title(m).lower() for q in qs)]
         self.model.clear()
         for m in self.shown:
             lab = library.final_label(m)
@@ -321,8 +321,8 @@ class LibraryTab(QWidget):
                 head = f"[{m['hit_index']}/{m['hit_count']}타] " + head
             elif m.get("manual"):
                 head = "✋ " + head
-            it = QStandardItem(self._icon(m), f"{head}\n{m.get('duration', 0):.1f}초 · {Path(m['_json']).stem[:18]}")
-            it.setToolTip(f"{Path(m['_json']).stem}\n원본: {m.get('source_name', '')}\n원본 {m.get('t_range', ['', ''])[0]}초 부근\n묶음: {m.get('group') or '-'}"
+            it = QStandardItem(self._icon(m), f"{head}\n{m.get('duration', 0):.1f}초 · {titles.clip_title(m)[:34]}")
+            it.setToolTip(f"{titles.clip_title(m)}\n파일: {Path(m['_json']).stem}\n원본: {m.get('source_name', '')}\n원본 {m.get('t_range', ['', ''])[0]}초 부근\n묶음: {m.get('group') or '-'}"
                           + (f"\nAI: {m['ai_reason']}" if m.get("ai_reason") else ""))
             self.model.appendRow(it)
         unl = sum(1 for m in self.clips if not m.get("ai_label"))

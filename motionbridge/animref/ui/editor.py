@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QHBo
                                QVBoxLayout, QWidget)
 
 from ..core import bookmarks as BM
-from ..core import library, media
+from ..core import library, media, titles
 from ..core.segment import make_manual_clip
 from ..core.settings import label_names
 
@@ -801,7 +801,7 @@ class ClipEditor(QDialog):
         self.clip_list.clear()
         for m in sorted(clips, key=lambda m: m.get("start_in_source", 0)):
             a = float(m.get("start_in_source", 0))
-            it = QListWidgetItem(f"{fmt_t(a)}  {library.final_label(m)}  ({m.get('duration', 0):.1f}초)"
+            it = QListWidgetItem(f"{titles.clip_title(m)}  {library.final_label(m)}  ({m.get('duration', 0):.1f}초)"
                                  + ("  ✋" if m.get("manual") else ""))
             it.setData(Qt.ItemDataRole.UserRole, (a, a + float(m.get("duration", 0))))
             self.clip_list.addItem(it)

@@ -6,9 +6,9 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
-                               QListWidgetItem, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
+                               QListWidgetItem, QInputDialog, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
 
-from ..core import bossrun, cleanup, media, pipeline, sources
+from ..core import bossrun, cleanup, library, media, pipeline, sources, titles
 from ..core.obs import ObsRecorder, friendly_error
 from ..core.settings import SPEED_NAMES
 
@@ -191,10 +191,24 @@ class CollectTab(QWidget):
         l2.addWidget(self.src_list, 1)
         self.src_empty = muted("")
         l2.addWidget(self.src_empty)
+        self.clips_title = muted("이 영상의 클립")
+        l2.addWidget(self.clips_title)
+        self.src_clips = QListWidget()
+        self.src_clips.setMaximumHeight(110)
+        self.src_clips.setToolTip("이 영상으로 만든 클립이에요. 더블클릭하면 편집기에서 그 위치를 열어요.")
+        self.src_clips.itemDoubleClicked.connect(self._open_src_clip)
+        l2.addWidget(self.src_clips)
+        self.src_list.currentItemChanged.connect(lambda *_a: self._fill_src_clips())
+        from PySide6.QtGui import QKeySequence, QShortcut
+        QShortcut(QKeySequence("F2"), self.src_list, activated=lambda: self.rename_source(self._cur_src()),
+                  context=Qt.ShortcutContext.WidgetShortcut)
         srow3 = QHBoxLayout()
         self.btn_src_all = QPushButton("▶ 전체 분석")
         self.btn_src_all.setToolTip("고른 영상 전체를 분석해요")
         self.btn_src_all.clicked.connect(lambda: self.analyze_source(self._cur_src()))
+        self.btn_src_name = QPushButton("✏ 이름")
+        self.btn_src_name.setToolTip("영상 제목을 붙여요 (예: 이름없는자 보스전). 그 영상으로 만든 클립이 '제목 00:00:00~00:00:10' 처럼 보여요.\n표시 이름만 바뀌고 영상 파일은 그대로예요. (F2)")
+        self.btn_src_name.clicked.connect(lambda: self.rename_source(self._cur_src()))
         self.btn_src_range = QPushButton("✂ 구간만 분석…")
         self.btn_src_range.setToolTip("영상을 보면서 원하는 부분(여러 구간 가능)만 골라 분석해요")
         self.btn_src_range.clicked.connect(lambda: self.analyze_range(self._cur_src()))
@@ -206,7 +220,7 @@ class CollectTab(QWidget):
         b_dir.setToolTip("녹화 폴더 열기")
         b_dir.setMaximumWidth(36)
         b_dir.clicked.connect(self._open_rec_dir)
-        for b in (self.btn_src_all, self.btn_src_range, b_ref, b_dir):
+        for b in (self.btn_src_all, self.btn_src_range, self.btn_src_name, b_ref, b_dir):
             srow3.addWidget(b)
         l2.addLayout(srow3)
         self._thumbs = None
@@ -334,6 +348,7 @@ class CollectTab(QWidget):
             has = self.src_list.count() > 0
             self.btn_src_all.setEnabled(has and not busy)
             self.btn_src_range.setEnabled(has and not busy)
+            self.btn_src_name.setEnabled(has)
         if self.rec is None:
             self.btn_rec.setEnabled(not busy)
 
@@ -408,6 +423,52 @@ class CollectTab(QWidget):
             return None
         return it.data(Qt.ItemDataRole.UserRole)
 
+    def rename_source(self, path):
+        """원본 영상 제목 붙이기/바꾸기. 클립은 이 제목을 앞에 달고 '00:00:00~00:00:10' 으로 보인다."""
+        if not path:
+            return
+        cur = titles.title_of(path)
+        text, ok = QInputDialog.getText(self, "영상 제목", "영상 제목 (비우면 파일 이름으로 돌아가요. 영상 파일은 그대로예요):",
+                                        text=cur or Path(path).stem)
+        if not ok:
+            return
+        t = text.strip()
+        titles.set_title(path, "" if t == Path(path).stem else t)
+        self.refresh_sources()
+        try:
+            self.main.library.refresh()
+        except Exception:  # noqa: BLE001
+            pass
+        self.main.flash("영상 제목을 바꿨어요: " + titles.display(path))
+
+    def _clips_of(self, path):
+        try:
+            clips = library.load_clips(library.game_dir(self.main.s))
+        except Exception:  # noqa: BLE001
+            return []
+        name = Path(path).name
+        mine = [m for m in clips if m.get("source_video") == path or m.get("source_name") == name]
+        return sorted(mine, key=lambda m: float(m.get("start_in_source", 0) or 0))
+
+    def _fill_src_clips(self):
+        self.src_clips.clear()
+        it = self.src_list.currentItem()
+        path = it.data(Qt.ItemDataRole.UserRole) if it else None
+        if not path:
+            self.clips_title.setText("이 영상의 클립")
+            return
+        mine = self._clips_of(path)
+        self.clips_title.setText(f"이 영상의 클립 ({len(mine)}개)" if mine else "이 영상의 클립 — 아직 없어요")
+        for m in mine:
+            a = float(m.get("start_in_source", 0) or 0)
+            row = QListWidgetItem(f"{titles.clip_title(m)}   {library.final_label(m)}")
+            row.setData(Qt.ItemDataRole.UserRole, (path, a))
+            self.src_clips.addItem(row)
+
+    def _open_src_clip(self, it):
+        path, a = it.data(Qt.ItemDataRole.UserRole)
+        self.main.open_editor(path, a)
+
     def analyze_source(self, path):
         if path and self._analyze([path]):
             self.refresh_sources()
@@ -444,9 +505,9 @@ class CollectTab(QWidget):
         self.src_list.clear()
         need = []
         for src in items:
-            it = QListWidgetItem(f"{src['name']}\n{sources.describe(src)}")
+            it = QListWidgetItem(f"{src.get('title') or src['name']}\n{sources.describe(src)}")
             it.setData(Qt.ItemDataRole.UserRole, src["path"])
-            it.setToolTip(src["path"])
+            it.setToolTip(src["path"] + ("\n(파일 이름: %s — 제목은 표시 이름이라 파일은 그대로예요)" % src["name"] if src.get("title") else ""))
             if src["thumb"]:
                 it.setIcon(QIcon(QPixmap(src["thumb"])))
             else:
@@ -459,6 +520,8 @@ class CollectTab(QWidget):
         self.src_empty.setText("" if items else "아직 영상이 없어요. 녹화를 하거나 위에 영상 파일을 끌어다 놓으세요.")
         self.btn_src_all.setEnabled(bool(items) and not self.main.busy)
         self.btn_src_range.setEnabled(bool(items) and not self.main.busy)
+        self.btn_src_name.setEnabled(bool(items))
+        self._fill_src_clips()
         if self._thumbs is not None and self._thumbs.isRunning():
             self._thumbs.stop = True
             self._thumbs.wait(3000)
