@@ -98,8 +98,8 @@ def _bash_ok(script: str) -> str:
 
 
 def test_install_chumpy():
-    for e in mocapai.ENGINES.values():
-        sc = mocapai.install_script(e)
+    for e in M.ENGINES.values():
+        sc = M.install_script(e)
         check = sc.index("--no-build-isolation chumpy") < sc.index("pip install -r requirements.txt") and "numpy==1.23.5" in sc and ("envs/%s" % e.key) in sc
         assert check, e.key
     print("chumpy OK")
