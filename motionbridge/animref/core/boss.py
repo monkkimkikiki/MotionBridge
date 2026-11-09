@@ -211,6 +211,46 @@ class Detector:
         return sc >= self.match, sc, hp
 
 
+def thin_bar(crop: np.ndarray, chroma: int = 22, runfrac: float = 0.30, tmax_frac: float = 0.30) -> Tuple[float, int, int]:
+    """가늘고 긴 색 바 찾기 (실제 게임 화면으로 맞춘 방식). 반환: (점수 0~1, 가장 긴 가로 길이, 두께).
+
+    체력바는 배경(안개·바닥)보다 색이 뚜렷한 가로줄이 몇 줄(2~10줄) 이어진 모양이다. 색의 뚜렷함 = 채널 최대-최소 차이(채도가 낮아도 됨).
+    위아래 이웃 줄은 훨씬 덜 칠해져 있어야 한다 (넓게 퍼진 색 배경은 제외).
+    """
+    cv2 = _cv2()
+    h, w = crop.shape[:2]
+    if h < 6 or w < 40:
+        return 0.0, 0, 0
+    c = crop.astype(np.int16)
+    cm = c.max(axis=2) - c.min(axis=2)
+    m = (cm >= max(chroma, int(np.median(cm)) + 10)).astype(np.uint8)       # 배경이 원래 색 있는 화면이면 기준을 그만큼 올린다
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 1)))
+    kw = max(20, int(w * runfrac))
+    o = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (kw, 1)))
+    rows = o.sum(axis=1)
+    ok = rows >= kw
+    best, thick = 0, 0
+    y = 0
+    while y < h:
+        if not ok[y]:
+            y += 1
+            continue
+        y2 = y
+        while y2 + 1 < h and ok[y2 + 1]:
+            y2 += 1
+        t = y2 - y + 1
+        y_next = y2 + 1
+        if 2 <= t <= max(10, int(h * tmax_frac)):
+            nb = [int(m[yy].sum()) for yy in list(range(max(0, y - 3), y)) + list(range(y2 + 1, min(h, y2 + 4)))]
+            inband = float(np.mean([m[yy].sum() for yy in range(y, y2 + 1)]))
+            if not nb or np.mean(nb) <= 0.5 * inband:
+                run = int(rows[y:y2 + 1].max())
+                if run > best:
+                    best, thick = run, t
+        y = y_next
+    return min(best / (w * 0.6), 1.0), best, thick
+
+
 class AutoDetector:
     """체력바 모양을 몰라도 쓰는 일반 감지: 영역 안에 '가로로 길고 얇은 바'가 나타났나.
 
@@ -228,6 +268,7 @@ class AutoDetector:
         self.baseline = float(baseline)
         self.last_edge = 0.0
         self.last_color = 0.0
+        self._ref_run = 0
 
     def parts(self, frame: np.ndarray) -> Tuple[float, float, Optional[float]]:
         """(윤곽 점수, 색 띠 점수, 색 띠 길이/틀 길이 = 남은 체력 추정)"""
@@ -271,6 +312,13 @@ class AutoDetector:
         if band_len > 0:
             ref = line_len if line_len > 0 else int(w * 0.9)
             hp = float(min(band_len / max(ref, 1), 1.0))
+        # 가늘고 긴 색 바 (실제 게임의 체력바처럼 얇은 것): 위 방법이 놓치는 경우를 맡는다
+        ts, run, _t = thin_bar(crop)
+        if ts > color_score:
+            color_score = ts
+            if hp is None and run > 0:
+                self._ref_run = max(self._ref_run, run)       # 지금까지 본 가장 긴 바 길이 = 체력 100% 로 본다
+                hp = float(min(run / max(self._ref_run, 1), 1.0))
         return line_score, color_score, hp
 
     def score(self, frame: np.ndarray) -> Tuple[float, Optional[float]]:
@@ -336,7 +384,7 @@ def make_detector(c: dict):
     if c.get("ref") and os.path.isfile(c["ref"]):
         ref = cv2.imread(c["ref"], cv2.IMREAD_GRAYSCALE)
         if ref is not None:
-            tmpl = Detector(c["roi"], ref, c.get("hsv") or [], float(c["match"]), int(c.get("full_cols") or 0), int(c.get("fill_rows") or 0))
+            tmpl = Detector(c["roi"], ref, c.get("hsv") or [], max(float(c["match"]), 0.5), int(c.get("full_cols") or 0), int(c.get("fill_rows") or 0))
     return Combined(tmpl, auto)
 
 

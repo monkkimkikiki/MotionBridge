@@ -120,6 +120,25 @@ rw = B.calibrate_any(weak, AR)
 gw = B.make_detector(dict(B.DEFAULTS, roi=AR, baseline=rw["baseline"]))
 check(rw["mode"] == "area" and not gw.present(weak)[0], "영역만: 약한 상시 요소는 기준에 반영돼 감지 안 됨 (기준 %.2f)" % rw["baseline"])
 
+# ---------- 실제 게임(Mortal Shell 2) 화면 맨 위 16% 조각: 얇고(4px) 붉은 보스 체력바. 사용자 PC 의 녹화 클립에서 떼어 온 것
+def real_frame(name):
+    strip = cv2.imread(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ms2_top_%s.png" % name))
+    canvas = np.zeros((540, 960, 3), np.uint8)
+    canvas[: strip.shape[0]] = strip
+    return canvas
+
+
+SAVED_ROI = [0.2743, 0.0022, 0.4454, 0.1034]       # 사용자가 실제로 잡은 영역
+for roi_name, roi in (("저장된 영역", SAVED_ROI), ("넉넉하게 잡은 영역", [0.20, 0.0, 0.60, 0.15])):
+    rd = B.make_detector(dict(B.DEFAULTS, roi=roi, match=0.35))
+    for nm, want in (("boss", True), ("boss2", True), ("none", False), ("none2", False)):
+        pres, sc, hp = rd.present(real_frame(nm))
+        check(pres == want, "실제 화면(%s) %s -> 있음=%s 점수 %.2f" % (roi_name, nm, pres, sc))
+rd = B.make_detector(dict(B.DEFAULTS, roi=SAVED_ROI, match=0.35))
+_, _, h1 = rd.present(real_frame("boss"))
+_, _, h2 = rd.present(real_frame("boss2"))
+check(h1 is not None and h2 is not None and h2 < h1, "실제 화면: 바가 짧아지면 체력이 줄어듦 (%s -> %s)" % (h1, h2))
+
 # ---------- 연출(레터박스)
 check(B.letterbox(scene(bar=None, letterbox=True)) and not B.letterbox(scene(bar=1.0)), "레터박스 감지")
 
