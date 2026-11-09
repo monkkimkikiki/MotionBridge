@@ -224,4 +224,48 @@ def process_ranges(path, ranges, s, log=noop, progress=noop, cancel=None, out_di
             cut(str(path), a, b - a, str(f))
         files.append(str(f))
     log("선택한 구간 %d개만 분석합니다 (원본은 그대로 둬요)" % len(files))
-    return process_videos(files, s, log, progress, cancel, origins={f: RANGE for f in files})
+    res = process_videos(files, s, log, progress, cancel, origins={f: RANGE for f in files})
+    remap_clips(res, {f: (str(path), a) for f, (a, _b) in zip(files, rs)}, log)
+    return res
+
+
+def remap_clips(clips, origin_of, log=noop):
+    """구간 파일에서 만든 클립이 '원본 영상의 몇 초'를 가리키도록 바로잡는다 (타임라인/라이브러리에서 원본 기준으로 보이게).
+    origin_of: {구간 파일: (원본 경로, 구간 시작초)}"""
+    import json
+    norm = {str(Path(k)): v for k, v in origin_of.items()}
+    n = 0
+    for jp in list(clips or []):
+        try:
+            p = Path(jp)
+            if not p.exists():
+                continue
+            m = json.loads(p.read_text(encoding="utf-8"))
+            hit = norm.get(str(Path(m.get("source_video", ""))))
+            if not hit:
+                continue
+            src, off = hit
+            m["range_source_video"] = m.get("source_video")
+            m["source_video"], m["source_name"] = src, Path(src).name
+            m["start_in_source"] = round(float(m.get("start_in_source", 0.0)) + off, 3)
+            if m.get("t_range"):
+                m["t_range"] = [round(float(x) + off, 3) for x in m["t_range"]]
+            p.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+            n += 1
+        except (OSError, ValueError, TypeError):
+            continue
+    if n:
+        log("클립 %d개가 원본 영상 위치를 가리키도록 맞췄어요" % n)
+
+
+def process_highlights(path, a, b, s, log=noop, progress=noop, cancel=None):
+    """하이라이트 자동 자르기: AnimRef 의 동작 감지(공격 · 타격 · 이벤트 등)로 영상(또는 a~b 초 구간)에서 클립을 찾아 만든다.
+    원본은 지우지 않는다. a, b 가 None 이면 영상 전체."""
+    if a is None or b is None:
+        files = [str(path)]
+        if remote.should_offload():
+            py, why = remote.find_env(s)
+            if py is None:
+                raise RuntimeError(remote.NEED_MSG + ("\n\n(" + why + ")" if why else ""))
+        return process_videos(files, s, log, progress, cancel, origins={files[0]: RANGE})
+    return process_ranges(path, [(a, b)], s, log, progress, cancel)

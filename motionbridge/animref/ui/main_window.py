@@ -349,7 +349,7 @@ class MainWindow(QMainWindow):
             "지금 자동으로 설치할까요?\n"
             "· 처음 한 번만 설치하면 돼요 (디스크 약 5GB, 인터넷 필요, 10~30분).\n"
             "· 파이썬(3.9~3.12)이 없으면 winget 으로 3.11 을 먼저 설치해요.\n"
-            "· 설치가 끝나면 방금 하려던 분석을 이어서 자동으로 시작해요.\n"
+            + ("· 설치가 끝나면 방금 하려던 분석을 이어서 자동으로 시작해요.\n" if retry else "· 설치가 끝나면 하려던 작업을 다시 눌러 주세요.\n") +
             "· 중간에 취소해도 다음에 이어서 설치돼요.")
         if r == QMessageBox.StandardButton.Yes:
             self.install_analysis_env(retry)

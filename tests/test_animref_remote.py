@@ -116,6 +116,27 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         pipeline.process_videos, pipeline.media.probe, remote.find_env, remote.should_offload = orig_pv, orig_probe, orig_find, orig_off
 
+    # 구간에서 만든 클립은 원본 영상의 위치를 가리키도록 바로잡는다 + 하이라이트 자동 자르기
+    import json as _json
+    rf = os.path.join(d, "rg", "rec__10s-20s.mp4")
+    cj = os.path.join(d, "clip1.json")
+    open(cj, "w", encoding="utf-8").write(_json.dumps({"source_video": rf, "source_name": "rec__10s-20s.mp4", "start_in_source": 2.5, "t_range": [2.0, 5.0]}))
+    pipeline.remap_clips([cj], {rf: (src, 10.0)})
+    m = _json.load(open(cj, encoding="utf-8"))
+    check(m["source_video"] == src and m["source_name"] == "rec.mp4" and m["start_in_source"] == 12.5 and m["t_range"] == [12.0, 15.0], "구간 클립을 원본 위치로: %s" % m)
+    seen2 = {}
+    orig_pv2, orig_pr = pipeline.process_videos, pipeline.process_ranges
+    pipeline.process_videos = lambda files, s, log=None, progress=None, cancel=None, origins=None: seen2.update(v=(list(files), dict(origins))) or pipeline.Result()
+    pipeline.process_ranges = lambda path, rs, s, log=None, progress=None, cancel=None: seen2.update(r=(path, rs)) or pipeline.Result()
+    remote.should_offload = lambda: False
+    try:
+        pipeline.process_highlights(src, None, None, s)
+        check(seen2["v"][0] == [src] and seen2["v"][1][src] == pipeline.RANGE, "하이라이트: 구간을 안 정하면 영상 전체, 원본은 지우지 않는 정책")
+        pipeline.process_highlights(src, 30.0, 50.0, s)
+        check(seen2["r"] == (src, [(30.0, 50.0)]), "하이라이트: 구간을 정하면 그 구간만")
+    finally:
+        pipeline.process_videos, pipeline.process_ranges, remote.should_offload = orig_pv2, orig_pr, orig_off
+
     cands = remote.candidates({"analysis_python": "C:/x/python.exe"})
     check(str(cands[0]).replace("\\", "/").endswith("x/python.exe") and len(cands) > 3, "후보 경로: 설정값이 먼저")
 

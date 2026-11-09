@@ -438,6 +438,13 @@ class ClipEditor(QDialog):
         self.btn_make.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_make.clicked.connect(self.make_clip)
         mk.addWidget(self.btn_make)
+        if not edit_meta:
+            self.btn_hl = QPushButton("✨ 하이라이트 자동 자르기")
+            self.btn_hl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.btn_hl.setToolTip("AnimRef 의 동작 감지(공격 · 타격 · 피격 · 스킬 · 연출 등)로 클립을 알아서 찾아 잘라 줘요.\n"
+                                   "시작점/끝점을 지정했으면 그 구간만, 지정 안 했으면 영상 전체를 훑어요. (직접 한 구간만 자르는 건 [클립 만들기])")
+            self.btn_hl.clicked.connect(self.make_highlights)
+            mk.insertWidget(mk.count() - 1, self.btn_hl)
         if edit_meta:
             self.btn_make.setText("💾 수정 저장 (Enter)")
             self.btn_make.clicked.disconnect()
@@ -744,6 +751,47 @@ class ClipEditor(QDialog):
         self._push(self._range_state())   # 구간 선택만 되돌릴 수 있고, 이미 만든 클립은 라이브러리에서 지워야 해요
         tl.inp = tl.out = None
         tl.update()
+
+    def make_highlights(self):
+        """공격·타격·이벤트 같은 동작을 AnimRef 가 찾아 클립으로 자른다 (구간을 정했으면 그 구간만, 아니면 영상 전체)."""
+        from ..core import pipeline
+        from .progress_dialog import ProgressDialog
+
+        tl = self.timeline
+        if tl.inp is not None and tl.out is not None and abs(tl.out - tl.inp) >= 1.0:
+            a, b = min(tl.inp, tl.out), max(tl.inp, tl.out)
+            what = f"{fmt_t(a)} ~ {fmt_t(b)} 구간 ({b - a:.0f}초)"
+        else:
+            a = b = None
+            what = f"영상 전체 ({fmt_t(self.info.duration or 0)})"
+            if (self.info.duration or 0) > 300 and QMessageBox.question(
+                    self, "하이라이트 자동 자르기",
+                    "시작점/끝점을 지정하지 않아서 영상 전체를 분석해요. 영상이 길면 오래 걸릴 수 있어요.\n\n전체를 분석할까요?\n"
+                    "(일부만 하려면 [아니오] 후 I/O 로 구간을 먼저 지정하세요)") != QMessageBox.StandardButton.Yes:
+                return
+        dlg = ProgressDialog(self, "하이라이트 찾는 중", pipeline.process_highlights, (self.path, a, b, copy.deepcopy(self.main.s)),
+                             intro=f"{what}에서 공격 · 타격 · 이벤트 같은 동작을 찾아 클립으로 잘라요. 원본 영상은 그대로 둬요.")
+        dlg.job.log.connect(self.main.log)
+        dlg.exec()
+        if dlg.cancelled:
+            self.sel_label.setText("하이라이트 찾기를 취소했어요.")
+            return
+        if dlg.error:
+            from ..core import remote
+            if remote.is_need_env(dlg.error):
+                self.main.offer_env_install()      # 분석 환경이 없으면 오류창 대신 설치 제안
+                return
+            QMessageBox.warning(self, "하이라이트 찾기 실패", dlg.error)
+            return
+        n = len(dlg.result or [])
+        self.changed = True
+        self.reload_clips()
+        try:
+            self.main.library.refresh()
+        except Exception:  # noqa: BLE001
+            pass
+        self.sel_label.setText(f"✅ 하이라이트 클립 {n}개를 만들었어요. 라이브러리에서 볼 수 있어요." if n else
+                               "동작을 찾지 못했어요. 구간을 바꾸거나 [설정]의 클립 양을 '많이'로 해 보세요.")
 
     def reload_clips(self):
         clips = [m for m in library.load_clips(library.game_dir(self.main.s))
