@@ -23,6 +23,7 @@ DEFAULTS: Dict[str, object] = {
     "ref": "",                 # 기준 그림(체력바 틀 윤곽) 파일
     "hsv": [],                 # [h_min, h_max, s_min, v_min] 체력바 채움 색 범위 (OpenCV HSV, h 0~179)
     "full_cols": 0,            # 기준 화면에서 채워진 칸 수 (남은 체력 계산의 100%)
+    "fill_rows": 0,            # 기준 화면에서 채움 색의 세로 두께(줄 수) — 색 띠 감지에 쓴다
     "match": 0.55,             # 틀이 닮았다고 보는 기준 (0~1, 높을수록 엄격)
     "poll": 0.7,               # 화면을 살펴보는 간격(초)
     "start_hold": 2.0,         # 체력바가 이만큼 계속 보이면 보스전 시작으로 본다(초)
@@ -34,6 +35,9 @@ DEFAULTS: Dict[str, object] = {
     "min_seconds": 20.0,       # 이보다 짧은 녹화는 보스전으로 치지 않고 버린다(잠깐 스친 화면)
     "prebuffer": True,         # OBS 리플레이 버퍼가 켜져 있으면, 감지된 순간 직전 영상도 함께 저장
 }
+
+
+COLOR_PRESENT = 0.5   # 채움 색 띠가 체력바 폭의 이만큼 이상 이어지면 체력바로 본다
 
 
 def cfg(s: dict) -> dict:
@@ -124,9 +128,11 @@ class Calibration:
     ref_edges: np.ndarray            # 체력바 영역(여백 없음)의 윤곽 그림
     hsv: List[int]
     full_cols: int                   # 기준 화면에서 채워진 칸 수 (체력 100% 로 본다)
+    fill_rows: int = 0               # 기준 화면에서 채움 색이 차지하는 세로 두께(줄 수)
 
     def to_settings(self, ref_path: str) -> dict:
-        return {"roi": [round(float(x), 4) for x in self.roi], "ref": ref_path, "hsv": [int(x) for x in self.hsv], "full_cols": int(self.full_cols)}
+        return {"roi": [round(float(x), 4) for x in self.roi], "ref": ref_path, "hsv": [int(x) for x in self.hsv], "full_cols": int(self.full_cols),
+                "fill_rows": int(self.fill_rows)}
 
 
 def calibrate(frame: np.ndarray, roi, ) -> Calibration:
@@ -139,19 +145,42 @@ def calibrate(frame: np.ndarray, roi, ) -> Calibration:
     if (ed > 0).mean() < 0.004:
         raise ValueError("이 영역에서 체력바의 테두리(윤곽)를 찾지 못했어요. 체력바의 틀까지 포함하도록 조금 크게 지정해 주세요.")
     hsv = learn_hsv(crop)
-    cols = int(fill_columns(hsv_mask(crop, hsv)).sum()) if hsv else 0
-    return Calibration(list(roi), ed, hsv, cols)
+    cols, rows = 0, 0
+    if hsv:
+        m = hsv_mask(crop, hsv)
+        cols = int(fill_columns(m).sum())
+        rows = int((m.mean(axis=1) > 0.4).sum())
+    return Calibration(list(roi), ed, hsv, cols, rows)
 
 
 class Detector:
     """화면 한 장 -> (체력바가 있나(0~1 점수), 남은 체력 비율, 연출 중인가)."""
 
-    def __init__(self, roi, ref_edges: np.ndarray, hsv: List[int], match: float = 0.55, full_cols: int = 0) -> None:
+    def __init__(self, roi, ref_edges: np.ndarray, hsv: List[int], match: float = 0.55, full_cols: int = 0, fill_rows: int = 0) -> None:
+        self.fill_rows = int(fill_rows)
+        self.last_edge = 0.0       # 가장 최근 화면의 윤곽 점수 / 색 점수 (화면에 보여 주는 용도)
+        self.last_color = 0.0
         self.roi = list(roi)
         self.ref = ref_edges
         self.hsv = list(hsv)
         self.match = float(match)
         self.full_cols = int(full_cols)
+
+    def color_run(self, search: np.ndarray) -> float:
+        """배경이 달라도 쓸 수 있는 두 번째 단서: 배운 '채움 색'이 가로로 길게 이어진 두꺼운 띠가 있나 (0~1, 체력바 폭 대비 길이)."""
+        cv2 = _cv2()
+        if not self.hsv or self.full_cols <= 0:
+            return 0.0
+        m = hsv_mask(search, self.hsv).astype(np.uint8)
+        kh = max(2, int(max(self.fill_rows, 4) * 0.5))
+        kw = max(8, int(self.full_cols * 0.35))
+        if m.shape[0] < kh or m.shape[1] < kw:
+            return 0.0
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+        o = cv2.morphologyEx(m, cv2.MORPH_OPEN, k)
+        if not o.any():
+            return 0.0
+        return float(min((o.sum(axis=0) > 0).sum() / max(self.full_cols, 1), 1.0))
 
     def score(self, frame: np.ndarray) -> Tuple[float, Optional[float]]:
         cv2 = _cv2()
@@ -159,16 +188,22 @@ class Detector:
         search = crop_frac(img, self.roi, pad=0.12)         # 조금 여유를 두고 찾는다 (화면 흔들림·미세한 위치 차이)
         e = _edges(search)
         th, tw = self.ref.shape[:2]
-        if e.shape[0] < th or e.shape[1] < tw or self.ref.max() == 0:
-            return 0.0, None
-        res = cv2.matchTemplate(e, self.ref, cv2.TM_CCOEFF_NORMED)
-        sc = float(res.max())
-        hp = None
-        if self.hsv and self.full_cols > 0:
+        sc, hp, loc = 0.0, None, None
+        if e.shape[0] >= th and e.shape[1] >= tw and self.ref.max() > 0:
+            res = cv2.matchTemplate(e, self.ref, cv2.TM_CCOEFF_NORMED)
+            sc = max(float(res.max()), 0.0)
             _, _, _, loc = cv2.minMaxLoc(res)
-            bar = search[loc[1]:loc[1] + th, loc[0]:loc[0] + tw]
-            hp = float(min(fill_columns(hsv_mask(bar, self.hsv)).sum() / max(self.full_cols, 1), 1.0))
-        return max(sc, 0.0), hp
+        col = self.color_run(search)
+        self.last_edge, self.last_color = sc, col
+        if self.hsv and self.full_cols > 0:
+            if loc is not None and sc >= self.match:
+                bar = search[loc[1]:loc[1] + th, loc[0]:loc[0] + tw]
+                hp = float(min(fill_columns(hsv_mask(bar, self.hsv)).sum() / max(self.full_cols, 1), 1.0))
+            elif col >= COLOR_PRESENT:
+                hp = col                                   # 윤곽은 안 맞아도 색 띠 길이가 곧 남은 체력
+        if col >= COLOR_PRESENT:                           # 색 띠가 충분히 길면 체력바로 본다 (윤곽이 배경에 묻힌 경우)
+            sc = max(sc, self.match + 0.05)
+        return sc, hp
 
     def present(self, frame: np.ndarray) -> Tuple[bool, float, Optional[float]]:
         sc, hp = self.score(frame)
@@ -184,7 +219,7 @@ def make_detector(c: dict) -> Optional["Detector"]:
     ref = cv2.imread(c["ref"], cv2.IMREAD_GRAYSCALE)
     if ref is None:
         return None
-    return Detector(c["roi"], ref, c.get("hsv") or [], float(c["match"]), int(c.get("full_cols") or 0))
+    return Detector(c["roi"], ref, c.get("hsv") or [], float(c["match"]), int(c.get("full_cols") or 0), int(c.get("fill_rows") or 0))
 
 
 def save_calibration(cal: "Calibration", ref_path: str) -> dict:

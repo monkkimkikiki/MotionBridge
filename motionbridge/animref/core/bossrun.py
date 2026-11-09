@@ -24,6 +24,7 @@ class Sample:
     hp: Optional[float] = None
     cutscene: bool = False
     error: str = ""
+    detail: str = ""      # 화면에 보여 줄 점수(윤곽/색)
 
 
 class BossSampler:
@@ -55,7 +56,7 @@ class BossSampler:
             return Sample(t, error="OBS 화면을 읽지 못했어요")
         present, sc, hp = self.det.present(img)
         cut = boss.letterbox(boss.normalize(img)) if self.cfg.get("letterbox_pause") else False
-        return Sample(t, present, sc, hp, cut)
+        return Sample(t, present, sc, hp, cut, detail="윤곽 %.2f · 색띠 %.2f (기준 %.2f)" % (self.det.last_edge, self.det.last_color, self.cfg["match"]))
 
     def close(self) -> None:
         if self._obs is not None:
@@ -109,7 +110,8 @@ class BossRun:
         t = smp.t if smp is not None else time.time()
         if self.skipped_for_manual and self.watcher.state == "active":
             return "보스전 감지됨 · 수동 녹화 중이라 자동 녹화는 건드리지 않아요"
-        return self.watcher.status_text(t) if smp is not None else "대기 중"
+        base = self.watcher.status_text(t) if smp is not None else "대기 중"
+        return base + ("   [%s]" % smp.detail if smp is not None and smp.detail else "")
 
 
 def merge_prebuffer(pre: str, main: str) -> Optional[str]:

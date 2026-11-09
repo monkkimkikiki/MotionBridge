@@ -208,6 +208,13 @@ class BossPanel(QWidget):
         b.clicked.connect(self.test_video)
         row.addWidget(b)
         l.addLayout(row)
+        row2 = QHBoxLayout()
+        b = QPushButton("지금 화면으로 시험 (OBS)")
+        b.setToolTip("보스전 중에 눌러 보세요. 지금 OBS 화면에서 체력바를 알아보는지, 점수가 얼마인지 바로 보여 줘요 (감지를 켜지 않아도 돼요)")
+        b.clicked.connect(self.test_now)
+        row2.addWidget(b)
+        row2.addStretch(1)
+        l.addLayout(row2)
         self.g = QGroupBox("감지 설정 (시험하면서 조정하세요)")
         gl = QVBoxLayout(self.g)
         gl.setContentsMargins(6, 14, 6, 6)
@@ -363,6 +370,23 @@ class BossPanel(QWidget):
         self.main.flash("보스전이 끝났어요 (%s). 녹화를 마치고 분석해요." % reason)
         self.collect.stop_record(auto=True, prebuffer=self.pre_path, min_seconds=float(boss.cfg(self.main.s)["min_seconds"]), took=dur)
         self.pre_path = None
+
+    def test_now(self):
+        if not self._refresh_ready():
+            QMessageBox.information(self, "지금 화면 시험", "먼저 [체력바 영역 지정…]을 해 주세요.")
+            return
+        smp = bossrun.BossSampler(self.main.s, lambda: ObsRecorder(self.main.s["obs"]))
+        try:
+            r = smp.sample()
+        finally:
+            smp.close()
+        if r.error:
+            QMessageBox.warning(self, "지금 화면 시험", r.error)
+            return
+        hp = "알 수 없음" if r.hp is None else "%d%%" % round(r.hp * 100)
+        QMessageBox.information(self, "지금 화면 시험", "체력바: %s\n남은 체력: %s\n연출(검은 띠) 중: %s\n\n점수 — %s\n\n"
+                                "보스전 중인데 '없음'이면: [인식 기준]을 낮추거나(0.35~0.45), 체력바 영역을 다시 지정하세요. "
+                                "보스전이 아닌데 '있음'이면 기준을 높이세요." % ("있음" if r.present else "없음", hp, "예" if r.cutscene else "아니요", r.detail))
 
     # ------------------------------------------------------------------ 녹화본으로 시험
     def test_video(self):

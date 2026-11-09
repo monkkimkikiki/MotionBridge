@@ -256,6 +256,15 @@ class SettingsTab(QWidget):
         cb.clicked.connect(lambda: self._check_env(True))
         arow.addWidget(cb)
         f.addRow("python.exe", arow)
+        irow = QHBoxLayout()
+        self.btn_env_install = QPushButton("⬇  분석 환경 자동 설치 (처음 한 번 · 수 GB)")
+        self.btn_env_install.setObjectName("primary")
+        self.btn_env_install.setMinimumHeight(38)
+        self.btn_env_install.setToolTip("이 PC 의 파이썬(없으면 winget 으로 3.11)으로 전용 환경을 만들고 torch · ultralytics · CLIP 을 설치해요. "
+                                        "NVIDIA 그래픽카드가 있으면 CUDA 버전을 받아요. 중간에 취소해도 이어서 설치돼요.")
+        self.btn_env_install.clicked.connect(self._install_env)
+        irow.addWidget(self.btn_env_install, 1)
+        f.addRow("", irow)
         self.env_state = muted("")
         self.env_state.setWordWrap(True)
         f.addRow("상태", self.env_state)
@@ -416,6 +425,29 @@ class SettingsTab(QWidget):
         self.main.s["analysis_python"] = self.ed_py.text().strip().strip('"')
         self.main.save_settings()
         self._check_env(True)
+
+    def _install_env(self):
+        from ..core import envsetup
+        if remote.local_has_torch():
+            QMessageBox.information(self, "분석 환경", "이 프로그램 안에 이미 분석 환경이 있어요.")
+            return
+        if QMessageBox.question(self, "분석 환경 자동 설치",
+                                "AI 분석용 환경을 만들고 torch · ultralytics · CLIP 을 설치합니다.\n\n"
+                                "· 디스크 약 5GB, 인터넷 연결이 필요하고 10~30분 걸릴 수 있어요.\n"
+                                "· 파이썬(3.9~3.12)이 없으면 winget 으로 3.11 을 먼저 설치해요.\n"
+                                "· 중간에 취소해도 다음에 이어서 설치돼요.\n\n진행할까요?") != QMessageBox.StandardButton.Yes:
+            return
+
+        def job(log=None, progress=None, cancel=None):
+            return envsetup.install(log or (lambda *_a: None), progress or (lambda *_a: None), cancel)
+
+        def done(py):
+            self.main.s["analysis_python"] = ""      # 자동으로 찾는 위치에 만들었으니 비워 둔다
+            self.main.save_settings()
+            self._check_env(True)
+            self.main.flash("분석 환경을 만들었어요. 이제 자동 분석을 쓸 수 있어요.")
+
+        self.main.start_job("분석 환경 설치", job, (), on_done=done)
 
     def _pick_py(self):
         p, _ = QFileDialog.getOpenFileName(self, "AI 분석용 python.exe (AnimRef 의 .venv\\Scripts)", self.ed_py.text() or "",

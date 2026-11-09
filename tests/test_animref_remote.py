@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory() as d:
             pipeline.process_videos([], s)
             check(False, "분석 환경이 없으면 안내 오류")
         except RuntimeError as e:
-            check("분석 환경" in str(e) and "python.exe" in str(e), "분석 환경 없음 안내")
+            check("분석 환경" in str(e) and "자동 설치" in str(e), "분석 환경 없음 안내(자동 설치 버튼 안내)")
         remote.find_env = lambda s=None: (py, "시험")
         log2 = []
         res = pipeline.process_videos([], s, log2.append)

@@ -24,8 +24,8 @@ from . import Cancelled, noop
 
 WORKER_ENV = "ANIMREF_WORKER"
 NEED_MSG = ("자동 분석(캐릭터 탐지 · AI 분류)에는 AI 구성요소(torch, ultralytics)가 필요한데, 이 프로그램에는 들어 있지 않아요.\n\n"
-            "AnimRef 를 따로 설치해 둔 폴더의 .venv 가 있으면 자동으로 찾아 써요. 못 찾았다면 [⚙ 설정] → '분석 환경'에서 "
-            "그 .venv 의 python.exe 를 직접 골라 주세요. (예: ...\\AnimRef\\AnimRef\\.venv\\Scripts\\python.exe)")
+            "[⚙ 설정] → '분석 환경' 의 [자동 설치] 버튼을 누르면 이 프로그램이 알아서 만들어요 (처음 한 번, 수 GB). "
+            "AnimRef 를 따로 설치해 둔 폴더의 .venv 가 있으면 그것도 자동으로 찾아 써요.")
 _CHECKED = {}   # python 경로 -> (ok, 메시지)
 
 
@@ -50,6 +50,11 @@ def candidates(s=None):
     for key in ((s or {}).get("analysis_python") or "", os.environ.get("ANIMREF_PYTHON", "")):
         if key:
             out.append(Path(key))
+    try:
+        from . import envsetup
+        out.append(envsetup.venv_python())      # 이 프로그램이 직접 만든 분석 환경 (설정 → 분석 환경 → 자동 설치)
+    except Exception:  # noqa: BLE001
+        pass
     home = Path.home()
     for rel in ("Downloads/AnimRef/AnimRef", "Downloads/AnimRef", "Desktop/AnimRef/AnimRef", "Desktop/AnimRef",
                 "Documents/AnimRef/AnimRef", "AnimRef/AnimRef", "AnimRef"):

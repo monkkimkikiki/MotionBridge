@@ -71,6 +71,25 @@ cv2.rectangle(fake, (200, 100), (700, 140), (230, 230, 230), 2)
 check(not det.present(fake)[0], "다른 자리 사각형은 보스 체력바가 아님")
 check(not det.present(scene(bar=None, noise=False, seed=41))[0], "단색 배경도 아님")
 
+# 배경이 확 달라져 윤곽 모양이 안 맞아도, 채움 색 띠로 체력바를 알아본다
+def other_bg(bar):
+    f = scene(bar=bar, noise=False, seed=50)
+    f[:, :, :] = np.clip(f.astype(int) * 0 + np.random.default_rng(7).integers(90, 255, f.shape), 0, 255).astype(np.uint8)   # 아주 밝고 어지러운 배경
+    x0, y0, x1, y1 = int(W * .30), int(H * .86), int(W * .70), int(H * .91)
+    cv2.rectangle(f, (x0, y0), (x1, y1), (25, 25, 25), -1)
+    cv2.rectangle(f, (x0, y0), (x0 + int((x1 - x0) * bar), y1), (30, 30, 200), -1)
+    return f
+
+
+det2 = B.Detector(cal.roi, cal.ref_edges, cal.hsv, 0.55, cal.full_cols, cal.fill_rows)
+check(cal.fill_rows >= 4, "채움 색 두께 학습: %s" % cal.fill_rows)
+p_bg, sc_bg, hp_bg = det2.present(other_bg(0.9))
+check(p_bg and det2.last_color >= B.COLOR_PRESENT, "윤곽이 안 맞는 배경에서도 색 띠로 인식 (윤곽 %.2f 색 %.2f)" % (det2.last_edge, det2.last_color))
+check(hp_bg is not None and abs(hp_bg - 0.9) < 0.12, "그때도 남은 체력 읽기: %s" % hp_bg)
+fake_red = scene(bar=None, seed=60)
+cv2.rectangle(fake_red, (100, 400), (180, 420), (30, 30, 200), -1)       # 작은 빨간 조각(피 효과 등)은 체력바가 아님
+check(not det2.present(fake_red)[0], "작은 빨간 조각은 체력바 아님")
+
 # ---------- 연출(레터박스)
 check(B.letterbox(scene(bar=None, letterbox=True)) and not B.letterbox(scene(bar=1.0)), "레터박스 감지")
 
