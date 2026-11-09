@@ -115,7 +115,9 @@ class CalibDialog(QDialog):
         self.setWindowTitle("보스 체력바 영역 지정")
         self.resize(900, 600)
         v = QVBoxLayout(self)
-        v.addWidget(muted("① 보스전 중(체력이 가득 찬 때가 가장 좋아요)의 화면을 가져오세요. ② 보스 체력바를 틀(테두리)까지 포함해서 마우스로 끌어 감싸세요. ③ [이 영역으로 저장]."))
+        v.addWidget(muted("보스전 화면이 없어도 돼요. ① 화면을 하나 가져오세요(아무 때나). ② 보스 체력바가 뜨는 자리를 넉넉하게 마우스로 끌어 네모로 잡으세요 "
+                       "(바 위아래 여백은 조금 있어도 괜찮아요). ③ [이 영역으로 저장]. 이 영역 안에 가로로 긴 체력바가 나타나면 자동으로 알아봐요. "
+                       "보스전 중 화면으로 잡으면 체력바 모양도 함께 배워서 더 정확해져요."))
         self.region = _RegionLabel()
         v.addWidget(self.region, 1)
         row = QHBoxLayout()
@@ -168,12 +170,16 @@ class CalibDialog(QDialog):
         if self.frame is None or roi is None:
             QMessageBox.information(self, "영역", "화면을 불러오고 체력바를 끌어서 고르세요.")
             return
-        try:
-            cal = boss.calibrate(self.frame, roi)
-        except ValueError as e:
-            QMessageBox.warning(self, "영역", str(e))
-            return
-        self.result = boss.save_calibration(cal, str(S.app_dir() / "boss_ref.png"))
+        res = boss.calibrate_any(self.frame, roi)
+        if res["mode"] == "exact":
+            out = boss.save_calibration(res["cal"], str(S.app_dir() / "boss_ref.png"))
+            out["baseline"] = 0.0
+            QMessageBox.information(self, "영역", "체력바가 보이는 화면이라, 체력바의 모양과 색도 함께 배웠어요 (정밀 인식).")
+        else:
+            out = {"roi": res["roi"], "ref": "", "hsv": [], "full_cols": 0, "fill_rows": 0, "baseline": res["baseline"]}
+            QMessageBox.information(self, "영역", "이 영역을 저장했어요. 체력바가 안 보이는 화면이라 '길고 얇은 바가 나타남'으로 자동 인식해요. "
+                                    "[녹화본으로 감지 시험…]이나 [지금 화면으로 시험]으로 확인해 보세요.")
+        self.result = out
         self.accept()
 
 

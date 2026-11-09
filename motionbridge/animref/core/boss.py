@@ -24,6 +24,7 @@ DEFAULTS: Dict[str, object] = {
     "hsv": [],                 # [h_min, h_max, s_min, v_min] 체력바 채움 색 범위 (OpenCV HSV, h 0~179)
     "full_cols": 0,            # 기준 화면에서 채워진 칸 수 (남은 체력 계산의 100%)
     "fill_rows": 0,            # 기준 화면에서 채움 색의 세로 두께(줄 수) — 색 띠 감지에 쓴다
+    "baseline": 0.0,           # 영역만 지정했을 때: 그 화면(체력바 없는 때)의 '체력바 닮음' 점수 — 이보다 뚜렷이 높아야 체력바로 본다
     "match": 0.55,             # 틀이 닮았다고 보는 기준 (0~1, 높을수록 엄격)
     "poll": 0.7,               # 화면을 살펴보는 간격(초)
     "start_hold": 2.0,         # 체력바가 이만큼 계속 보이면 보스전 시작으로 본다(초)
@@ -210,16 +211,133 @@ class Detector:
         return sc >= self.match, sc, hp
 
 
-def make_detector(c: dict) -> Optional["Detector"]:
+class AutoDetector:
+    """체력바 모양을 몰라도 쓰는 일반 감지: 영역 안에 '가로로 길고 얇은 바'가 나타났나.
+
+    단서 두 가지 (둘 중 큰 쪽):
+      · 윤곽: 길게 이어진 가로선이 위아래로 한 쌍 (바의 틀) — 폭이 영역의 대부분
+      · 색 띠: 채도 높은 색(체력 색)이 가로로 길게 이어진 두꺼운 띠
+    영역만 지정한 화면(보통 체력바가 없는 때)의 점수를 기준(baseline)으로 삼아, 그보다 뚜렷이 높아질 때만 '나타났다'고 본다.
+    """
+
+    MARGIN = 0.25
+
+    def __init__(self, roi, match: float = 0.55, baseline: float = 0.0) -> None:
+        self.roi = list(roi)
+        self.match = float(match)
+        self.baseline = float(baseline)
+        self.last_edge = 0.0
+        self.last_color = 0.0
+
+    def parts(self, frame: np.ndarray) -> Tuple[float, float, Optional[float]]:
+        """(윤곽 점수, 색 띠 점수, 색 띠 길이/틀 길이 = 남은 체력 추정)"""
+        cv2 = _cv2()
+        crop = crop_frac(normalize(frame), self.roi)
+        h, w = crop.shape[:2]
+        if h < 6 or w < 40:
+            return 0.0, 0.0, None
+        # 윤곽: 긴 가로선(영역 폭의 30% 이상 끊김 없이) -> 위아래 한 쌍
+        e = _edges(crop)
+        kw = max(20, int(w * 0.30))
+        hl = cv2.morphologyEx(e, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (kw, 1)))
+        rows = (hl > 0).sum(axis=1)
+        ys = [y for y in range(h) if rows[y] >= kw]
+        line_score, line_len = 0.0, 0
+        if len(ys) >= 2:
+            segs = []
+            for y in ys:
+                xs = np.where(hl[y] > 0)[0]
+                segs.append((y, int(xs.min()), int(xs.max())))
+            for i in range(len(segs)):
+                for j in range(i + 1, len(segs)):
+                    (y1, a1, b1), (y2, a2, b2) = segs[i], segs[j]
+                    gap = y2 - y1
+                    if gap < 3 or gap > h * 0.95:
+                        continue
+                    ov = min(b1, b2) - max(a1, a2)
+                    span = max(b1, b2) - min(a1, a2)
+                    if ov > 0 and span > 0 and ov / span >= 0.7 and ov > line_len:
+                        line_len = ov
+            line_score = min(line_len / (w * 0.6), 1.0)
+        # 색 띠: 채도·밝기가 충분한 색이 가로로 길게 이어진 두꺼운 띠
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        m = ((hsv[..., 1] > 110) & (hsv[..., 2] > 80)).astype(np.uint8)
+        kh = max(3, int(h * 0.12))
+        kw2 = max(16, int(w * 0.30))
+        band = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (kw2, kh)))
+        band_len = int((band.sum(axis=0) > 0).sum()) if band.any() else 0
+        color_score = min(band_len / (w * 0.6), 1.0)
+        hp = None
+        if band_len > 0:
+            ref = line_len if line_len > 0 else int(w * 0.9)
+            hp = float(min(band_len / max(ref, 1), 1.0))
+        return line_score, color_score, hp
+
+    def score(self, frame: np.ndarray) -> Tuple[float, Optional[float]]:
+        ls, cs, hp = self.parts(frame)
+        self.last_edge, self.last_color = ls, cs
+        sc = max(ls, cs)
+        return sc, hp
+
+    def present(self, frame: np.ndarray) -> Tuple[bool, float, Optional[float]]:
+        sc, hp = self.score(frame)
+        return (sc >= self.match and sc >= self.baseline + self.MARGIN), sc, hp
+
+
+class Combined:
+    """모양 맞춤(Detector)과 일반 감지(AutoDetector)를 함께 쓴다: 어느 쪽이든 체력바로 보면 있음."""
+
+    def __init__(self, tmpl: Optional["Detector"], auto: AutoDetector) -> None:
+        self.tmpl, self.auto = tmpl, auto
+        self.last_edge = 0.0
+        self.last_color = 0.0
+
+    def present(self, frame: np.ndarray) -> Tuple[bool, float, Optional[float]]:
+        pa, sa, ha = self.auto.present(frame)
+        if self.tmpl is None:
+            self.last_edge, self.last_color = self.auto.last_edge, self.auto.last_color
+            return pa, sa, ha
+        pt, st, ht = self.tmpl.present(frame)
+        self.last_edge, self.last_color = max(self.tmpl.last_edge, self.auto.last_edge), max(self.tmpl.last_color, self.auto.last_color)
+        if pt:
+            return True, st, ht if ht is not None else ha
+        if pa:
+            return True, sa, ha
+        return False, max(st, sa), None
+
+    def score(self, frame: np.ndarray) -> Tuple[float, Optional[float]]:
+        _p, sc, hp = self.present(frame)
+        return sc, hp
+
+
+def calibrate_any(frame: np.ndarray, roi) -> dict:
+    """영역(대략)만 정하면 된다. 그 화면에 체력바가 보이면 모양/색도 배우고(정밀), 안 보이면 일반 감지용 기준만 저장한다.
+    돌려주는 값: 설정에 넣을 dict + 'mode' ('exact' | 'area')."""
+    base = AutoDetector(roi).parts(frame)
+    baseline = max(base[0], base[1])
+    try:
+        cal = calibrate(frame, roi)
+        has_bar = baseline >= 0.8       # 영역 안에 이미 뚜렷한 바가 보이는 화면
+        if has_bar:
+            return {"cal": cal, "baseline": 0.0, "mode": "exact"}
+    except ValueError:
+        pass
+    return {"cal": None, "baseline": float(round(baseline, 3)), "mode": "area", "roi": [round(float(x), 4) for x in roi]}
+
+
+def make_detector(c: dict):
     """설정(cfg 결과)에서 판단기를 만든다. 기준을 아직 안 만들었거나 그림 파일이 없으면 None."""
     import os
     cv2 = _cv2()
-    if len(c.get("roi") or []) != 4 or not c.get("ref") or not os.path.isfile(c["ref"]):
+    if len(c.get("roi") or []) != 4:
         return None
-    ref = cv2.imread(c["ref"], cv2.IMREAD_GRAYSCALE)
-    if ref is None:
-        return None
-    return Detector(c["roi"], ref, c.get("hsv") or [], float(c["match"]), int(c.get("full_cols") or 0), int(c.get("fill_rows") or 0))
+    auto = AutoDetector(c["roi"], float(c["match"]), float(c.get("baseline") or 0.0))
+    tmpl = None
+    if c.get("ref") and os.path.isfile(c["ref"]):
+        ref = cv2.imread(c["ref"], cv2.IMREAD_GRAYSCALE)
+        if ref is not None:
+            tmpl = Detector(c["roi"], ref, c.get("hsv") or [], float(c["match"]), int(c.get("full_cols") or 0), int(c.get("fill_rows") or 0))
+    return Combined(tmpl, auto)
 
 
 def save_calibration(cal: "Calibration", ref_path: str) -> dict:

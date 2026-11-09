@@ -90,6 +90,36 @@ fake_red = scene(bar=None, seed=60)
 cv2.rectangle(fake_red, (100, 400), (180, 420), (30, 30, 200), -1)       # 작은 빨간 조각(피 효과 등)은 체력바가 아님
 check(not det2.present(fake_red)[0], "작은 빨간 조각은 체력바 아님")
 
+# ---------- 영역만 대충 지정 (보스전 화면 없이도): 체력바 모양을 몰라도 '길고 얇은 바'가 나타나면 알아본다
+AR = [0.25, 0.80, 0.50, 0.16]            # 일부러 넉넉하게 잡은 영역
+res = B.calibrate_any(scene(bar=None, seed=70), AR)
+check(res["mode"] == "area" and res["cal"] is None, "체력바 없는 화면 -> 영역만 저장: %s" % res["mode"])
+gen = B.make_detector(dict(B.DEFAULTS, roi=AR, baseline=res["baseline"]))
+check(gen is not None, "영역만으로 감지기 생성")
+for k, (bar, want) in enumerate([(1.0, True), (0.6, True), (0.25, True), (None, False)]):
+    pres, sc, hp = gen.present(scene(bar=bar, seed=80 + k))
+    check(pres == want, "영역만: 체력 %s -> 있음=%s (점수 %.2f)" % (bar, pres, sc))
+_, _, hpa = gen.present(scene(bar=0.6, seed=90))
+check(hpa is not None and abs(hpa - 0.6) < 0.2, "영역만: 남은 체력 대략 읽기: %s" % hpa)
+check(gen.present(other_bg(0.8))[0], "영역만: 어지러운 배경에서도 인식")
+# 속지 않아야 할 것: 평범한 화면, 긴 가로선 하나(지평선), 작은 빨간 조각, 영상 컨트롤바 같은 단색 줄
+for name, f in (("평범한 화면", scene(bar=None, seed=95)),):
+    check(not gen.present(f)[0], "영역만: %s 은 체력바 아님" % name)
+hor = scene(bar=None, seed=96)
+cv2.line(hor, (200, 600), (1100, 600), (230, 230, 230), 2)
+check(not gen.present(hor)[0], "영역만: 가로선 하나(지평선)는 체력바 아님")
+small = scene(bar=None, seed=97)
+cv2.rectangle(small, (400, 610), (470, 625), (30, 30, 200), -1)
+check(not gen.present(small)[0], "영역만: 작은 색 조각은 체력바 아님")
+# 체력바가 보이는 화면에서 영역을 잡으면 모양/색까지 배운다(정밀), 약한 흔적만 있으면 그 점수를 기준에 반영
+rb = B.calibrate_any(scene(bar=1.0, seed=99), AR)
+check(rb["mode"] == "exact" and rb["cal"] is not None, "체력바가 보이는 화면 -> 정밀 기준도 학습: %s" % rb["mode"])
+weak = scene(bar=None, seed=98)
+cv2.rectangle(weak, (int(W * .30), int(H * .93)), (int(W * .45), int(H * .95)), (30, 200, 30), -1)   # 짧은 색 조각이 상시 있는 화면
+rw = B.calibrate_any(weak, AR)
+gw = B.make_detector(dict(B.DEFAULTS, roi=AR, baseline=rw["baseline"]))
+check(rw["mode"] == "area" and not gw.present(weak)[0], "영역만: 약한 상시 요소는 기준에 반영돼 감지 안 됨 (기준 %.2f)" % rw["baseline"])
+
 # ---------- 연출(레터박스)
 check(B.letterbox(scene(bar=None, letterbox=True)) and not B.letterbox(scene(bar=1.0)), "레터박스 감지")
 
