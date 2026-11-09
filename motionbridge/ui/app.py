@@ -1236,10 +1236,18 @@ class MainWindow(QMainWindow):
         f.addRow("COM(위치 기준) 본", self.com_combo)
         lay.addWidget(g)
 
+        g = QGroupBox("척추")
+        f = QFormLayout(g)
+        f.addRow(self._chk("spine_mix", "척추 개수가 다르면 중간값으로 맞추기",
+                           "소스 척추가 3개(척추1·척추2·가슴)인데 타깃 모델은 2개뿐일 때처럼 짝이 없는 본이 생기면, 골반~목 사이를 하나의 곡선으로 보고 "
+                           "길이 비율대로 소스 값을 섞어 타깃 본에 넣습니다. 매핑에서 빠진 척추 본도 같이 움직입니다.\n"
+                           "끄면 이름이 맞는 본만 1:1 로 적용하고 나머지는 움직이지 않습니다 (직접 매핑을 맞춰 쓰는 경우)."))
+        lay.addWidget(g)
+
         g = QGroupBox("발 · 접지 (IK)")
         f = QFormLayout(g)
         f.addRow(self._chk("foot_ik", "발 IK 사용", "접지 구간에서 발이 미끄러지지 않게 다리를 풉니다"))
-        f.addRow(self._chk("hand_ik", "손 IK 사용 (바닥 짚기)", "원본 손 높이가 0 이하로 내려가 바닥에 닿은 구간에서만 그 팔에 IK 를 걸고, 0 에서 벗어나면 풉니다"))
+        f.addRow(self._chk("hand_ik", "손 IK 사용 (바닥 짚기)", "원본 손이 바닥에 닿은 구간에서만 그 팔에 IK 를 걸고 벗어나면 풉니다. 높이는 '타깃 바닥 + 소스 손의 바닥 대비 높이' 로 계산하고, 손이 거의 안 움직이는 구간만 한 점에 고정합니다"))
         f.addRow("IK 추종(0~1)", self._num("ik_follow", 0, 1, 0.05, 2, tip="1: 항상 소스 발 위치(스케일 적용)를 따라감 / 0: 접지 구간에서만 IK"))
         f.addRow(self._chk("ground_clamp", "바닥 아래로 못 내려가게"))
         f.addRow("바닥 높이 보정", self._num("ground_offset", -50, 50, 0.1, 2, tip="타깃 단위. 발목 기준 바닥 높이를 올리거나 내림"))

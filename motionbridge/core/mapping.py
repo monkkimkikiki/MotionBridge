@@ -244,6 +244,71 @@ def spine_blend(src_map: Dict[str, int], tgt_map: Dict[str, int]) -> Dict[str, L
     return out
 
 
+def spine_path(skel, slots: Dict[str, int]) -> Optional[Tuple[List[int], int]]:
+    """골반(Hips)과 목(Neck) 사이에 실제로 있는 본 전부 (아래 -> 위, 매핑 여부와 상관없이)와 목 본 번호.
+    골반이 목의 조상이 아니거나 척추 본이 하나도 없으면 None."""
+    h, n = slots.get("Hips", -1), slots.get("Neck", -1)
+    if h < 0 or n < 0:
+        return None
+    chain: List[int] = []
+    j = skel.parents[n]
+    while j >= 0 and j != h:
+        chain.append(int(j))
+        j = skel.parents[j]
+    if j != h or not chain:
+        return None
+    chain.reverse()
+    return chain, int(n)
+
+
+def _spine_edges(skel, path: List[int], neck: int) -> np.ndarray:
+    """척추 본(구간)들의 곡선 길이 기준 경계 (0..1, 길이 n+1). 각 본은 '자기 위치 -> 다음 본(마지막은 목)' 구간을 맡는다."""
+    _wr, wp = skel.bind_world()
+    pts = [wp[b] for b in path] + [wp[neck]]
+    seg = np.array([float(np.linalg.norm(pts[i + 1] - pts[i])) for i in range(len(path))])
+    if seg.sum() < 1e-9:
+        seg = np.ones(len(path))
+    return np.concatenate([[0.0], np.cumsum(seg) / seg.sum()])
+
+
+def spine_arc_mix(src, tgt, src_slots: Dict[str, int], tgt_slots: Dict[str, int], tgt_mapped=()) -> Dict[int, List[Tuple[int, float]]]:
+    """척추를 골반~목 사이의 '하나의 곡선'으로 보고 타깃 척추 본마다 소스 척추 본을 섞는 비율 (타깃 본 번호 -> [(소스 본 번호, 비율)]).
+
+    · 본 개수가 달라도(3->2, 2->3, 5->3 ...) 각 타깃 본이 맡는 곡선 구간과 겹치는 소스 구간의 비율만큼 섞는다.
+      구간 길이로 섞으므로 곡선 전체의 끝 위치(목 밑)가 소스와 거의 같게 유지된다.
+    · 매핑에서 빠진 척추 본(예: 슬롯이 3개뿐인데 실제로는 5개)도 같이 움직인다 — 안 그러면 일부 본에만 휨이 몰린다.
+    · 개수가 같고 전부 매핑되어 있으면 빈 dict (기존 이름 대응 그대로).
+    · 골반/목을 못 찾으면 빈 dict."""
+    sp, tp = spine_path(src, src_slots), spine_path(tgt, tgt_slots)
+    if sp is None or tp is None:
+        return {}
+    spath, sneck = sp
+    tpath, tneck = tp
+    mapped = set(tgt_mapped)
+    if len(spath) == len(tpath) and all(b in mapped for b in tpath):
+        return {}
+    out: Dict[int, List[Tuple[int, float]]] = {}
+    if len(spath) == len(tpath):      # 개수는 같은데 일부 본이 매핑에서 빠짐 -> 순서대로 1:1
+        for sb, tb in zip(spath, tpath):
+            out[tb] = [(sb, 1.0)]
+        return out
+    es, et = _spine_edges(src, spath, sneck), _spine_edges(tgt, tpath, tneck)
+    for j, tb in enumerate(tpath):
+        a, b = et[j], et[j + 1]
+        parts: List[Tuple[int, float]] = []
+        for i, sb in enumerate(spath):
+            ov = min(b, es[i + 1]) - max(a, es[i])
+            if ov > 1e-6 * max(b - a, 1e-9):
+                parts.append((sb, ov))
+        if not parts:       # 수치 오차로 겹침이 없으면 가장 가까운 소스 본
+            c = 0.5 * (a + b)
+            i = int(np.clip(np.searchsorted(es, c) - 1, 0, len(spath) - 1))
+            parts = [(spath[i], 1.0)]
+        tot = sum(w for _s, w in parts)
+        out[tb] = [(sb, w / tot) for sb, w in parts]
+    return out
+
+
 def pairs_from_slots(src_map: Dict[str, int], tgt_map: Dict[str, int]) -> List[Tuple[int, int]]:
     pairs = []
     used_t = set()

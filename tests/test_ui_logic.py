@@ -759,6 +759,12 @@ def test_exist_policy_ui():
     # 추출 레이아웃에 정책이 전달된다
     mw.ex_out.setText("/tmp/mb_x")
     assert mw.make_layout().on_exist == safesave.OVERWRITE
+    # 척추 중간값 체크박스: 기본 켜짐, 끄면 설정에 반영
+    assert mw.pr.settings.spine_mix is True
+    cb = mw._fields["spine_mix"][0]
+    cb.setChecked(False)
+    assert mw.pr.settings.spine_mix is False
+    cb.setChecked(True)
     # Biped 템플릿 필드가 있다
     mw.biped_tpl.setText("/tmp/skinned.max")
     assert mw.biped_tpl.text().endswith("skinned.max")

@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import quat as Q
-from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_frame, frame_from_axes, refine_frame_with_anim, spine_blend
+from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_frame, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
 from .model import Animation, Skeleton, fk
 
 
@@ -57,6 +57,7 @@ class RetargetSettings:
     blend_frames: int = 4
     # 손 IK: 소스의 손 높이가 바닥(0) 근처이거나 그 아래로 내려갔을 때만 그쪽 팔에 IK 를 걸어 손을 바닥에 고정하고, 0 에서 벗어나면 풀어 준다
     hand_ik: bool = True
+    spine_mix: bool = True              # 척추 본 개수가 소스와 다르면 곡선 구간 비율로 중간값을 섞는다 (끄면 이름이 맞는 본만 1:1)
     hand_contact_height: float = 0.05   # 팔 길이 대비: 손 높이가 이 값 이하(바닥에 닿거나 파고듦)이면 접촉
     hand_release_height: float = 0.12   # 팔 길이 대비: 한번 닿은 뒤 이 값을 넘어 떨어져야 IK 가 풀림 (경계에서 깜빡이지 않게)
     hip_drop: bool = True
@@ -202,17 +203,27 @@ def retarget(
     pair_of: Dict[int, int] = {}
     for s, t in pairs:
         pair_of[t] = s
-    # 척추 본 개수/구성이 다르면(예: 소스 3개, 타깃 2개) 타깃 척추마다 소스 척추 값을 자연스럽게 섞는다
+    # 척추 본 개수/구성이 다르면(예: 소스 3개, 타깃 2개) 골반~목 사이를 하나의 곡선으로 보고 구간 길이 비율로 섞는다.
+    # 매핑에서 빠진 척추 본(타깃에 실제로는 있는데 슬롯이 없는 본)도 같이 움직인다.
     spine_mix: Dict[int, List[Tuple[int, float]]] = {}
-    if rig is None and src_slots and tgt_slots:
-        for name, parts in spine_blend(src_slots, tgt_slots).items():
-            tj = tgt_slots[name]
-            spine_mix[tj] = [(src_slots[sn], w) for sn, w in parts]
-            pair_of[tj] = max(spine_mix[tj], key=lambda x: x[1])[0]   # 방향 보정 등은 가장 비중 큰 소스 본 기준
+    spine_note = ""
+    if rig is None and st.spine_mix and src_slots and tgt_slots:
+        arc = spine_arc_mix(src, tgt, src_slots, tgt_slots, set(pair_of))
+        if arc:
+            spine_mix = {tj: list(parts) for tj, parts in arc.items()}
+            ns_, nt_ = len(spine_path(src, src_slots)[0]), len(spine_path(tgt, tgt_slots)[0])
+            spine_note = "척추 곡선 기준으로 소스 %d개 → 타깃 %d개 본" % (ns_, nt_)
+        else:
+            for name, parts in spine_blend(src_slots, tgt_slots).items():
+                if name in tgt_slots:
+                    spine_mix[tgt_slots[name]] = [(src_slots[sn], w) for sn, w in parts]
+            if spine_mix:
+                spine_note = "소스 %d개 → 타깃 %d개 본" % (sum(1 for x in SPINE_SLOTS if x in src_slots), sum(1 for x in SPINE_SLOTS if x in tgt_slots))
+        for tj, parts in spine_mix.items():
+            pair_of[tj] = max(parts, key=lambda x: x[1])[0]   # 방향 보정 등은 가장 비중 큰 소스 본 기준
         if spine_mix:
-            pairs = [(s, t) for s, t in pairs if t not in spine_mix] + [(pair_of[t], t) for t in spine_mix]
-            warnings.append("ℹ 소스/타깃의 척추 본 구성이 달라 척추 움직임을 비율로 섞어 적용했습니다 (소스 %d개 → 타깃 %d개)"
-                            % (sum(1 for x in SPINE_SLOTS if x in src_slots), sum(1 for x in SPINE_SLOTS if x in tgt_slots)))
+            pairs = [(s_, t_) for s_, t_ in pairs if t_ not in spine_mix] + [(pair_of[t_], t_) for t_ in spine_mix]
+            warnings.append("ℹ 소스/타깃의 척추 본 구성이 달라 척추 움직임을 비율로 섞어 적용했습니다 (%s)" % spine_note)
     mapped_t = sorted(pair_of)
     if not mapped_t:
         raise ValueError("매핑된 본이 없습니다.")
@@ -343,11 +354,12 @@ def retarget(
     for t in mapped_t:
         s = pair_of[t]
         D = Q.mul(rs[:, s], Q.conj(brs[s]))
-        if t in spine_mix and len(spine_mix[t]) == 2:
-            (sa, wa), (sb, wb) = spine_mix[t]
-            Da = Q.mul(rs[:, sa], Q.conj(brs[sa]))
-            Db = Q.mul(rs[:, sb], Q.conj(brs[sb]))
-            D = Q.slerp(Da, Db, wb)
+        if t in spine_mix and len(spine_mix[t]) > 1:
+            D, wsum = None, 0.0
+            for sb, wb in spine_mix[t]:
+                Db = Q.mul(rs[:, sb], Q.conj(brs[sb]))
+                wsum += wb
+                D = Db if D is None else Q.slerp(D, Db, wb / wsum)
         rot_des[t] = Q.mul(D, Q.mul(corr[t], brt[t]))
     for tj, eul in st.rot_offsets.items():
         if not any(abs(x) > 1e-9 for x in eul) or tj < 0 or tj >= Jt:
@@ -452,28 +464,52 @@ def retarget(
                 contact = clean_mask((sc[:, 1] - ymin < st.contact_height * Ls) & (sp < st.contact_speed * Ls))
             fkc = Q.rotate(Ft, Wp[:, ch.foot])
             Dc = bpt[ch.foot] + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
+            def ramp_weights(mask: np.ndarray):
+                """접촉 구간마다 앞뒤를 부드럽게 올리고 내리는 가중치와 (a, b, n) 목록."""
+                ww = np.zeros(T)
+                runs = []
+                for a, b in _runs(mask):
+                    n = b - a + 1
+                    r = min(int(st.blend_frames), n // 2)
+                    ramp = np.ones(n)
+                    for i in range(r):
+                        ramp[i] = ramp[n - 1 - i] = float(_smoothstep(np.array((i + 1) / (r + 1))))
+                    ww[a : b + 1] = ramp
+                    runs.append((a, b, ramp))
+                return ww, runs
+
+            if ch.kind == "hand":
+                # 손은 '바인드 포즈 대비 이동량'이 아니라 '바닥 대비 높이'로 계산한다.
+                # (소스 A 포즈 / 타깃 T 포즈처럼 바인드 때 손 높이가 다르면 그 차이가 목표 높이에 더해져 손이 공중으로 끌려갔다)
+                #  - 높이: 타깃 바닥 + 소스 손의 바닥 대비 높이 x 스케일  (바닥 아래로는 내려가지 않는다)
+                #  - 수평: IK 없이 나온 손 위치(fkc)를 그대로 따르다가, 손이 수평으로 거의 안 움직이는 구간만 한 점에 고정
+                w, _runs_w = ramp_weights(contact)
+                hs = sc[:, 1] - ground_src
+                vh = np.linalg.norm(vel[:, [0, 2]], axis=1)
+                still = clean_mask(contact & (vh < st.contact_speed * Ls), min_len=2, max_gap=1)
+                goal = fkc.copy()
+                _pw, still_runs = ramp_weights(still)
+                for a, b, ramp in still_runs:
+                    plant = fkc[a : b + 1][:, [0, 2]].mean(axis=0)
+                    goal[a : b + 1, 0] = fkc[a : b + 1, 0] * (1 - ramp) + plant[0] * ramp
+                    goal[a : b + 1, 2] = fkc[a : b + 1, 2] * (1 - ramp) + plant[1] * ramp
+                floor_y = ground_tgt + st.ground_offset
+                goal[:, 1] = floor_y + k * np.maximum(hs, 0.0)
+                target = fkc * (1 - w)[:, None] + goal * w[:, None]
+                target[:, 1] = np.where(w > 1e-9, np.maximum(target[:, 1], floor_y), target[:, 1])
+                plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg))
+                continue
+
             goal = Dc.copy()
-            w = np.zeros(T)
-            for a, b in _runs(contact):
+            w, runs_w = ramp_weights(contact)
+            for a, b, ramp in runs_w:
                 plant = Dc[a : b + 1].mean(axis=0)
-                n = b - a + 1
-                r = min(int(st.blend_frames), n // 2)
-                ramp = np.ones(n)
-                for i in range(r):
-                    ramp[i] = ramp[n - 1 - i] = float(_smoothstep(np.array((i + 1) / (r + 1))))
-                w[a : b + 1] = ramp
                 goal[a : b + 1] = Dc[a : b + 1] * (1 - ramp)[:, None] + plant[None, :] * ramp[:, None]
             follow = float(np.clip(st.ik_follow, 0.0, 1.0))
-            if ch.kind == "hand":
-                amt = w      # 손 IK 는 접촉 구간(과 부드러운 전환)에서만 — 0 에서 벗어나면 풀린다
-                # 바닥에 닿은(또는 파고든) 손은 타깃 바닥 위에 둔다
-                goal[:, 1] = np.maximum(goal[:, 1], ground_tgt + st.ground_offset)
-                target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
-            else:
-                amt = np.maximum(follow, w)  # IK 를 얼마나 적용할지
-                target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
-                if st.ground_clamp:
-                    target[:, 1] = np.maximum(target[:, 1], bpt[ch.foot, 1] + st.ground_offset)
+            amt = np.maximum(follow, w)  # IK 를 얼마나 적용할지
+            target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
+            if st.ground_clamp:
+                target[:, 1] = np.maximum(target[:, 1], bpt[ch.foot, 1] + st.ground_offset)
             plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg))
         return plans
 
@@ -545,10 +581,12 @@ def retarget(
             warnings.append("일부 프레임에서 다리가 목표 발 위치에 닿지 않습니다(다리가 완전히 펴짐).")
         if any(pl.fail.any() for ch, pl in zip(valid_chains, plans) if ch.kind == "hand"):
             warnings.append("일부 프레임에서 팔이 바닥에 고정할 손 위치에 닿지 않습니다(팔이 완전히 펴짐).")
-        hands_used = [ch.label for ch, pl in zip(valid_chains, plans) if ch.kind == "hand" and pl.contact.any()]
-        if hands_used:
-            warnings.append("ℹ 손이 바닥(높이 0)에 닿는 구간에서 %s 에 IK 를 걸었습니다 (벗어나면 풀림)" % ", ".join(hands_used))
-
+        hands_used = [(ch, pl) for ch, pl in zip(valid_chains, plans) if ch.kind == "hand" and pl.contact.any()]
+        for ch, pl in hands_used:
+            hs = ps[:, ch.src_foot, 1] - ground_src
+            arm_s = pl.leg_length / max(k, 1e-9)
+            warnings.append("ℹ 손 IK(%s): 바닥에 닿은 %d프레임에 적용 · 소스 손 최저 높이 %.1f%%(팔 길이 대비) — 접촉 판정 %.0f%% 이하"
+                            % (ch.label, int(pl.contact.sum()), 100 * float(hs.min()) / max(arm_s, 1e-9), 100 * st.hand_contact_height))
     Lr = Q.make_continuous(Q.normalize(Lr))
     scale_cum = None
     if st.scale_offsets or st.pos_offsets:
