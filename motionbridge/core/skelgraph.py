@@ -221,6 +221,7 @@ class SkelIndex:
         self.recs: Dict[str, List[Rec]] = {}   # 에셋 경로 -> 기록들 (한 파일에 여러 개체가 있을 수 있음)
         self.unreadable: Dict[str, str] = {}
         self.seen: set = set()                 # 검사를 마친 에셋 경로 (알아볼 개체가 없던 파일 포함)
+        self.rechecked: set = set()            # 스켈레톤 연결이 비어 있어서 지금 도우미로 다시 읽어 본 파일 (한 번만 다시 읽는다)
 
     def add(self, r: Rec) -> None:
         if r.kind == "unreadable":
@@ -234,15 +235,36 @@ class SkelIndex:
     def all(self) -> List[Rec]:
         return [r for v in self.recs.values() for r in v]
 
+    def stale(self, path: str) -> bool:
+        """예전 도우미가 스켈레톤 연결을 못 읽고 남긴 기록인가 (연결이 비어 있는 애니/메쉬/몽타주, 시퀀스가 전부 빈 몽타주)."""
+        if path in self.rechecked:
+            return False
+        for r in self.recs.get(path, ()):
+            if r.kind in ("anim", "mesh", "montage") and not r.skel_key:
+                return True
+            if r.kind == "montage" and not any(r.sequences):
+                return True
+        return False
+
     def pending(self, paths: Iterable[str]) -> List[str]:
-        return [p for p in paths if not self.done(p)]
+        """아직 안 읽은 파일 + 연결을 못 읽었던 옛 기록(한 번만 다시 읽음)."""
+        return [p for p in paths if not self.done(p) or self.stale(p)]
+
+    def begin(self, paths: Iterable[str]) -> None:
+        """이 파일들을 다시 읽기 전에 옛 기록을 지운다 (같은 파일이 두 번 들어가 개수가 늘지 않게)."""
+        for p in paths:
+            if p in self.recs:
+                self.rechecked.add(p)
+                del self.recs[p]
+            self.unreadable.pop(p, None)
 
     def save(self) -> None:
         if not self.path:
             return
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
-            json.dump({"v": 1, "recs": [r.to_json() for r in self.all()], "unreadable": self.unreadable, "seen": sorted(self.seen)}, f, ensure_ascii=False)
+            json.dump({"v": 1, "recs": [r.to_json() for r in self.all()], "unreadable": self.unreadable, "seen": sorted(self.seen),
+                       "rechecked": sorted(self.rechecked)}, f, ensure_ascii=False)
 
     @staticmethod
     def load(path: str) -> "SkelIndex":
@@ -254,6 +276,7 @@ class SkelIndex:
                 idx.add(Rec.from_json(x))
             idx.unreadable.update(d.get("unreadable", {}))
             idx.seen.update(d.get("seen", []))
+            idx.rechecked.update(d.get("rechecked", []))
         except (OSError, ValueError):
             pass
         return idx

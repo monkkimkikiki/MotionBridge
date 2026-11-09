@@ -160,6 +160,7 @@ class CharAssetPanel(QWidget):
         idx.recs.clear()
         idx.unreadable.clear()
         idx.seen.clear()
+        idx.rechecked.clear()
         idx.save()
         self.groups = []
         self.tree.clear()
@@ -226,6 +227,7 @@ class CharAssetPanel(QWidget):
             if w.cancel.is_set():
                 break
             recs, seen = extractor.inspect_assets(*a, todo[i:i + step], None, chunk=step, cancel=w.cancel)
+            idx.begin(todo[i:i + step])          # 옛 기록이 있던 파일은 새로 읽은 것으로 바꾼다
             for r in recs:
                 idx.add(r)
             idx.seen.update(seen)

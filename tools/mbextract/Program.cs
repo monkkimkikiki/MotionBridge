@@ -109,7 +109,8 @@ try
                 {
                     if (obj is UAnimSequence seq)
                     {
-                        Emit(new { type = "node", path = p, kind = "anim", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")), reason = SkelDiag(obj),
+                        var skPath = PathOf(Get(obj, "Skeleton"));
+                        Emit(new { type = "node", path = p, kind = "anim", name = obj.Name, skeleton = skPath, reason = skPath.Length > 0 ? "" : SkelDiag(obj),
                                    frames = IntOf(Get(obj, "NumFrames")), length = FloatOf(Get(obj, "SequenceLength")), rate = FloatOf(Get(obj, "RateScale")),
                                    tracks = TracksOf(obj),
                                    compressed = Get(obj, "CompressedDataStructure") != null || Get(obj, "CompressedData") != null,
@@ -125,7 +126,8 @@ try
                     }
                     else if (obj is USkeletalMesh)
                     {
-                        Emit(new { type = "node", path = p, kind = "mesh", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")), reason = SkelDiag(obj),
+                        var skPathM = PathOf(Get(obj, "Skeleton"));
+                        Emit(new { type = "node", path = p, kind = "mesh", name = obj.Name, skeleton = skPathM, reason = skPathM.Length > 0 ? "" : SkelDiag(obj),
                                    bones = CountOf(Get(Get(obj, "ReferenceSkeleton"), "FinalRefBoneInfo")) });
                         found++;
                     }

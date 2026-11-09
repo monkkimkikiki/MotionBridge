@@ -122,5 +122,28 @@ _a = S.Rec("A/X.uasset", "anim", skeleton="/Game/S/SK", frames=30, length=1.0, t
 _b = S.Rec("A/Y.uasset", "anim", skeleton="/Game/S/SK", frames=30, length=1.0, tracks=0)
 check(_a.playable() and not _b.playable(), "트랙 수 모름(-1)은 통과, 0 은 재생 불가")
 
+# 예전 도우미가 스켈레톤 연결을 못 읽고 남긴 기록(연결이 빈 것)은 한 번만 다시 읽는다 (사용자 PC 의 실제 상황: Swordman 애니가 메쉬 0/애니 0 으로 보임)
+with tempfile.TemporaryDirectory() as _d:
+    _ix = S.SkelIndex(os.path.join(_d, "x.json"))
+    _old = S.Rec("P/Content/Bosses/Swordman/Animation/A_Slash.uasset", "anim", name="A_Slash", skeleton="", frames=100, length=3.0, tracks=98, compressed=True)
+    _ok = S.Rec("P/Content/Bosses/Other/A_Walk.uasset", "anim", name="A_Walk", skeleton="/Game/Bosses/Other/SK_O.SK_O", frames=50, length=1.5, tracks=40)
+    _ix.add(_old)
+    _ix.add(_ok)
+    _ix.seen.update([_old.path, _ok.path])
+    check(_ix.pending([_old.path, _ok.path, "new"]) == [_old.path, "new"], "연결이 빈 옛 기록은 다시 읽을 대상: %s" % _ix.pending([_old.path, _ok.path, "new"]))
+    _ix.begin([_old.path])
+    _ix.add(S.Rec(_old.path, "anim", name="A_Slash", skeleton="/Game/Bosses/Swordman/Art/SK_Swordman_Skeleton.SK_Swordman_Skeleton", frames=100, length=3.0, tracks=98, compressed=True))
+    check(len(_ix.recs[_old.path]) == 1 and _ix.recs[_old.path][0].skel_key, "다시 읽으면 옛 기록을 바꿈(중복 없음)")
+    _ix.save()
+    _j = S.SkelIndex.load(_ix.path)
+    check(_j.pending([_old.path]) == [], "다시 읽은 뒤에는 대기 목록에서 빠짐")
+    # 다시 읽어도 연결이 안 읽히는 파일은 매번 다시 읽지 않는다
+    _bad = S.Rec("P/Content/X/A_Bad.uasset", "anim", skeleton="", frames=10, length=1.0, tracks=5)
+    _j.add(_bad)
+    _j.seen.add(_bad.path)
+    _j.begin([_bad.path])
+    _j.add(S.Rec(_bad.path, "anim", skeleton="", frames=10, length=1.0, tracks=5))
+    check(_j.pending([_bad.path]) == [], "한 번 다시 읽은 연결 없는 파일은 반복해 읽지 않음")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)
