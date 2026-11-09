@@ -758,8 +758,10 @@ def main():
         check(mw.tabs.count() == 9 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AnimRef", "탭 9개 (AnimRef·AI모캡 포함)")
         mw.tabs.setCurrentIndex(5)
         check(mw.tabs.currentIndex() == 5 and mw.tabs.current_page() is vt, "탭 이동/표시")
-        mw.tabs._bar_changed(2)  # 탭 줄을 눌렀을 때
-        check(mw.tabs.currentIndex() == 2, "탭 클릭으로 이동")
+        check(mw.tabs.pages[0] is mw.animref, "탭 줄 맨 앞은 AnimRef")
+        check(mw.tabs.indexOf(mw.animref) == 7, "AnimRef 번호는 그대로(7)")
+        mw.tabs._bar_changed(2)  # 탭 줄을 눌러 둘째 칸(번호 1)으로
+        check(mw.tabs.currentIndex() == 1, "탭 클릭으로 이동")
 
         # 분리 / 합치기: 분리해도 번호로 이동하면 그 창이 앞으로 나오고, 닫으면 제자리로 돌아온다
         hub = mw.tabs.hub
@@ -768,13 +770,16 @@ def main():
         mw.tabs.setCurrentIndex(5)
         check(hub.view_of(vt) is win.view and win.view.current_page() is vt, "분리된 탭도 번호로 접근")
         hub.dock(vt)
-        check(not hub.is_detached(vt) and mw.tabs.pages.index(vt) == 5 and win not in hub.floats, "합치기: 원래 순서 자리로")
+        check(not hub.is_detached(vt) and mw.tabs.pages.index(vt) == 6 and win not in hub.floats, "합치기: 원래 순서 자리로")
         w2 = hub.detach(mw.tabs.widget(1), None)
         hub.redock_window(w2)
-        check(mw.tabs.pages.index(mw.tabs.widget(1)) == 1 and not hub.floats, "창 닫으면 메인으로 복귀")
-        a, b = mw.tabs.pages[0], mw.tabs.pages[1]
+        check(mw.tabs.pages.index(mw.tabs.widget(1)) == 2 and not hub.floats, "창 닫으면 메인으로 복귀")
+        a, b = mw.tabs.pages[1], mw.tabs.pages[2]
         hub.move(a, mw.tabs, len(mw.tabs.pages))
-        check(mw.tabs.pages[-1] is a and mw.tabs.pages[0] is b and mw.tabs.indexOf(a) == 0, "순서 바꿔도 번호는 그대로")
+        check(mw.tabs.pages[-1] is a and mw.tabs.pages[1] is b and mw.tabs.indexOf(a) == 0, "순서 바꿔도 번호는 그대로")
+        w3 = hub.detach(mw.animref, None)
+        hub.redock_window(w3)
+        check(mw.tabs.pages[0] is mw.animref, "AnimRef 를 분리했다 합쳐도 맨 앞")
 
     print("모두 통과" if not fails else "실패 %d개" % len(fails))
     sys.exit(1 if fails else 0)

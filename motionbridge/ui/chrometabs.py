@@ -287,6 +287,19 @@ class TabHub:
     def home_index(self, page) -> int:
         return self.home.index(page) if page in self.home else -1
 
+    def rank_of(self, page) -> float:
+        """합칠 때 정하는 자리 순서. 기본은 번호(처음 추가된 순서)이고, front 로 지정한 화면은 항상 맨 앞."""
+        if page in getattr(self, "front", []):
+            return -1000 + self.front.index(page)
+        return self.home_index(page)
+
+    def set_front(self, page) -> None:
+        """이 화면을 탭 줄 맨 앞에 둔다 (번호는 그대로, 분리했다 합쳐도 맨 앞으로 돌아온다)."""
+        if not hasattr(self, "front"):
+            self.front = []
+        if page not in self.front:
+            self.front.append(page)
+
     def view_of(self, page: QWidget) -> Optional[ChromeTabs]:
         for v in self.views:
             if page in v.pages:
@@ -357,10 +370,10 @@ class TabHub:
         src = self.view_of(page)
         if src is None or src is self.main:
             return
-        h = self.home_index(page)
+        h = self.rank_of(page)
         pos = len(self.main.pages)
         for k, p in enumerate(self.main.pages):
-            if self.home_index(p) > h:
+            if self.rank_of(p) > h:
                 pos = k
                 break
         src.remove(page)

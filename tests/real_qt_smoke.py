@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory() as d:
         mw.tabs.setCurrentIndex(i)
         app.processEvents()
         vis = [mw.tabs.tabText(k) for k, p in enumerate(mw.tabs.pages) if p.isVisible()]
-        check(len(vis) == 1 and mw.tabs.pages[i].isVisible(), "탭 %d 에서 보이는 화면: %s" % (i, vis))
+        check(len(vis) == 1 and mw.tabs.widget(i).isVisible(), "탭 %d 에서 보이는 화면: %s" % (i, vis))
     check(mw.tabs.currentIndex() == 8, "모든 탭 순회")
     vt = mw.vidfind
     win = mw.tabs.hub.detach(vt, None)
@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory() as d:
         check(w3 is not None and ar.inner.isVisible(), "AnimRef 탭 분리")
         w3.close()
         app.processEvents()
-        check(mw.tabs.pages.index(ar) == 7, "AnimRef 탭 합치기")
+        check(mw.tabs.pages.index(ar) == 0, "AnimRef 탭 합치기(맨 앞)")
         check(ar.can_close(), "닫기 허용")
         # 영상 플레이어는 모달이 아니다 (띄워 둔 채 다른 곳을 쓸 수 있음)
         import inspect

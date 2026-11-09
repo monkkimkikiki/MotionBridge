@@ -348,6 +348,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.animref, "AnimRef", "AnimRef — 게임 영상에서 모션 클립 수집")
         self.mocap = MocapTab(self)
         self.tabs.addTab(self.mocap, "AI모캡", "AI 모캡 — 영상에서 사람 3D 모션 (GVHMR / WHAM)")
+        # 탭 줄 맨 앞은 AnimRef (번호·단축키는 그대로). 처음 보이는 화면은 예전처럼 '추출'이라 AnimRef 화면은 열 때 만들어진다.
+        self.tabs.hub.set_front(self.animref)
+        self.tabs.hub.move(self.animref, self.tabs, 0)
+        self.tabs.setCurrentIndex(0)
         self.tabs.setMinimumWidth(500)
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         split.addWidget(self.tabs)
