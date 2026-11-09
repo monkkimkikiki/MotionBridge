@@ -19,6 +19,17 @@ from .assetidx import DESC_STOP, UNKNOWN_WORDS, norm_key, tokens
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODELS = ["qwen2.5vl:7b", "llama3.2-vision", "gemma3:12b", "minicpm-v"]
+# GPT-OSS: OpenAI 의 열린 가중치 모델. 글만 다룬다(이미지 못 봄) -> 이름·설명으로 찾기 전용. 20B 는 메모리 16GB 이상 권장.
+GPTOSS_MODEL = "gpt-oss:20b"
+TEXT_ONLY_PREFIXES = ("gpt-oss",)
+GPTOSS_SIZE_GB = 14
+
+
+def is_text_only(model: str) -> bool:
+    low = (model or "").lower()
+    return any(low.startswith(p) for p in TEXT_ONLY_PREFIXES)
+
+
 CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"]
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 # OpenAI 호환 API 로 붙는 다른 AI: (이름, 주소, 기본 모델, 키 환경변수). GPT·Gemini·OpenRouter·내 서버(LM Studio 등)가 같은 방식이다.
@@ -56,7 +67,7 @@ def sort_models(names):
         return any(h in low for h in VISION_HINTS)
     uniq = sorted(dict.fromkeys(str(n) for n in names if n))
     return [n for n in uniq if likely(n)] + [n for n in uniq if not likely(n)], sum(1 for n in uniq if likely(n))
-VOCAB_LIMIT = {"ollama": 250, "claude": 800, "openai": 800}  # 한 번에 알려줄 이름 수 (작은 모델은 긴 목록에 약하다)
+VOCAB_LIMIT = {"ollama": 250, "gptoss": 500, "claude": 800, "openai": 800}  # 한 번에 알려줄 이름 수 (작은 모델은 긴 목록에 약하다)
 
 
 class VisionError(Exception):
@@ -223,6 +234,7 @@ def _b64(path: str) -> Tuple[str, str]:
 class Provider:
     key = ""
     label = ""
+    supports_images = True      # False 면 글로 묻는 일(이름·설명 찾기)에만 쓴다
 
     def __init__(self, post: Callable = _http) -> None:
         self.post = post
@@ -231,6 +243,8 @@ class Provider:
         return VOCAB_LIMIT[self.key]
 
     def ask(self, image_path: str, prompt: str) -> str:
+        if not self.supports_images:
+            raise VisionError("이 AI(%s)는 글만 다룰 수 있어 이미지 인식에는 쓸 수 없습니다. 장면 인식은 Ollama 비전 모델·Claude·다른 AI 로 바꾸세요 (이름·설명으로 찾기에는 그대로 쓸 수 있어요)." % getattr(self, "model", self.label))
         return self._send(prompt, image_path)
 
     def ask_text(self, prompt: str) -> str:
@@ -289,6 +303,11 @@ class OllamaProvider(Provider):
         if image_path:
             msg0["images"] = [_b64(image_path)[1]]
         payload = {"model": self.model, "stream": False, "format": "json", "options": {"temperature": 0}, "messages": [msg0]}
+        if is_text_only(self.model):
+            # 추론형 글 모델: 긴 이름 목록이 잘리지 않게 문맥을 늘리고, 생각은 짧게. JSON 강제 형식은 이 모델에서 불안정해서 끄고 답에서 JSON 을 뽑는다.
+            payload.pop("format")
+            payload["options"] = {"temperature": 0, "num_ctx": 16384}
+            payload["think"] = "low"
         try:
             d = self.post(self.host + "/api/chat", payload, {"Content-Type": "application/json"}, self.timeout)
         except VisionError as e:
@@ -297,6 +316,23 @@ class OllamaProvider(Provider):
             raise
         msg = d.get("message") or {}
         return str(msg.get("content") or "")
+
+
+class GptOssProvider(OllamaProvider):
+    """GPT-OSS-20B (Ollama 로 내 PC에서 실행, 무료). 글 전용 — 게임 속 이름/동작 설명으로 에셋 찾기에 쓴다."""
+    key = "gptoss"
+    label = "GPT-OSS-20B (내 PC · 글 전용, 무료)"
+    supports_images = False
+
+    def __init__(self, model: str = GPTOSS_MODEL, host: str = DEFAULT_OLLAMA_HOST, post: Callable = _http, timeout: float = 600.0,
+                 stream: Callable = _http_stream) -> None:
+        super().__init__(model or GPTOSS_MODEL, host, post, timeout, stream)
+
+    def check(self) -> Tuple[bool, str, List[str]]:
+        ok, msg, names = super().check()
+        if ok:
+            return True, "GPT-OSS 준비 완료 (%s) — 글 전용: 이름·설명으로 찾기에 쓰입니다." % self.model, names
+        return False, msg.replace("(약 6GB, 한 번만 받으면 됩니다)", "(약 %dGB, 한 번만 받으면 됩니다)" % GPTOSS_SIZE_GB), names
 
 
 class ClaudeProvider(Provider):
@@ -429,6 +465,8 @@ def make_provider(kind: str, cfg: dict, post: Callable = _http) -> Provider:
     if kind == "claude":
         key = (cfg.get("vf_claude_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         return ClaudeProvider(key, cfg.get("vf_claude_model") or CLAUDE_MODELS[0], post)
+    if kind == "gptoss":
+        return GptOssProvider(cfg.get("vf_gptoss_model") or GPTOSS_MODEL, cfg.get("vf_ollama_host") or DEFAULT_OLLAMA_HOST, post)
     return OllamaProvider(cfg.get("vf_ollama_model") or OLLAMA_MODELS[0], cfg.get("vf_ollama_host") or DEFAULT_OLLAMA_HOST, post)
 
 

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, skelgraph, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
 from .widgets import EditPanel, fit_widths, wrappable
 
@@ -173,10 +173,12 @@ class VidFindTab(QWidget):
         h = QHBoxLayout()
         self.engine = QComboBox()
         self.engine.addItem(vision.OllamaProvider.label, "ollama")
+        self.engine.addItem(vision.GptOssProvider.label, "gptoss")
         self.engine.addItem(vision.ClaudeProvider.label, "claude")
         self.engine.addItem(vision.OpenAICompatProvider.label, "openai")
         self.engine.setCurrentIndex(max(self.engine.findData(self.cfg.get("vf_engine", "ollama")), 0))
         self.engine.currentIndexChanged.connect(self._engine_changed)
+        self.engine.activated.connect(self._engine_picked)   # 사용자가 직접 골랐을 때만 (설치 안내)
         h.addWidget(self.engine, 1)
         h.addWidget(QLabel("모델"))
         self.model = QLineEdit()
@@ -189,6 +191,10 @@ class VidFindTab(QWidget):
         self.btn_pull.setToolTip("Ollama 에 위 모델을 내려받습니다 (약 6GB, 한 번만). Ollama 가 켜져 있어야 합니다.")
         self.btn_pull.clicked.connect(self.pull_model)
         h.addWidget(self.btn_pull)
+        self.btn_setup = QPushButton("자동 설치·준비")
+        self.btn_setup.setToolTip("Ollama 가 없으면 설치하고, 꺼져 있으면 실행하고, 모델이 없으면 받습니다 (필요한 것만 순서대로). 처음엔 수 GB 를 받으니 시간이 걸립니다.")
+        self.btn_setup.clicked.connect(self.setup_ollama)
+        h.addWidget(self.btn_setup)
         v.addLayout(h)
         self.oa_row = QWidget()  # 다른 AI(OpenAI 호환) 전용: 서비스 고르기 + 서버 주소
         oh = QHBoxLayout(self.oa_row)
@@ -575,7 +581,7 @@ class VidFindTab(QWidget):
     def _provider_kind(self) -> str:
         return self.engine.currentData() or "ollama"
 
-    MODEL_KEY = {"claude": "vf_claude_model", "openai": "vf_oa_model", "ollama": "vf_ollama_model"}
+    MODEL_KEY = {"claude": "vf_claude_model", "openai": "vf_oa_model", "ollama": "vf_ollama_model", "gptoss": "vf_gptoss_model"}
 
     def _preset(self):
         nm = self.oa_preset.currentData()
@@ -631,6 +637,9 @@ class VidFindTab(QWidget):
             local = "localhost" in (self.oa_url.text() or url)
             note = ("내 서버(%s)로 보냅니다 — 이미지를 볼 수 있는 모델이어야 해요." % (self.oa_url.text().strip() or url)) if local else \
                    "영상 이미지가 인터넷으로 %s 에 전송되고 호출한 만큼 요금이 듭니다. 이미지를 볼 수 있는 모델을 고르세요. (키는 환경변수 %s 로도 가능)" % (nm, env or "-")
+        elif kind == "gptoss":
+            note = ("OpenAI 의 열린 모델 GPT-OSS-20B 를 내 PC(Ollama)에서 돌립니다 — 무료, 인터넷으로 아무것도 보내지 않아요. 글 전용이라 '게임 속 이름/동작 설명으로 찾기'와 "
+                    "AI 낱말 변환에 쓰이고, 영상 장면 인식에는 쓸 수 없습니다. 메모리 16GB 이상 권장, 모델 약 %dGB. [자동 설치·준비]로 한 번에 준비하세요." % vision.GPTOSS_SIZE_GB)
         else:
             note = "내 PC에서만 처리됩니다. Ollama 설치 후 'ollama pull %s' 로 모델을 받으세요. 그래픽카드가 약하면 느리고 덜 정확합니다." % vision.OLLAMA_MODELS[0]
         self.engine_note.setText(note)
@@ -647,6 +656,8 @@ class VidFindTab(QWidget):
                 self.oa_url.setPlaceholderText(self._preset()[1])
             elif kind == "claude":
                 self.model.setText(self.cfg.get("vf_claude_model") or vision.CLAUDE_MODELS[0])
+            elif kind == "gptoss":
+                self.model.setText(self.cfg.get("vf_gptoss_model") or vision.GPTOSS_MODEL)
             else:
                 self.model.setText(self.cfg.get("vf_ollama_model") or vision.OLLAMA_MODELS[0])
             if kind in self._keys:
@@ -658,7 +669,8 @@ class VidFindTab(QWidget):
             self._switching = False
         self.key_row.setVisible(kind in ("claude", "openai"))
         self.oa_row.setVisible(kind == "openai")
-        self.btn_pull.setVisible(kind == "ollama")
+        self.btn_pull.setVisible(kind in ("ollama", "gptoss"))
+        self.btn_setup.setVisible(kind in ("ollama", "gptoss"))
         self._engine_note_update()
 
     def _save_settings(self) -> None:
@@ -698,9 +710,41 @@ class VidFindTab(QWidget):
         ok, msg, _names = res
         self.engine_note.setText(("✔ " if ok else "✖ ") + msg)
 
+    def _engine_picked(self, *_a) -> None:
+        """GPT-OSS/Ollama 를 직접 고르면, 아직 준비 안 됐을 때 바로 설치할지 묻는다."""
+        if self._provider_kind() not in ("ollama", "gptoss"):
+            return
+        prov = self.provider()
+
+        def job(w):
+            return (prov.check()[0], bool(setup_mod.find_ollama()))
+
+        self.win.run_async(job, self._after_pick_check, "AI 준비 상태 확인 중")
+
+    def _after_pick_check(self, res) -> None:
+        ready, _installed = res
+        if ready:
+            self.engine_note.setText("✔ 이미 준비되어 있습니다.")
+            return
+        r = QMessageBox.question(self, "AI 설치", "이 AI 를 쓰려면 Ollama 와 모델이 필요하고 아직 준비되지 않았습니다.\n"
+                                 "지금 자동으로 설치할까요? (필요한 것만 받습니다 — 모델은 수 GB, 한 번만)",
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if r == QMessageBox.StandardButton.Yes:
+            self.setup_ollama()
+
+    def setup_ollama(self) -> None:
+        prov = self.provider()
+        if not isinstance(prov, vision.OllamaProvider):
+            return
+
+        def job(w):
+            return setup_mod.ensure_ready(prov, lambda pct, st: w.progress.emit(pct, 100, st[:60]))
+
+        self.win.run_async(job, lambda m: self.engine_note.setText("✔ " + m), "AI 설치·준비 중 (%s)" % prov.model)
+
     def pull_model(self) -> None:
         prov = self.provider()
-        if prov.key != "ollama":
+        if not isinstance(prov, vision.OllamaProvider):
             return
 
         def job(w):
@@ -811,6 +855,9 @@ class VidFindTab(QWidget):
         if a is None:
             return
         prov = self.provider()
+        if not prov.supports_images:
+            QMessageBox.warning(self, "인식 방식", "%s 는 글 전용이라 영상 장면 인식에는 쓸 수 없습니다.\n장면 인식은 Ollama(비전 모델)·Claude·다른 AI 로 바꿔 주세요.\n(이름·설명으로 찾기 / AI 낱말 변환에는 그대로 쓸 수 있어요.)" % prov.label)
+            return
         ok, msg, _ = prov.check() if prov.key in ("claude", "openai") else (True, "", [])
         if not ok:
             QMessageBox.warning(self, "인식 방식", msg)
@@ -830,7 +877,7 @@ class VidFindTab(QWidget):
                 raise _Stopped()
 
         def job(w):
-            if prov.key == "ollama":  # 모델이 없으면 긴 작업(목록 읽기, 장면 뽑기) 전에 바로 알린다
+            if isinstance(prov, vision.OllamaProvider):  # 모델이 없으면 긴 작업(목록 읽기, 장면 뽑기) 전에 바로 알린다
                 ok2, msg2, _n = prov.check()
                 if not ok2:
                     raise RuntimeError(msg2)
