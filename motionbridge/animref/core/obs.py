@@ -41,6 +41,45 @@ class ObsRecorder:
         r = self.cl.stop_record()
         return getattr(r, "output_path", None)
 
+    # ---- 보스전 자동 녹화용: 화면 한 장 / 리플레이 버퍼(직전 영상)
+    def screenshot(self, width: int = 960):
+        """OBS 가 지금 보여 주는 화면(현재 장면)을 JPEG 바이트로. 실패하면 None."""
+        import base64
+        try:
+            r = self.cl.get_current_program_scene()
+            name = getattr(r, "scene_name", None) or getattr(r, "current_program_scene_name", None)
+            v = self.cl.get_video_settings()
+            bw, bh = int(getattr(v, "base_width", 1920)), int(getattr(v, "base_height", 1080))
+            h = max(int(round(width * bh / max(bw, 1))), 2)
+            img = self.cl.get_source_screenshot(name, "jpg", width, h, 70).image_data
+        except Exception:
+            return None
+        if not img:
+            return None
+        return base64.b64decode(img.split(",", 1)[1] if "," in img else img)
+
+    def replay_active(self) -> bool:
+        try:
+            return bool(self.cl.get_replay_buffer_status().output_active)
+        except Exception:
+            return False
+
+    def save_replay(self):
+        """리플레이 버퍼를 저장하고 그 파일 경로를 돌려준다 (버퍼가 꺼져 있으면 None)."""
+        import time as _t
+        if not self.replay_active():
+            return None
+        try:
+            self.cl.save_replay_buffer()
+            for _ in range(20):  # 저장이 끝나 경로가 나올 때까지 잠깐 기다림
+                _t.sleep(0.25)
+                p = getattr(self.cl.get_last_replay_buffer_replay(), "saved_replay_path", None)
+                if p:
+                    return p
+        except Exception:
+            return None
+        return None
+
     def close(self):
         try:
             self.cl.disconnect()

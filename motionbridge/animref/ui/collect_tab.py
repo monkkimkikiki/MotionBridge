@@ -7,11 +7,12 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
                                QListWidget, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
 
-from ..core import cleanup, media, pipeline, sources
+from ..core import bossrun, cleanup, media, pipeline, sources
 from ..core.obs import ObsRecorder, friendly_error
 from ..core.settings import SPEED_NAMES
 
 from .widgets import card, muted, restyle
+from .boss_panel import BossPanel
 
 OBS_HELP = """<h3>OBS 연결 방법 (처음 한 번만)</h3>
 <ol>
@@ -134,6 +135,8 @@ class CollectTab(QWidget):
         self.hotkey_hint = muted("")
         self.hotkey_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l1.addWidget(self.hotkey_hint)
+        self.boss = BossPanel(self)
+        l1.addWidget(self.boss)
         row.addWidget(c1, 1)
 
         # --- 파일 카드
@@ -374,11 +377,12 @@ class CollectTab(QWidget):
             if self.rec is None:
                 self.start_record()
             else:
-                self.stop_record()
+                self.stop_record()      # 사람이 직접 끝냄 (자동으로 시작한 녹화여도)
         finally:
             self._rec_busy = False
 
-    def start_record(self):
+    def start_record(self, auto=False):
+        """auto=True: 보스전 감지가 시작한 녹화 (실패해도 대화상자를 띄우지 않는다)."""
         if self.main.busy:
             self.main.flash("다른 작업이 끝난 뒤에 녹화를 시작할 수 있어요.")
             return
@@ -388,18 +392,27 @@ class CollectTab(QWidget):
         except Exception as e:
             self.rec = None
             self._set_status("● OBS에 연결되지 않음", False)
-            QMessageBox.warning(self, "녹화 시작 실패", friendly_error(e))
+            if auto:
+                self.main.flash("보스전 자동 녹화를 시작하지 못했어요: %s" % friendly_error(e))
+            else:
+                QMessageBox.warning(self, "녹화 시작 실패", friendly_error(e))
             return
+        self.rec_auto = bool(auto)
         self.rec_start = time.time()
         self.rec_timer.start(500)
         self._tick()
         self.rec_label.show()
         self.btn_rec.setText("■  녹화 끝내고 분석하기")
         restyle(self.btn_rec, "danger")
-        self._set_status("● OBS 녹화 중", True)
-        self.main.flash("녹화를 시작했어요. 게임을 플레이하세요!")
+        self._set_status("● OBS 녹화 중" + (" (보스전 자동)" if auto else ""), True)
+        if not auto:
+            self.main.flash("녹화를 시작했어요. 게임을 플레이하세요!")
 
-    def stop_record(self):
+    def stop_record(self, auto=False, prebuffer=None, min_seconds=0.0, took=0.0):
+        """auto=True: 보스전 감지가 끝낸 녹화. 아니면 사람이 누른 것 -> 자동 감지에는 '직접 멈춤'을 알린다."""
+        if not auto and getattr(self, "rec_auto", False):
+            self.boss.manual_stopped()
+        self.rec_auto = False
         path, err = None, None
         try:
             path = self.rec.stop()
@@ -421,6 +434,13 @@ class CollectTab(QWidget):
         if not path:
             return
         self._save_obs_dir(str(Path(path).parent))
+        if auto and took and took < float(min_seconds):
+            self.main.flash("보스전 녹화가 %d초로 너무 짧아 분석하지 않았어요 (영상은 그대로 남겨요)." % int(took))
+            return
+        if prebuffer and Path(prebuffer).exists():
+            merged = bossrun.merge_prebuffer(prebuffer, path)     # 원본 두 파일은 지우지 않는다
+            if merged:
+                path = merged
         if self.main.busy:
             self.recorded.add(path)
             self.add_files([path])

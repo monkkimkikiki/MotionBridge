@@ -101,6 +101,7 @@ DEFAULTS = {
     "min_group": 3,
     "hotkey": "f9",
     "obs": {"host": "localhost", "port": 4455, "password": ""},
+    "boss": {},                 # 보스전 자동 녹화 설정 (core/boss.py DEFAULTS 와 합쳐서 씀)
     "labels": DEFAULT_LABELS,
     "engine": "vlm",            # vlm = 영상 이해 AI(Ollama) / clip = 기본 분류
     "vlm_model": "",            # 비어 있으면 그래픽카드에 맞춰 자동 추천

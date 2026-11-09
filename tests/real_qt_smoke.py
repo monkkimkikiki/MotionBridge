@@ -281,5 +281,27 @@ try:
 except Exception as _e:  # noqa: BLE001
     check(False, "라이브러리 탭 스모크 예외: %r" % (_e,))
 
+# 보스전 자동 녹화 패널: 만들어지고, 영역 미지정이면 켜지지 않고, 수동 녹화 중에는 자동 시작 안 함
+try:
+    import types as _types2
+    from motionbridge.animref.ui.collect_tab import CollectTab
+    from motionbridge.animref.core import settings as _AS2, bossrun as _br, boss as _bs
+    _s2 = _AS2.load() if hasattr(_AS2, "load") else dict(_AS2.DEFAULTS)
+    _main2 = _types2.SimpleNamespace(s=_s2, busy=False, save_settings=lambda: None, flash=lambda *a: None, log=lambda *a: None)
+    _ct = CollectTab(_main2)
+    check(hasattr(_ct, "boss") and not _ct.boss.active(), "보스 패널: 기본은 꺼짐")
+    check(not _ct.boss._refresh_ready(), "보스 패널: 영역 미지정이면 준비 안 됨")
+    _ct.boss.spins["end_grace"].setValue(45)
+    check(_bs.cfg(_main2.s)["end_grace"] == 45, "보스 패널: 설정이 저장 값에 반영")
+    _run = _br.BossRun(_main2.s)
+    _smp = _br.Sample(0.0, True, 0.9, 1.0, False)
+    _ev = []
+    for _t in range(0, 6):
+        _smp = _br.Sample(float(_t), True, 0.9, 1.0, False)
+        _ev += _run.apply(_smp, True)
+    check(not any(k == "start" for k, _ in _ev), "보스 패널: 수동 녹화 중에는 자동 시작 안 함")
+except Exception as _e:  # noqa: BLE001
+    check(False, "보스 패널 스모크 예외: %r" % (_e,))
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

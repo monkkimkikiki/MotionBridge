@@ -535,6 +535,10 @@ class MainWindow(QMainWindow):
     def shutdown(self):
         """단축키/연결 창구를 정리한다 (한 번만 불러도 되고 여러 번 불러도 안전)."""
         self.hotkey.stop()
+        try:
+            self.collect.boss.stop_watch()       # 보스전 감지 스레드 정리
+        except Exception:
+            pass
         if self.link_server is not None:
             self.link_server.stop()
             self.link_server = None
