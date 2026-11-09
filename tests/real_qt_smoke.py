@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory() as d:
     check(mw.tabs.hub.view_of(vt).current_page() is vt, "분리 후에도 이동 호출 동작")
     win.close()
     app.processEvents()
-    check(mw.tabs.pages.index(vt) == 5, "닫으면 원래 자리")
+    check(mw.tabs.pages.index(vt) == mw.tabs.hub.home_index(vt) + 1, "닫으면 원래 자리 (맨 앞 AnimRef 다음에 번호 순서대로): %d" % mw.tabs.pages.index(vt))
     # AnimRef 탭: 열 때 AnimRef 화면이 만들어지고, '추출 툴로 보내기'가 같은 프로그램의 영상찾기 탭으로 바로 간다
     ar = mw.animref
     mw.tabs.setCurrentIndex(7)

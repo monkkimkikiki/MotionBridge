@@ -92,8 +92,12 @@ with tempfile.TemporaryDirectory() as d:
     check(len(j.all()) == len(RECS) and j.done("Proj/Content/Foo/Bar.uasset") and j.done("Proj/Content/Bad.uasset"), "캐시 저장/불러오기")
     check(j.pending(["Proj/Content/Foo/Bar.uasset", "new"]) == ["new"], "검사할 것만 남김")
 
-    # 가짜 도우미로 inspect 흐름
+    # 가짜 도우미로 inspect 흐름 (셔뱅 가짜 실행파일이라 Windows 에서는 건너뜀)
     fb = os.path.join(d, "mbextract")
+    if os.name == "nt":
+        print("test_skelgraph: inspect 흐름은 Windows 에서 건너뜀")
+        print("모두 통과" if not fails else "실패 %d개" % len(fails))
+        sys.exit(1 if fails else 0)
     open(fb, "w").write('''#!%s
 import sys, json
 a = sys.argv[1:]
