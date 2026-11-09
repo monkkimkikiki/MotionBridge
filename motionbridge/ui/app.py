@@ -28,6 +28,7 @@ from .retimebar import RetimeBar
 from .viewer_math import QUALITY_NAMES, ViewData
 from .vidfind_tab import VidFindTab
 from .mocap_tab import MocapTab
+from .char_assets import CharAssetPanel
 from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
 from .widgets import BusyDialog, EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
@@ -592,6 +593,12 @@ class MainWindow(QMainWindow):
         v.addWidget(self.btn_extract)
         lay.addWidget(g)
 
+        g = QGroupBox("3-2) 에셋 찾기 · 캐릭터/스켈레톤 보기 (재생 가능한 애니메이션만)")
+        v = QVBoxLayout(g)
+        self.char_panel = CharAssetPanel(self)
+        v.addWidget(self.char_panel)
+        lay.addWidget(g)
+
         g = QGroupBox("4) 추출된 파일 열기")
         v = QVBoxLayout(g)
         self.ex_dir_label = QLabel("")
@@ -864,6 +871,27 @@ class MainWindow(QMainWindow):
         if not paths:
             QMessageBox.warning(self, "추출", "추출할 항목을 목록에서 고르세요.")
             return
+        self._extract_paths(paths)
+
+    def extract_for_char(self, paths, kind: str) -> None:
+        """캐릭터 보기에서 고른 에셋을 바로 추출하고 뷰포트에 연다 (애니메이션 = PSA, 메쉬 = 타깃으로 열 GLB 포함)."""
+        i = self.ex_kind.findData("anim" if kind == "anim" else "mesh")
+        if i >= 0:
+            self.ex_kind.setCurrentIndex(i)
+        if kind == "mesh" and not self.ex_glb.isChecked():
+            self.ex_glb.setChecked(True)  # 타깃으로 열려면 GLB 가 필요
+        self._extract_paths(list(paths))
+
+    def set_extract_list(self, paths, kind: str) -> None:
+        i = self.ex_kind.findData("anim" if kind == "anim" else "mesh")
+        if i >= 0:
+            self.ex_kind.setCurrentIndex(i)
+        self.ex_list.set_paths(list(paths))
+        self.ex_list.selectAll()
+        self._update_ex_count()
+        self.statusBar().showMessage("추출 목록에 %d개를 올렸습니다 — 위 [선택한 … 추출]을 누르세요" % len(paths))
+
+    def _extract_paths(self, paths) -> None:
         a = self._extract_args()
         if a is None:
             return

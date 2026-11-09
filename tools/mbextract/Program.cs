@@ -2,6 +2,8 @@
 //   mbextract list   --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] [--filter REGEX] [--limit N]
 //   mbextract locres --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR   (게임 안 글자 사전 .locres 를 꺼냄)
 //   (공통) --kind anim|mesh  --format glb|psk (mesh)  --textures (mesh, 텍스처 포함)
+//   mbextract inspect --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] (--paths-file FILE | --filter REGEX [--limit N])
+//        파일 안을 실제로 읽어 종류(skeleton/mesh/static/anim/montage)와 연결(스켈레톤 경로, 프레임·트랙 수)을 한 줄씩 알려준다.
 //   mbextract export --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR --paths-file FILE
 // 표준 출력: 한 줄에 JSON 하나 (type = asset | exported | skip | log | done | error)
 //
@@ -81,6 +83,69 @@ try
             if (++n >= limit) break;
         }
         Emit(new { type = "done", count = n });
+    }
+    else if (cmd == "inspect")
+    {
+        // 파일 이름이 아니라 파일 안의 데이터로 종류와 연결 관계를 알아낸다. CUE4Parse 버전마다 속성 이름/타입이 달라서
+        // 값 읽기는 리플렉션으로 하고, 못 읽으면 빈 값으로 두어(파이썬 쪽이 '확인 안 됨'으로 처리) 컴파일/실행이 깨지지 않게 한다.
+        var listFile = Opt("--paths-file");
+        List<string> targets;
+        if (!string.IsNullOrEmpty(listFile)) targets = File.ReadAllLines(listFile).Where(x => x.Trim().Length > 0).ToList();
+        else
+        {
+            var frx = new Regex(Opt("--filter") ?? "(?i)anim", RegexOptions.Compiled);
+            int lim = int.TryParse(Opt("--limit"), out var l2) ? l2 : 20000;
+            targets = provider.Files.Keys.Where(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) && frx.IsMatch(k))
+                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase).Take(lim).ToList();
+        }
+        int done = 0, found = 0;
+        foreach (var p in targets)
+        {
+            done++;
+            try
+            {
+                if (!provider.TryLoadPackage(p, out var pkg) || pkg is null) { Emit(new { type = "node", path = p, kind = "unreadable" }); continue; }
+                foreach (var obj in pkg.GetExports())
+                {
+                    if (obj is UAnimSequence seq)
+                    {
+                        Emit(new { type = "node", path = p, kind = "anim", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")),
+                                   frames = IntOf(Get(obj, "NumFrames")), length = FloatOf(Get(obj, "SequenceLength")), rate = FloatOf(Get(obj, "RateScale")),
+                                   tracks = CountOf(Get(obj, "TrackToSkeletonMapTable")) + CountOf(Get(obj, "CompressedTrackToSkeletonMapTable")) + CountOf(Get(obj, "RawAnimationData")),
+                                   compressed = Get(obj, "CompressedDataStructure") != null || Get(obj, "CompressedData") != null,
+                                   additive = Convert.ToString(Get(obj, "AdditiveAnimType")) ?? "" });
+                        found++;
+                    }
+                    else if (obj is UAnimMontage || obj is UAnimComposite)
+                    {
+                        var refs = new List<string>();
+                        try { foreach (var sq in SequencesOf(obj)) refs.Add(PathOf(sq)); } catch { }
+                        Emit(new { type = "node", path = p, kind = "montage", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")), sequences = refs });
+                        found++;
+                    }
+                    else if (obj is USkeletalMesh)
+                    {
+                        Emit(new { type = "node", path = p, kind = "mesh", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")),
+                                   bones = CountOf(Get(Get(obj, "ReferenceSkeleton"), "FinalRefBoneInfo")) });
+                        found++;
+                    }
+                    else if (obj is UStaticMesh)
+                    {
+                        Emit(new { type = "node", path = p, kind = "static", name = obj.Name });
+                        found++;
+                    }
+                    else if (obj is USkeleton)
+                    {
+                        Emit(new { type = "node", path = p, kind = "skeleton", name = obj.Name,
+                                   bones = CountOf(Get(Get(obj, "ReferenceSkeleton"), "FinalRefBoneInfo")) });
+                        found++;
+                    }
+                }
+            }
+            catch (Exception e) { Emit(new { type = "node", path = p, kind = "unreadable", reason = e.GetType().Name + ": " + e.Message }); }
+            if (done % 25 == 0) Emit(new { type = "progress", done, total = targets.Count });
+        }
+        Emit(new { type = "done", count = found });
     }
     else if (cmd == "locres")
     {
@@ -184,6 +249,61 @@ static IEnumerable<UAnimSequence> SequencesOf(UObject obj)
             if (seg?.AnimReference != null && seg.AnimReference.TryLoad(out UAnimSequence seq) && seq != null) yield return seq;
         }
     }
+}
+
+// ---- 리플렉션 도우미: API 이름이 버전마다 달라도 컴파일은 되게 한다
+static object? Get(object? o, string name)
+{
+    if (o == null) return null;
+    try
+    {
+        var t = o.GetType();
+        const System.Reflection.BindingFlags f = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var p = t.GetProperty(name, f);
+        if (p != null && p.GetIndexParameters().Length == 0) return p.GetValue(o);
+        var fi = t.GetField(name, f);
+        if (fi != null) return fi.GetValue(o);
+    }
+    catch { }
+    return null;
+}
+
+static string PathOf(object? o, int depth = 0)
+{
+    if (o == null || depth > 4) return "";
+    try
+    {
+        if (o is string s) return s;
+        var t = o.GetType();
+        var gp = t.GetMethod("GetPathName", Type.EmptyTypes);
+        if (gp != null) { var r = gp.Invoke(o, null) as string; if (!string.IsNullOrEmpty(r)) return r!; }
+        // Lazy<T> 는 Value, FPackageIndex 는 ResolvedObject 안에 경로가 있다
+        foreach (var n in new[] { "ResolvedObject", "Value" })
+        {
+            var inner = Get(o, n);
+            if (inner != null && !ReferenceEquals(inner, o)) { var r = PathOf(inner, depth + 1); if (r.Length > 0) return r; }
+        }
+        var owner = Get(o, "Owner");
+        var nm = Get(o, "Name")?.ToString();
+        if (owner != null && !string.IsNullOrEmpty(nm)) { var op = PathOf(owner, depth + 1); if (op.Length > 0) return op; }
+    }
+    catch { }
+    return "";
+}
+
+static int IntOf(object? o) { try { return o == null ? -1 : Convert.ToInt32(o); } catch { return -1; } }
+static double FloatOf(object? o) { try { return o == null ? -1 : Convert.ToDouble(o); } catch { return -1; } }
+static int CountOf(object? o)
+{
+    try
+    {
+        if (o == null) return 0;
+        if (o is System.Collections.ICollection c) return c.Count;
+        if (o is Array a) return a.Length;
+        var len = Get(o, "Length") ?? Get(o, "Count");
+        return len == null ? 0 : Convert.ToInt32(len);
+    }
+    catch { return 0; }
 }
 
 static string Fail2(string msg) { Fail(msg); return ""; }

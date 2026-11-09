@@ -112,6 +112,39 @@ def list_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Opti
     return [e["path"] for e in run_helper(helper, args, on_event) if e.get("type") == "asset"]
 
 
+def inspect_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], on_event=None,
+                   chunk: int = 400, cancel=None):
+    """에셋 파일을 실제로 열어 종류와 연결(스켈레톤, 프레임/트랙)을 읽는다. 돌려주는 값: (기록 목록, 검사한 경로 집합).
+
+    한 번에 chunk 개씩 도우미를 부른다(너무 오래 걸리면 중간에 취소/저장할 수 있게). cancel 은 threading.Event.
+    """
+    from .skelgraph import Rec
+    recs: List[Rec] = []
+    seen: set = set()
+    for i in range(0, len(paths), chunk):
+        if cancel is not None and cancel.is_set():
+            break
+        part = paths[i:i + chunk]
+        fd, plist = tempfile.mkstemp(prefix="mb_inspect_", suffix=".txt")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("\n".join(part))
+            args = ["inspect"] + _base_args(game, ue, aes, usmap) + ["--paths-file", plist]
+            for ev in run_helper(helper, args):
+                if ev.get("type") == "node":
+                    recs.append(Rec.from_event(ev))
+                    seen.add(ev.get("path", ""))
+        finally:
+            try:
+                os.remove(plist)
+            except OSError:
+                pass
+        seen.update(part)
+        if on_event:
+            on_event({"type": "progress", "done": min(i + chunk, len(paths)), "total": len(paths)})
+    return recs, seen
+
+
 def _export_events(helper, game, ue, aes, usmap, paths, out_dir, on_event, kind, mesh_format, textures) -> List[dict]:
     if kind not in ("anim", "mesh"):
         raise ExtractError("알 수 없는 종류: " + kind)
