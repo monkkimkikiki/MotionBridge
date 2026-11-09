@@ -13,6 +13,7 @@ from PySide6.QtCore import QLineF
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
+from ..core import quat as Q
 from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, drag_placement, overlay_names, render_surface,
                           skin_display, wire_segments)
 
@@ -42,6 +43,9 @@ class Viewport(QWidget):
     key_action = Signal(str)  # 뷰포트에 포커스가 있을 때의 키: prev next first last play
     placement_dragged = Signal(float, float, float)  # 드래그로 바뀐 애니메이션 배치 (dx, dz, dyaw°)
     asset_dropped = Signal(str, list)  # 에셋 목록에서 끌어다 놓음: (종류 "anim"|"mesh", 게임 안 경로들)
+    bone_picked = Signal(int)  # 본 편집 모드에서 뷰포트의 본을 클릭함: 타깃 본 번호
+    bone_dragged = Signal(int, object)  # 본을 끌어 돌림: (타깃 본 번호, 화면 기준 회전 쿼터니언 (w,x,y,z) — 표준 프레임)
+    bone_drag_started = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,6 +66,11 @@ class Viewport(QWidget):
         self.quality_note = ""
         self.show_bones = True
         self.show_ik = True
+        self.bone_edit = False          # 켜면 왼쪽 클릭으로 본을 고르고, 고른 본을 끌어 돌린다
+        self.pickable = set()           # 고를 수 있는 타깃 본 번호 (매핑된 본)
+        self.selected_joint = None
+        self.joint_names = {}           # 번호 -> 화면에 보여 줄 이름
+        self.edited_joints = set()      # 회전 보정이 걸린 본 (표시용)
         self._dm = {}  # (메시 id, 종류) -> DisplayMesh
         self._dm_owner = None
         self._qimg_ref = None
@@ -220,6 +229,8 @@ class Viewport(QWidget):
                     p.setBrush(QColor(r, g, b))
                     for x, y in xy:
                         p.drawEllipse(QPointF(float(x), float(y)), rad, rad)
+        if self.bone_edit:
+            self._draw_bone_edit(p, w, h)
         # 범례
         p.setFont(QFont("", 9))
         y0 = 16
@@ -239,7 +250,60 @@ class Viewport(QWidget):
             p.drawText(12, int(h) - 28, note)
         p.end()
 
-    # --------------------------------------------------------------- 마우스 / 키
+    # --------------------------------------------------------------- 본 편집 (고르기 / 끌어서 돌리기)
+    def _joint_screen(self, w: float, h: float):
+        """고를 수 있는 본의 화면 좌표: ([번호...], (N,2))"""
+        vd = self.vd
+        if vd is None or vd.tgt_pos is None or not self.pickable:
+            return [], np.zeros((0, 2))
+        f = min(self.frame, vd.tgt_pos.shape[0] - 1)
+        ids = [j for j in sorted(self.pickable) if j < vd.tgt_pos.shape[1]]
+        if not ids:
+            return [], np.zeros((0, 2))
+        xy, z = self.cam.project(vd.tgt_pos[f][ids], w, h)
+        ok = (z > 0) & np.isfinite(xy[:, 0]) & np.isfinite(xy[:, 1])
+        return [j for j, o in zip(ids, ok) if o], xy[ok]
+
+    def pick_joint(self, x: float, y: float, radius: float = 14.0):
+        """화면 좌표 (x,y) 근처의 본 번호 (없으면 None). 가까운 본이 여러 개면 카메라에 가까운 것을 우선."""
+        ids, xy = self._joint_screen(float(self.width()), float(self.height()))
+        if not ids:
+            return None
+        d = np.hypot(xy[:, 0] - x, xy[:, 1] - y)
+        near = np.where(d <= radius)[0]
+        if len(near) == 0:
+            return None
+        f = min(self.frame, self.vd.tgt_pos.shape[0] - 1)
+        eye = self.cam.eye()
+        depth = np.linalg.norm(self.vd.tgt_pos[f][[ids[i] for i in near]] - eye, axis=1)
+        return int(ids[int(near[int(np.argmin(depth + d[near] * 1e-3))])])
+
+    def _draw_bone_edit(self, p: QPainter, w: float, h: float) -> None:
+        ids, xy = self._joint_screen(w, h)
+        for j, (x, y) in zip(ids, xy):
+            sel = (j == self.selected_joint)
+            if sel:
+                p.setPen(QPen(QColor(255, 220, 80), 2.5))
+                p.setBrush(QColor(255, 220, 80, 90))
+                p.drawEllipse(QPointF(float(x), float(y)), 9.0, 9.0)
+            else:
+                edited = j in self.edited_joints
+                p.setPen(QPen(QColor(110, 220, 255) if edited else QColor(150, 160, 180), 1.5))
+                p.setBrush(QColor(110, 220, 255, 120) if edited else Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QPointF(float(x), float(y)), 5.0, 5.0)
+        if self.selected_joint is not None:
+            p.setPen(QColor(255, 220, 80))
+            p.setFont(QFont("", 10))
+            p.drawText(12, int(h) - 46, "선택한 본: %s   (끌기: 회전 · Alt+끌기: 비틀기 · 빈 곳 끌기: 카메라)" % self.joint_names.get(self.selected_joint, str(self.selected_joint)))
+
+    def _bone_delta(self, dx: float, dy: float, roll: bool):
+        """마우스 이동량 -> 표준 프레임에서의 회전 쿼터니언 (카메라 위/오른쪽 축 기준 트랙볼 식)."""
+        r, u, f = self.cam.basis()
+        k = 0.6   # 픽셀당 도
+        if roll:
+            return Q.from_axis_angle(-f, np.radians(dx * k))
+        return Q.mul(Q.from_axis_angle(u, np.radians(dx * k)), Q.from_axis_angle(r, np.radians(dy * k)))
+
     def keyPressEvent(self, ev):
         key = ev.key()
         K = Qt.Key
@@ -253,6 +317,15 @@ class Viewport(QWidget):
         self.setFocus()
         self._last = ev.position()
         self._drag = self._left_mode(ev.button(), ev.modifiers())
+        if (self.bone_edit and self._drag == "camera" and ev.button() == Qt.MouseButton.LeftButton
+                and self.vd is not None and self.vd.tgt_pos is not None):
+            j = self.pick_joint(ev.position().x(), ev.position().y())
+            if j is not None:
+                self.selected_joint = j
+                self._drag = "bone"
+                self.bone_picked.emit(j)
+                self.bone_drag_started.emit()
+                self.update()
 
     def _left_mode(self, button, mods) -> str:
         if button != Qt.MouseButton.LeftButton:
@@ -277,6 +350,11 @@ class Viewport(QWidget):
         self._last = pos
         btn = ev.buttons()
         mode = getattr(self, "_drag", "camera")
+        if mode == "bone" and (btn & Qt.MouseButton.LeftButton) and self.selected_joint is not None:
+            if dx or dy:
+                roll = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                self.bone_dragged.emit(int(self.selected_joint), self._bone_delta(dx, dy, roll))
+            return
         if (btn & Qt.MouseButton.LeftButton) and mode in ("move", "rotate") and self.vd is not None:
             vd = self.vd
             ddx, ddz, dyaw = drag_placement(self.cam, mode, (pos.x() - dx, pos.y() - dy), (pos.x(), pos.y()), float(self.width()), float(self.height()), vd.ground_y, (vd.center[0], vd.center[2]))

@@ -441,6 +441,11 @@ def refine_frame_with_anim(skel: Skeleton, anim, slots: Dict[str, int], F: np.nd
     ang = np.degrees(np.arccos(np.clip(std_up[:, 1], -1, 1)))
     if float(np.mean(ang > tol_deg)) < min_fraction:
         return F, desc, None
+    # 쓰러지는/눕는 모션(죽음·다운 등)은 대부분의 프레임이 누워 있어도 정상이다. 시작 자세가 바인드 좌표계에서 서 있으면
+    # 좌표계가 틀린 게 아니라 모션이 누우는 것이므로 바인드 기준을 유지한다. (시작부터 눕거나 틀어져 있을 때만 다시 잡는다)
+    head = max(1, min(len(ang), int(round(len(ang) * 0.1)), 8))
+    if float(np.mean(ang[:head] < tol_deg)) >= 0.5:
+        return F, desc, None
     left_w = wp[:, lr[0]] - wp[:, lr[1]]
     ll = np.linalg.norm(left_w, axis=1)
     left_w = (left_w[ok] / np.maximum(ll[ok], 1e-9)[:, None])

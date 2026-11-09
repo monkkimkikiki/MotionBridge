@@ -322,6 +322,50 @@ def test_full_flow():
         assert abs(n_fast - ((n_plain - 1) / 2.0 + 1)) <= 1, (n_plain, n_fast)
         mw.rt_edit.mode.setCurrentIndex(0)
         assert mw.rt_edit_note.text() == "", mw.rt_edit_note.text()
+        # 뷰포트 본 편집: 파츠 목록이 만들어지고, 끌어 돌린 값이 '본별 회전 보정'에 쌓이며, 되돌리기/초기화가 된다
+        from motionbridge.core import quat as _Q
+        mw.cb_bone_edit.setChecked(True)
+        assert mw.viewport.bone_edit and mw.viewport.pickable, "본 편집을 켜면 고를 수 있는 본이 생김"
+        assert mw.bone_tree.topLevelItemCount() >= 1, "파츠 목록 생성"
+        jt = sorted(mw.viewport.pickable)[0]
+        mw._bone_picked(jt)
+        assert mw.viewport.selected_joint == jt and mw.rot_combo.currentData() == jt, "선택이 왼쪽 콤보와 동기화"
+        qy = _Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(30.0))
+        mw._bone_dragged(jt, qy)
+        mw._bone_dragged(jt, qy)
+        e = mw.pr.settings.rot_offsets[jt]
+        assert abs(e[1] - 60.0) < 0.05 and abs(e[0]) < 0.05 and abs(e[2]) < 0.05, ("30°+30° 가 60° 로 합쳐져야 함", e)
+        assert abs(mw.rot_fields[1].value() - 60.0) < 0.05, "왼쪽 슬라이더에도 반영"
+        assert jt in mw.viewport.edited_joints and mw.btn_bone_reset.isEnabled()
+        mw._bone_dragged(jt, _Q.conj(_Q.mul(qy, qy)))
+        assert jt not in mw.pr.settings.rot_offsets, "반대로 돌려 0 이 되면 보정이 지워짐"
+        # 루트 Yaw 가 있으면 화면에 보이는 방향대로 돌도록 보정한다 (보정은 yaw 이전 프레임에서 적용되므로)
+        mw.pr.settings.root_yaw_deg = 90.0
+        mw._bone_dragged(jt, _Q.from_axis_angle(np.array([1.0, 0.0, 0.0]), np.radians(20.0)))
+        e2 = mw.pr.settings.rot_offsets[jt]
+        yaw_q = _Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(90.0))
+        back = _Q.mul(_Q.mul(yaw_q, _Q.from_euler(np.array(e2), "XYZ")), _Q.conj(yaw_q))   # yaw 를 거친 뒤(화면에서 본) 회전
+        want = _Q.from_axis_angle(np.array([1.0, 0.0, 0.0]), np.radians(20.0))
+        assert abs(abs(float(np.dot(back, want))) - 1.0) < 1e-6, ("화면 기준 회전과 같아야 함", e2)
+        mw.pr.settings.root_yaw_deg = 0.0
+        mw._bone_reset_selected()
+        assert jt not in mw.pr.settings.rot_offsets, "이 본 초기화"
+        # 뷰포트 클릭 선택: 본의 화면 좌표 근처를 찍으면 그 본, 멀면 None. 끄는 방향 -> 카메라 기준 회전
+        vp = mw.viewport
+        vp.width, vp.height = (lambda: 800), (lambda: 600)
+        ids, xy = vp._joint_screen(800.0, 600.0)
+        assert ids and len(ids) == len(xy), "고를 수 있는 본의 화면 좌표"
+        k = len(ids) // 2
+        assert vp.pick_joint(xy[k][0] + 3, xy[k][1] - 2) in ids, "점 가까이 찍으면 본이 골라짐"
+        assert vp.pick_joint(-500, -500) is None, "멀리 찍으면 선택 없음"
+        q_right = vp._bone_delta(10.0, 0.0, False)       # 오른쪽으로 끌기 = 카메라 위 축 기준 +
+        r_, u_, f_ = vp.cam.basis()
+        ax = np.asarray(q_right[1:]) / max(np.linalg.norm(q_right[1:]), 1e-12)
+        assert np.allclose(ax, u_, atol=1e-6) and abs(2 * np.degrees(np.arccos(q_right[0])) - 6.0) < 1e-6, (ax, u_)
+        q_down = vp._bone_delta(0.0, 10.0, False)        # 아래로 끌기 = 카메라 오른쪽 축 기준 +
+        assert np.allclose(np.asarray(q_down[1:]) / np.linalg.norm(q_down[1:]), r_, atol=1e-6)
+        mw.cb_bone_edit.setChecked(False)
+        assert not mw.viewport.bone_edit
         # 형식 미선택 / FBX 인데 Blender 없음 -> 경고창, 파일 없음
         mw.cb_skeleton.setChecked(True)
         for cb in mw.cb_fmt.values():

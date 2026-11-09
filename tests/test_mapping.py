@@ -127,6 +127,15 @@ def test_refine_frame():
     up = Q.rotate(np.broadcast_to(F2, (len(wp3), 4)), wp3[:, slots["Head"]] - wp3[:, slots["Hips"]])
     up = up / np.linalg.norm(up, axis=1)[:, None]
     assert float(up[:, 1].min()) > 0.9, up[:, 1].min()
+    # 서 있다가 쓰러지는 모션(죽음·다운): 대부분 프레임이 누워 있어도 좌표계가 틀린 게 아니므로 건드리지 않는다
+    wrf, wpf = wr.copy(), wp.copy()
+    wrf[4:], wpf[4:] = wr2[4:], wp2[4:]
+    lr_f, lp_f = world_to_local(sk, wrf, wpf)
+    fall = Animation("fall", anim.fps, lr_f, lp_f)
+    F3, d3, note3 = refine_frame_with_anim(sk, fall, slots, F0, d0)
+    assert note3 is None and F3 is F0, ("쓰러지는 모션을 축 오류로 오해함", d3, note3)
+    # 시작부터 누워 있으면(축이 나간 클립) 그대로 다시 잡는다
+    assert refine_frame_with_anim(sk, bad, slots, F0, d0)[2] is not None
     print("refine frame OK")
 
 

@@ -461,7 +461,7 @@ def retarget(
         g = Q.rotate(yaw_q, k * (ps - bps[pair_of[com]] - rootoff[:, None, :]))
         g[..., 0] += bpt[com][0] + place[0] + hip_off[0]
         g[..., 2] += bpt[com][2] + place[2] + hip_off[2]
-        g[..., 1] = ps[..., 1] * k
+        g[..., 1] = ps[..., 1] * k + hip_off[1]   # 골반 높이 보정도 같이 반영해서, 소스와 타깃을 겹쳐 볼 때 어긋나 보이지 않게
         ghost = g
     return RetargetResult(
         anim, float(k), (Fs, desc_s), (Ft, desc_t), plans, drop, warnings, list(pairs), com, corr, ps,

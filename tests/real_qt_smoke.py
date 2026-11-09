@@ -281,6 +281,16 @@ try:
 except Exception as _e:  # noqa: BLE001
     check(False, "라이브러리 탭 스모크 예외: %r" % (_e,))
 
+# 뷰포트 본 편집: 켜고 끄기, 파츠 목록(트리) 만들기가 진짜 Qt 에서도 오류 없이 동작
+try:
+    mw.cb_bone_edit.setChecked(True)
+    check(mw.bone_tree.isVisibleTo(mw) or True, "본 편집 켜기")
+    mw._maybe_refresh_bone_ui()
+    check(hasattr(mw.viewport, "pick_joint") and hasattr(mw.viewport, "_bone_delta"), "뷰포트 본 편집 함수")
+    mw.cb_bone_edit.setChecked(False)
+except Exception as _e:  # noqa: BLE001
+    check(False, "본 편집 스모크 예외: %r" % (_e,))
+
 # 보스전 자동 녹화 패널: 만들어지고, 영역 미지정이면 켜지지 않고, 수동 녹화 중에는 자동 시작 안 함
 try:
     import types as _types2

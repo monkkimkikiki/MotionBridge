@@ -7,16 +7,19 @@ import os
 import sys
 from typing import Dict, List, Optional
 
+import numpy as np
+
 from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton,
     QScrollArea, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
-    QWidget, QLineEdit, QButtonGroup, QAbstractItemView,
+    QWidget, QLineEdit, QButtonGroup, QAbstractItemView, QTreeWidget, QTreeWidgetItem,
 )
 
 from .. import __version__
+from ..core import quat as Q
 from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core.history import History
@@ -404,6 +407,33 @@ class MainWindow(QMainWindow):
         opts.addWidget(b)
         opts.addStretch(1)
         rl.addLayout(opts)
+        # ---- 본 편집: 파츠를 목록에서 고르거나 뷰포트에서 클릭해 고르고, 끌어서 돌린다 (값은 '본별 회전 보정'에 그대로 기록)
+        bl = QHBoxLayout()
+        self.cb_bone_edit = QCheckBox("🦴 본 편집")
+        self.cb_bone_edit.setToolTip("켜면 뷰포트에서 본(점)을 클릭해 고르고, 끌어서 돌립니다. 하위 본 전체가 같이 돌아가고,\n"
+                                     "값은 [리타깃]의 '본별 회전 보정'에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
+                                     "점 위에서 끌면 그 본이 돌고, 빈 곳에서 끌면 카메라가 돕니다. Alt+끌기=비틀기(시선 방향 회전).")
+        self.cb_bone_edit.toggled.connect(self._bone_edit_toggled)
+        bl.addWidget(self.cb_bone_edit)
+        self.bone_sel_label = QLabel("")
+        self.bone_sel_label.setStyleSheet("color:#ffdc50")
+        bl.addWidget(self.bone_sel_label, 1)
+        self.btn_bone_reset = QPushButton("이 본 초기화")
+        self.btn_bone_reset.setToolTip("선택한 본의 회전 보정을 0으로 되돌립니다")
+        self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
+        self.btn_bone_reset.setEnabled(False)
+        bl.addWidget(self.btn_bone_reset)
+        rl.addLayout(bl)
+        self.bone_tree = QTreeWidget()
+        self.bone_tree.setHeaderHidden(True)
+        self.bone_tree.setMaximumHeight(170)
+        self.bone_tree.setToolTip("몸 부위(파츠) 목록입니다. 클릭하면 그 본이 선택되고, 뷰포트에서 노란 원으로 표시돼요. ● 는 회전 보정이 걸린 본.")
+        self.bone_tree.itemClicked.connect(self._bone_tree_clicked)
+        self.bone_tree.hide()
+        rl.addWidget(self.bone_tree)
+        self.viewport.bone_picked.connect(self._bone_picked)
+        self.viewport.bone_dragged.connect(self._bone_dragged)
+        self.viewport.bone_drag_started.connect(self._bone_drag_started)
         pl = QHBoxLayout()
         pl.addWidget(QLabel("왼쪽 드래그"))
         self.drag_combo = QComboBox()
@@ -1884,6 +1914,138 @@ class MainWindow(QMainWindow):
             self.pr.settings.rot_offsets.pop(j, None)
         self.schedule()
 
+    # ---- 뷰포트 본 편집 (파츠 목록 / 클릭 선택 / 끌어서 회전)
+    def _bone_edit_toggled(self, on: bool) -> None:
+        self.viewport.bone_edit = bool(on)
+        self.bone_tree.setVisible(bool(on))
+        self._bone_sig = None
+        self._maybe_refresh_bone_ui()
+        self.viewport.update()
+
+    def _bone_label(self, j: int) -> str:
+        names = self.pr.tgt.skeleton.names if self.pr.tgt else []
+        slot = next((s for s, jj in self.pr.tgt_slots.items() if jj == j), None) if self.pr.tgt else None
+        return "%s (%s)" % (slot_label(slot), names[j]) if slot and j < len(names) else (names[j] if j < len(names) else str(j))
+
+    def _refresh_bone_ui(self) -> None:
+        """파츠 목록(계층 구조)과 뷰포트의 선택 가능 본/이름/보정 표시를 최신으로 맞춘다."""
+        if self.pr.tgt is None:
+            self.viewport.pickable, self.viewport.joint_names, self.viewport.edited_joints = set(), {}, set()
+            self.bone_tree.clear()
+            return
+        joints = [j for _s, j in self._mapped_tgt_joints()]
+        jset = set(joints)
+        par = self.pr.tgt.skeleton.parents
+        self.viewport.pickable = jset
+        self.viewport.joint_names = {j: self._bone_label(j) for j in joints}
+        self.viewport.edited_joints = set(self.pr.settings.rot_offsets)
+        sel = self.viewport.selected_joint
+        self.bone_tree.blockSignals(True)
+        self.bone_tree.clear()
+        items: Dict[int, QTreeWidgetItem] = {}
+
+        def parent_of(j: int) -> int:
+            a = int(par[j])
+            while a >= 0 and a not in jset:
+                a = int(par[a])
+            return a
+
+        for j in joints:   # 부모가 먼저 오도록 번호 순서가 아니라 계층을 따라 만든다
+            chain = []
+            k = j
+            while k >= 0 and k not in items:
+                chain.append(k)
+                k = parent_of(k)
+            for k in reversed(chain):
+                p = parent_of(k)
+                it = QTreeWidgetItem([self._bone_label(k) + (" ●" if k in self.pr.settings.rot_offsets else "")])
+                it.setData(0, Qt.ItemDataRole.UserRole, k)
+                (items[p] if p in items else self.bone_tree.invisibleRootItem()).addChild(it)
+                items[k] = it
+        self.bone_tree.expandAll()
+        if sel in items:
+            self.bone_tree.setCurrentItem(items[sel])
+        self.bone_tree.blockSignals(False)
+        self._update_bone_sel_label()
+
+    def _maybe_refresh_bone_ui(self) -> None:
+        """본 편집 패널은 켜져 있을 때만, 타깃/매핑/보정 표시가 바뀌었을 때만 다시 만든다 (끌기 중 매 프레임 갱신 방지)."""
+        if not getattr(self, "cb_bone_edit", None) or not self.cb_bone_edit.isChecked():
+            return
+        sig = (id(self.pr.tgt), tuple(sorted(self.pr.tgt_slots.items())), tuple(sorted(self.pr.settings.rot_offsets)))
+        if sig != getattr(self, "_bone_sig", None):
+            self._bone_sig = sig
+            self._refresh_bone_ui()
+        self.viewport.edited_joints = set(self.pr.settings.rot_offsets)
+
+    def _update_bone_sel_label(self) -> None:
+        j = self.viewport.selected_joint
+        on = j is not None and self.pr.tgt is not None
+        self.bone_sel_label.setText("선택: " + self._bone_label(j) if on else "파츠를 고르세요 (목록 또는 뷰포트 점 클릭)")
+        self.btn_bone_reset.setEnabled(bool(on and j in self.pr.settings.rot_offsets))
+
+    def _select_bone(self, j: int, from_tree: bool = False) -> None:
+        """파츠 선택: 뷰포트 표시, 파츠 목록, 왼쪽 '본별 회전 보정' 콤보를 모두 같은 본으로 맞춘다."""
+        self.viewport.selected_joint = j
+        i = self.rot_combo.findData(j)
+        if i >= 0 and self.rot_combo.currentIndex() != i:
+            self.rot_combo.setCurrentIndex(i)
+        if not from_tree:
+            for k in range(self.bone_tree.topLevelItemCount()):
+                self._tree_select(self.bone_tree.topLevelItem(k), j)
+        self._update_bone_sel_label()
+        self.viewport.update()
+
+    def _tree_select(self, it, j: int) -> bool:
+        if it.data(0, Qt.ItemDataRole.UserRole) == j:
+            self.bone_tree.blockSignals(True)
+            self.bone_tree.setCurrentItem(it)
+            self.bone_tree.blockSignals(False)
+            return True
+        return any(self._tree_select(it.child(c), j) for c in range(it.childCount()))
+
+    def _bone_tree_clicked(self, item, _col=0) -> None:
+        j = item.data(0, Qt.ItemDataRole.UserRole)
+        if j is not None:
+            self._select_bone(int(j), from_tree=True)
+
+    def _bone_picked(self, j: int) -> None:
+        self._select_bone(int(j))
+
+    def _bone_drag_started(self) -> None:
+        self._bone_drag_open = True
+
+    def _bone_dragged(self, j: int, q_view) -> None:
+        """뷰포트에서 본을 끌어 돌린 만큼을 '본별 회전 보정'에 더한다 (루트 Yaw 가 있으면 그만큼 되돌려서 화면에 보이는 방향대로 돈다)."""
+        st = self.pr.settings
+        yaw = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
+        d = Q.mul(Q.conj(yaw), Q.mul(np.asarray(q_view, float), yaw))
+        cur = Q.from_euler(np.array(st.rot_offsets.get(j, (0.0, 0.0, 0.0)), float), "XYZ")
+        eul = np.asarray(Q.to_euler(Q.mul(d, cur), "XYZ"), float)
+        eul = (eul + 180.0) % 360.0 - 180.0
+        if np.max(np.abs(eul)) > 1e-4:
+            st.rot_offsets[j] = tuple(float(round(x, 3)) for x in eul)
+        else:
+            st.rot_offsets.pop(j, None)
+        self.viewport.edited_joints = set(st.rot_offsets)
+        prev = self._syncing
+        self._syncing = True
+        for nf, x in zip(self.rot_fields, st.rot_offsets.get(j, (0.0, 0.0, 0.0))):
+            nf.set_value(x)
+        self._syncing = prev
+        self.btn_bone_reset.setEnabled(j in st.rot_offsets)
+        self.schedule()
+
+    def _bone_reset_selected(self) -> None:
+        j = self.viewport.selected_joint
+        if j is None:
+            return
+        self.pr.settings.rot_offsets.pop(j, None)
+        self._fill_joint_combos()
+        self.viewport.edited_joints = set(self.pr.settings.rot_offsets)
+        self._refresh_bone_ui()
+        self.schedule()
+
     def _rot_reset(self) -> None:
         self.pr.settings.rot_offsets = {}
         self._fill_joint_combos()
@@ -1915,6 +2077,7 @@ class MainWindow(QMainWindow):
         self.retime_bar.refresh()
         self._update_info(err)
         self._update_quality()
+        self._maybe_refresh_bone_ui()
 
     def _update_info(self, err: Optional[str]) -> None:
         self._update_axis_notes()

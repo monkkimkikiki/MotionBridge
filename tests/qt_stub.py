@@ -442,11 +442,32 @@ class QTreeWidgetItem:
         self.expanded = bool(v)
 
 
+class _RootItem:
+    """QTreeWidget.invisibleRootItem() 대역: addChild 가 최상위 항목 추가."""
+
+    def __init__(self, tree):
+        self._tree = tree
+
+    def addChild(self, it):
+        self._tree._top.append(it)
+
+
 class QTreeWidget(QWidget):
     def __init__(self, *a):
         super().__init__()
         self._top = []
         self._sel = []
+        self.cur = None
+
+    def invisibleRootItem(self):
+        return _RootItem(self)
+
+    def setHeaderHidden(self, v):
+        pass
+
+    def setCurrentItem(self, it):
+        self.cur = it
+        self._sel = [it]
 
     def clear(self):
         self._top = []
