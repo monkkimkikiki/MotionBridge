@@ -46,7 +46,7 @@ def test_full_flow():
         assert mw.map_table.item(r, 0).text().startswith("⚠"), "한쪽만 연결된 행 표시"
         assert mw.recompute_timer.active, "변경 후 재계산이 예약되어야 함"
         mw.recompute()
-        assert mw.pr.result is not None and len(mw.pr.chains()) == 1, "발 하나가 빠지면 IK 체인도 하나"
+        assert mw.pr.result is not None and len([c for c in mw.pr.chains() if c.kind == 'foot']) == 1, "발 하나가 빠지면 IK 체인도 하나"
         cb_t.setCurrentIndex(mw.pr.tgt.skeleton.index("foot_l") + 1)
         assert len(mw.pr.pairs()) == n_pairs
         # 설정 위젯 -> 설정 반영 (슬라이더/스핀 연동)

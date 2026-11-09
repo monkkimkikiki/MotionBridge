@@ -179,16 +179,24 @@ class Mesh:
     texture: Optional[bytes] = None  # 기본 색 텍스처(PNG/JPEG 원본 바이트). 화면 표시용
     material: Optional[str] = None  # 머티리얼 이름 (색이 없을 때 이름으로 구분 색을 정한다)
 
-    def skin(self, skel: Skeleton, wr: np.ndarray, wp: np.ndarray) -> np.ndarray:
-        """한 프레임의 월드 회전 (J,4) / 위치 (J,3) 로 선형 블렌드 스키닝."""
+    def skin(self, skel: Skeleton, wr: np.ndarray, wp: np.ndarray, sc: Optional[np.ndarray] = None) -> np.ndarray:
+        """한 프레임의 월드 회전 (J,4) / 위치 (J,3) 로 선형 블렌드 스키닝. sc (J,) 는 본별 누적 크기 배율(없으면 1) — 그 본의 위치를 기준으로 키운다."""
         bwr, bwp = skel.bind_world()
         rm = Q.mul(wr, Q.conj(bwr))
-        tm = wp - Q.rotate(rm, bwp)
+        rb = Q.rotate(rm, bwp)
+        if sc is not None:
+            sc = np.asarray(sc, dtype=float).reshape(-1)
+            tm = wp - sc[:, None] * rb
+        else:
+            tm = wp - rb
         out = np.zeros_like(self.vertices)
         for k in range(self.joints.shape[1]):
             j = self.joints[:, k]
             w = self.weights[:, k : k + 1]
-            out += w * (Q.rotate(rm[j], self.vertices) + tm[j])
+            v = Q.rotate(rm[j], self.vertices)
+            if sc is not None:
+                v = v * sc[j][:, None]
+            out += w * (v + tm[j])
         return out
 
 

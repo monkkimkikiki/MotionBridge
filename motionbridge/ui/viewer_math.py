@@ -203,6 +203,7 @@ class ViewData:
     tgt_parents: Optional[np.ndarray] = None
     ghost_pos: Optional[np.ndarray] = None  # (T,Js,3) 타깃 단위로 스케일됨
     ghost_parents: Optional[np.ndarray] = None
+    tgt_sc: Optional[np.ndarray] = None  # (Jt,) 본별 누적 크기 배율 (크기 보정이 없으면 None)
     tgt_wr: Optional[np.ndarray] = None  # 메시 스키닝용 (파일 프레임)
     tgt_wp: Optional[np.ndarray] = None
     Ft: Optional[np.ndarray] = None
@@ -244,6 +245,7 @@ class ViewData:
                 vd.n_frames = 1
             vd.Ft = Ft
             vd.tgt_wr, vd.tgt_wp = wr, wp
+            vd.tgt_sc = res.scale_cum if res is not None else None
             vd.tgt_pos = Q.rotate(Ft, wp)
             vd.tgt_parents = reduced_parents(tk.parents, pr.tgt_slots, mf)
         elif pr.src is not None:
@@ -294,7 +296,7 @@ class ViewData:
             return None
         f = min(frame, self.tgt_wr.shape[0] - 1)
         total = int(sum(len(m.vertices) for m in pr.tgt.meshes))
-        pts = [self._point_subset(m, total, max_points).skin(pr.tgt.skeleton, self.tgt_wr[f], self.tgt_wp[f]) for m in pr.tgt.meshes]
+        pts = [self._point_subset(m, total, max_points).skin(pr.tgt.skeleton, self.tgt_wr[f], self.tgt_wp[f], self.tgt_sc) for m in pr.tgt.meshes]
         return Q.rotate(self.Ft, np.concatenate(pts))
 
 
@@ -485,9 +487,9 @@ def build_display_mesh(mesh: Mesh, decode=None, max_tris: int = 40000, n_samples
     return DisplayMesh(sub, tris, st, bary, np.clip(rgb, 0.0, 1.0), has_mat, len(mesh.faces), edges, orient, bool(real_color))
 
 
-def skin_display(dm: DisplayMesh, skel, wr: np.ndarray, wp: np.ndarray, Ft: np.ndarray) -> np.ndarray:
-    """한 프레임의 축소 메시 정점(표준 프레임)."""
-    return Q.rotate(Ft, dm.sub.skin(skel, wr, wp))
+def skin_display(dm: DisplayMesh, skel, wr: np.ndarray, wp: np.ndarray, Ft: np.ndarray, sc: Optional[np.ndarray] = None) -> np.ndarray:
+    """한 프레임의 축소 메시 정점(표준 프레임). sc: 본별 누적 크기 배율."""
+    return Q.rotate(Ft, dm.sub.skin(skel, wr, wp, sc))
 
 
 def render_surface(items, cam: "OrbitCamera", w: int, h: int, material: bool, sample_step: int = 1) -> Optional[np.ndarray]:

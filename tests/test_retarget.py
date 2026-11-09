@@ -89,6 +89,120 @@ def slide_metric(tsk, res, ch_i, anim=None):
     return (d[both].max() if both.any() else 0.0), pl.leg_length, int(both.sum()), d.max()
 
 
+def _dip_setup(hand_ik, dip=1.40):
+    """소스 골반을 20~39 프레임 동안 크게 낮춰 손이 바닥(높이 0) 아래로 내려가게 만든다."""
+    sc = COMBOS[0][0]
+    ssk, smeta = synth.build_skeleton(**sc)
+    tsk, tmeta = synth.build_skeleton(**IK_TGT)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=60)
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    h = sm["Hips"]
+    t = np.arange(60)
+    w = np.clip(np.minimum(t - 14, 45 - t) / 6.0, 0.0, 1.0)      # 14~45 사이를 부드럽게 오르내리는 가중치
+    up = np.array(an.pos, dtype=float)
+    # 소스는 y-up(mixamo): 골반 로컬 위치의 Y 를 낮춘다 (골반이 루트 바로 아래라서 월드 Y 와 같다)
+    up[:, h, 1] -= dip * w
+    an.pos = up
+    st = RetargetSettings(foot_ik=False, hand_ik=hand_ik)
+    res = retarget(ssk, an, tsk, pairs_from_slots(sm, tm), st, default_chains(sm, tm), sm, tm)
+    return ssk, an, tsk, res, sm, tm
+
+
+def test_hand_ik():
+    """손 IK: 원본 손 높이가 0 이하일 때만 그 팔에 IK 가 걸리고, 0 에서 벗어나면 풀린다 (손이 안 닿는 동작에는 아무 영향 없음)."""
+    # 1) 손이 바닥에 안 닿는 걷기: 손 IK 켜도 결과가 완전히 같다
+    sc = COMBOS[0][0]
+    a = setup(sc, IK_TGT, st=RetargetSettings(foot_ik=False, hand_ik=False))[3]
+    b = setup(sc, IK_TGT, st=RetargetSettings(foot_ik=False, hand_ik=True))[3]
+    assert np.allclose(a.anim.rot, b.anim.rot) and not b.ik_applied, "손이 안 닿는데 IK 가 걸림"
+    # 2) 골반을 낮춘 동작
+    ssk, an, tsk, off, sm, tm = _dip_setup(False)
+    _, _, _, on, _, _ = _dip_setup(True)
+    assert not off.ik_applied and on.ik_applied
+    hands = [(c, pl) for c, pl in zip(on.chains, on.plans) if c.kind == "hand"]
+    assert len(hands) == 2
+    pc_on, _ = canon(tsk, on.anim, on.frame_tgt[0])
+    pc_off, _ = canon(tsk, off.anim, off.frame_tgt[0])
+    _, bwp_t = tsk.bind_world()
+    bpt = Q.rotate(on.frame_tgt[0], bwp_t)
+    ground_t = min(bpt[t, 1] for t in set(t for _s, t in on.pairs))
+    for ch, pl in hands:
+        c = pl.contact
+        assert c[25:35].all(), "깊이 내려간 구간은 접촉이어야 함"
+        assert not c[:8].any() and not c[52:].any(), "서 있는 구간은 접촉이 아니어야 함"
+        w = pl.weight
+        # 접촉 한가운데: 손이 고정(수평 이동 없음)되고 바닥 아래로 파고들지 않음
+        hand = pc_on[:, ch.foot]
+        mid = hand[27:33]
+        assert np.ptp(mid[:, [0, 2]], axis=0).max() < 1e-6, "접촉 중 손이 미끄러짐"
+        assert hand[:, 1][w > 0.999].min() >= ground_t - 1e-6, "손이 바닥을 뚫음"
+        # 접촉에서 벗어난 프레임은 IK 없는 결과와 같다 (풀림)
+        free = w < 1e-9
+        assert free.any()
+        for j in (ch.upper, ch.lower, ch.foot):
+            assert np.allclose(on.anim.rot[free][:, j], off.anim.rot[free][:, j], atol=1e-9) or \
+                np.allclose(on.anim.rot[free][:, j], -off.anim.rot[free][:, j], atol=1e-9), "벗어났는데 IK 가 남음"
+    # 3) 설정으로 끄면 다시 같다
+    assert np.allclose(off.anim.rot, _dip_setup(False)[3].anim.rot)
+    print("hand IK OK")
+
+
+def test_spine_blend():
+    """소스/타깃의 척추 본 개수가 다르면 척추 움직임을 자연스러운 중간값으로 섞는다."""
+    from motionbridge.core.mapping import spine_blend
+    full = {"Spine": 1, "Spine1": 2, "Spine2": 3}
+    two = {"Spine": 1, "Spine2": 3}
+    assert spine_blend(full, full) == {} and spine_blend(two, two) == {}
+    b = spine_blend(full, two)       # 3 -> 2
+    assert [x for x, _w in b["Spine"]] == ["Spine", "Spine1"] and abs(b["Spine"][0][1] - 0.75) < 1e-9
+    assert [x for x, _w in b["Spine2"]] == ["Spine1", "Spine2"] and abs(b["Spine2"][1][1] - 0.75) < 1e-9
+    b = spine_blend(two, full)       # 2 -> 3
+    assert b["Spine"] == [("Spine", 1.0)] and b["Spine2"] == [("Spine2", 1.0)]
+    assert [x for x, _w in b["Spine1"]] == ["Spine", "Spine2"] and abs(b["Spine1"][1][1] - 0.5) < 1e-9
+    assert spine_blend({"Spine": 1}, full)["Spine1"] == [("Spine", 1.0)]
+    # 실제 리타깃: 같은 리그를 두고 한쪽 척추 슬롯 하나를 빼서 개수가 다른 상황을 만든다
+    cfg = dict(style="mixamo", frame="y_up_z", scale=1.0, pose="T", local_axes="aligned")
+    ssk, smeta = synth.build_skeleton(**cfg)
+    tsk, _ = synth.build_skeleton(**cfg)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=40)
+    sm_full, tm_full = auto_map(ssk), auto_map(tsk)
+    assert {"Spine", "Spine1", "Spine2"} <= set(sm_full)
+    # 척추 본이 움직이도록 가슴을 비튼다
+    rot = np.array(an.rot, dtype=float)
+    t = np.linspace(0, 2 * np.pi, 40)
+    for nm, amp in (("Spine", 0.1), ("Spine1", 0.2), ("Spine2", 0.3)):
+        j = sm_full[nm]
+        rot[:, j] = Q.mul(rot[:, j], Q.from_axis_angle(np.array([1.0, 0.0, 0.0]), amp * np.sin(t)))
+    an.rot = rot
+    st = RetargetSettings(foot_ik=False, hand_ik=False)
+    ws, _ = fk(ssk, an.rot, an.pos)
+    tm_two = {k: v for k, v in tm_full.items() if k != "Spine1"}
+    sm_two = {k: v for k, v in sm_full.items() if k != "Spine1"}
+    for label, smap, tmap in (("3->2", sm_full, tm_two), ("2->3", sm_two, tm_full)):
+        res = retarget(ssk, an, tsk, pairs_from_slots(smap, tmap), st, [], smap, tmap)
+        assert any("척추" in w for w in res.warnings), label
+        wt, _ = fk(tsk, res.anim.rot, res.anim.pos)
+        Ft = res.frame_tgt[0]
+        Fs = res.frame_src[0]
+        for name, parts in spine_blend(smap, tmap).items():
+            got = Q.mul(Ft, wt[:, tmap[name]])
+            # 소스 쪽 기대값: 바인드 대비 월드 변화량을 같은 비율로 섞은 것 (같은 리그라 바인드가 같다)
+            bws, _ = ssk.bind_world()
+            bwt, _ = tsk.bind_world()
+            def D(sn):
+                return Q.mul(Q.mul(Fs, ws[:, smap[sn]]), Q.conj(Q.mul(Fs, bws[smap[sn]])))
+            exp_d = D(parts[0][0]) if len(parts) == 1 else Q.slerp(D(parts[0][0]), D(parts[1][0]), parts[1][1])
+            exp = Q.mul(exp_d, Q.mul(Ft, bwt[tmap[name]]))
+            ang = Q.angle_between(got, exp).max()
+            assert ang < 1e-6, (label, name, ang)
+        # 섞기 전(이름 대응만)과는 실제로 다르다 = 건너뛰던 본의 값이 반영됨
+        old = retarget(ssk, an, tsk, pairs_from_slots(smap, tmap), st, [], None, None)
+        wo, _ = fk(tsk, old.anim.rot, old.anim.pos)
+        diff = max(Q.angle_between(Q.mul(Ft, wt[:, tmap[n]]), Q.mul(Ft, wo[:, tmap[n]])).max() for n in spine_blend(smap, tmap) if n in tmap and len(spine_blend(smap, tmap)[n]) == 2)
+        assert diff > 1e-3, (label, "섞기 효과가 없음", diff)
+    print("spine blend OK")
+
+
 def test_ik():
     """허벅지/종아리 비율이 다른 대상: FK 만으로는 접지 중 발이 미끄러지고, IK 는 정확히 고정한다."""
     sc = COMBOS[0][0]
@@ -96,7 +210,7 @@ def test_ik():
     ik = setup(sc, IK_TGT, st=RetargetSettings(foot_ik=True))
     ssk, an, tsk, res_fk = base[0], base[1], base[2], base[3]
     res_ik = ik[3]
-    assert not res_fk.ik_applied and res_ik.ik_applied and len(res_ik.chains) == 2
+    assert not res_fk.ik_applied and res_ik.ik_applied and len([c for c in res_ik.chains if c.kind == 'foot']) == 2
     for i in range(2):
         m_fk, L, n_fk, all_fk = slide_metric(tsk, res_fk, i)
         m_ik, L2, n_ik, all_ik = slide_metric(tsk, res_ik, i)
@@ -113,6 +227,8 @@ def test_ik():
     bps = Q.rotate(res_ik.frame_src[0], bwp_s)
     bpt = Q.rotate(res_ik.frame_tgt[0], bwp_t)
     for ch, pl in zip(res_ik.chains, res_ik.plans):
+        if ch.kind != "foot":
+            continue
         D = bpt[ch.foot] + res_ik.k * (ps[:, ch.src_foot] - bps[ch.src_foot])
         err = np.linalg.norm(pc[:, ch.foot] - D, axis=1).max()
         assert err < 0.01 * pl.leg_length, "발 위치가 스케일된 소스 위치와 다름 %.4f" % err
@@ -345,6 +461,8 @@ if __name__ == "__main__":
     test_placement_and_ghost()
     test_fk_invariants()
     test_ik()
+    test_hand_ik()
+    test_spine_blend()
     test_overreach()
     test_in_place_not_locked()
     test_start_at_origin()

@@ -282,6 +282,9 @@ class MainWindow(QMainWindow):
         self.mesh_combo.setCurrentIndex((self.mesh_combo.currentIndex() + 1) % max(n, 1))
 
     def _viewport_key(self, name: str) -> None:
+        if name.startswith("tool_"):
+            self.set_bone_tool(name[5:], enable=True)
+            return
         {"prev": lambda: self.step_frame(-1), "next": lambda: self.step_frame(1), "first": lambda: self.goto_frame("first"),
          "last": lambda: self.goto_frame("last"), "play": self.toggle_play}[name]()
 
@@ -411,16 +414,28 @@ class MainWindow(QMainWindow):
         # ---- 본 편집: 파츠를 목록에서 고르거나 뷰포트에서 클릭해 고르고, 끌어서 돌린다 (값은 '본별 회전 보정'에 그대로 기록)
         bl = QHBoxLayout()
         self.cb_bone_edit = QCheckBox("🦴 본 편집")
-        self.cb_bone_edit.setToolTip("켜면 뷰포트에서 본(점)을 클릭해 고르고, 끌어서 돌립니다. 하위 본 전체가 같이 돌아가고,\n"
-                                     "값은 [리타깃]의 '본별 회전 보정'에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
-                                     "점 위에서 끌면 그 본이 돌고, 빈 곳에서 끌면 카메라가 돕니다. Alt+끌기=비틀기(시선 방향 회전).")
+        self.cb_bone_edit.setToolTip("켜면 뷰포트에서 본(점)을 클릭해 고르고, 3ds Max 처럼 Q 선택 / W 이동 / E 회전 / R 크기 키로 도구를 바꿔 직접 고칩니다.\n"
+                                     "하위 본 전체가 같이 움직이고, 값은 [리타깃]의 '본별 보정'(회전·위치·크기)에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
+                                     "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.")
         self.cb_bone_edit.toggled.connect(self._bone_edit_toggled)
         bl.addWidget(self.cb_bone_edit)
+        self.tool_buttons: Dict[str, QPushButton] = {}
+        for tool, text, tip in (("select", "Q 선택", "점을 눌러 본을 고릅니다 (끌어도 아무것도 바뀌지 않음)"),
+                                ("move", "W 이동", "화살표(X 빨강/Y 초록/Z 파랑)를 끌면 그 축으로만, 중심 네모를 끌면 자유롭게 본(과 하위 본 전체)을 옮깁니다"),
+                                ("rotate", "E 회전", "고리를 끌면 그 축으로만 돌고, 점을 끌면 자유롭게 돕니다 (Alt+끌기=비틀기)"),
+                                ("scale", "R 크기", "끌면 그 본을 기준으로 하위 본 위치와 메시가 커지거나 작아집니다 (오른쪽/위=커짐)")):
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.setToolTip(tip + "\n뷰포트에서 같은 키(Q/W/E/R)를 눌러도 바뀝니다 — 본 편집이 꺼져 있으면 W/E/R 이 켭니다.")
+            b.clicked.connect(lambda _c=False, t=tool: self.set_bone_tool(t, enable=True))
+            self.tool_buttons[tool] = b
+            bl.addWidget(b)
+        self.tool_buttons["rotate"].setChecked(True)
         self.bone_sel_label = QLabel("")
         self.bone_sel_label.setStyleSheet("color:#ffdc50")
         bl.addWidget(self.bone_sel_label, 1)
         self.btn_bone_reset = QPushButton("이 본 초기화")
-        self.btn_bone_reset.setToolTip("선택한 본의 회전 보정을 0으로 되돌립니다")
+        self.btn_bone_reset.setToolTip("선택한 본의 회전·위치·크기 보정을 모두 처음 상태로 되돌립니다")
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
         bl.addWidget(self.btn_bone_reset)
@@ -435,6 +450,8 @@ class MainWindow(QMainWindow):
         self.viewport.bone_picked.connect(self._bone_picked)
         self.viewport.bone_dragged.connect(self._bone_dragged)
         self.viewport.bone_drag_started.connect(self._bone_drag_started)
+        self.viewport.bone_moved.connect(self._bone_moved)
+        self.viewport.bone_scaled.connect(self._bone_scaled)
         pl = QHBoxLayout()
         pl.addWidget(QLabel("왼쪽 드래그"))
         self.drag_combo = QComboBox()
@@ -1176,6 +1193,7 @@ class MainWindow(QMainWindow):
         g = QGroupBox("발 · 접지 (IK)")
         f = QFormLayout(g)
         f.addRow(self._chk("foot_ik", "발 IK 사용", "접지 구간에서 발이 미끄러지지 않게 다리를 풉니다"))
+        f.addRow(self._chk("hand_ik", "손 IK 사용 (바닥 짚기)", "원본 손 높이가 0 이하로 내려가 바닥에 닿은 구간에서만 그 팔에 IK 를 걸고, 0 에서 벗어나면 풉니다"))
         f.addRow("IK 추종(0~1)", self._num("ik_follow", 0, 1, 0.05, 2, tip="1: 항상 소스 발 위치(스케일 적용)를 따라감 / 0: 접지 구간에서만 IK"))
         f.addRow(self._chk("ground_clamp", "바닥 아래로 못 내려가게"))
         f.addRow("바닥 높이 보정", self._num("ground_offset", -50, 50, 0.1, 2, tip="타깃 단위. 발목 기준 바닥 높이를 올리거나 내림"))
@@ -1225,7 +1243,7 @@ class MainWindow(QMainWindow):
             f.addRow("", lb)
         lay.addWidget(g)
 
-        g = QGroupBox("본별 회전 보정 (하위 본 전체에 적용)")
+        g = QGroupBox("본별 보정 — 회전 · 위치 · 크기 (하위 본 전체에 적용)")
         v = QVBoxLayout(g)
         self.rot_combo = QComboBox()
         self.rot_combo.currentIndexChanged.connect(self._rot_joint_changed)
@@ -1238,7 +1256,20 @@ class MainWindow(QMainWindow):
             self.rot_fields.append(nf)
             f.addRow(lab, nf)
         v.addLayout(f)
-        b = QPushButton("회전 보정 모두 초기화")
+        f = QFormLayout()
+        self.pos_fields = []
+        for i, lab in enumerate(("위치 X (좌우)", "위치 Y (위)", "위치 Z (앞)")):
+            nf = NumField(-100000, 100000, 0.01, 0, 3, "", slider=False)
+            nf.setToolTip("선택한 본(과 하위 본 전체)을 바인드 포즈 기준의 이 축 방향으로 옮깁니다 (타깃 모델 단위). 모션 중에는 부모 본을 따라갑니다.")
+            nf.changed.connect(lambda val, ax=i: self._pos_changed(ax, val))
+            self.pos_fields.append(nf)
+            f.addRow(lab, nf)
+        self.scale_field = NumField(0.05, 20.0, 0.01, 1.0, 3, "", slider=False)
+        self.scale_field.setToolTip("선택한 본을 기준점으로 하위 본 위치와 그 본들에 붙은 메시를 키우거나 줄입니다 (1 = 그대로). 내보낼 때는 본 위치에 반영되고, 메시 자체 크기는 뷰포트에서만 바뀝니다.")
+        self.scale_field.changed.connect(self._scale_changed)
+        f.addRow("크기 (배율)", self.scale_field)
+        v.addLayout(f)
+        b = QPushButton("본별 보정 모두 초기화 (회전·위치·크기)")
         b.clicked.connect(self._rot_reset)
         v.addWidget(b)
         lay.addWidget(g)
@@ -1597,6 +1628,8 @@ class MainWindow(QMainWindow):
             self._sync_settings_ui()
             self._update_hip_ranges()
         self._syncing = False
+        if which == "source" and self.pr.tgt is not None:
+            self._fill_joint_combos()      # 같은 스켈레톤 모드가 켜지면 보정 대상 본 목록이 바뀐다
         self._fill_mapping()
         self.recompute(reframe=True)
         self.history.reset(self._edit_state())  # 새 파일을 열면 실행 취소 기록은 새로 시작
@@ -1868,6 +1901,19 @@ class MainWindow(QMainWindow):
                 out.append((s, j))
         return out
 
+    def _editable_joints(self):
+        """본 편집/보정 대상 [(표시 이름, 본 번호)]. 사람 모양이면 사람 슬롯에 매핑된 본, 같은 스켈레톤 모드(몬스터 등)나 사람 매핑이 없으면 모든 본."""
+        if self.pr.tgt is None:
+            return []
+        names = self.pr.tgt.skeleton.names
+        rig = self.pr.rig() if (self.pr.src is not None) else None
+        if rig is not None:
+            return [(names[t], t) for t in sorted({t for _s, t in rig.pairs})]
+        mapped = self._mapped_tgt_joints()
+        if len(mapped) >= 8:
+            return [("%s (%s)" % (slot_label(sl), names[j]), j) for sl, j in mapped]
+        return [(n, i) for i, n in enumerate(names)]
+
     def _fill_joint_combos(self) -> None:
         prev = self._syncing
         self._syncing = True
@@ -1878,9 +1924,9 @@ class MainWindow(QMainWindow):
         joints = self._mapped_tgt_joints()
         cur_rot = self.rot_combo.currentData()
         self.rot_combo.clear()
-        for s, j in joints:
-            mark = " ●" if j in self.pr.settings.rot_offsets else ""
-            self.rot_combo.addItem("%s (%s)%s" % (slot_label(s), names[j], mark), j)
+        for label, j in self._editable_joints():
+            mark = " ●" if self._edited(j) else ""
+            self.rot_combo.addItem("%s%s" % (label, mark), j)
         if cur_rot is not None:
             i = self.rot_combo.findData(cur_rot)
             if i >= 0:
@@ -1900,14 +1946,60 @@ class MainWindow(QMainWindow):
         self.pr.settings.com_joint = int(self.com_combo.itemData(i) if self.com_combo.itemData(i) is not None else -1)
         self.schedule()
 
-    def _rot_joint_changed(self, *_a) -> None:
-        j = self.rot_combo.currentData()
+    def _edited(self, j: int) -> bool:
+        st = self.pr.settings
+        return j in st.rot_offsets or j in st.pos_offsets or j in st.scale_offsets
+
+    def _edited_set(self) -> set:
+        st = self.pr.settings
+        return set(st.rot_offsets) | set(st.pos_offsets) | set(st.scale_offsets)
+
+    def _sync_bone_fields(self, j) -> None:
+        """선택한 본의 회전/위치/크기 보정 값을 왼쪽 입력칸에 채운다 (신호는 보내지 않는다)."""
+        st = self.pr.settings
         prev = self._syncing
         self._syncing = True
-        v = self.pr.settings.rot_offsets.get(j, (0.0, 0.0, 0.0)) if j is not None else (0.0, 0.0, 0.0)
-        for nf, x in zip(self.rot_fields, v):
+        z = (0.0, 0.0, 0.0)
+        for nf, x in zip(self.rot_fields, st.rot_offsets.get(j, z) if j is not None else z):
             nf.set_value(x)
+        for nf, x in zip(self.pos_fields, st.pos_offsets.get(j, z) if j is not None else z):
+            nf.set_value(x)
+        self.scale_field.set_value(st.scale_offsets.get(j, 1.0) if j is not None else 1.0)
         self._syncing = prev
+
+    def _rot_joint_changed(self, *_a) -> None:
+        self._sync_bone_fields(self.rot_combo.currentData())
+
+    def _pos_changed(self, axis: int, value: float) -> None:
+        if self._syncing:
+            return
+        j = self.rot_combo.currentData()
+        if j is None:
+            return
+        v = list(self.pr.settings.pos_offsets.get(j, (0.0, 0.0, 0.0)))
+        v[axis] = value
+        if any(abs(x) > 1e-12 for x in v):
+            self.pr.settings.pos_offsets[j] = tuple(v)
+        else:
+            self.pr.settings.pos_offsets.pop(j, None)
+        self._after_bone_value_edit(j)
+
+    def _scale_changed(self, value: float) -> None:
+        if self._syncing:
+            return
+        j = self.rot_combo.currentData()
+        if j is None:
+            return
+        if abs(value - 1.0) > 1e-6:
+            self.pr.settings.scale_offsets[j] = float(value)
+        else:
+            self.pr.settings.scale_offsets.pop(j, None)
+        self._after_bone_value_edit(j)
+
+    def _after_bone_value_edit(self, j: int) -> None:
+        self.viewport.edited_joints = self._edited_set()
+        self.btn_bone_reset.setEnabled(self._edited(j))
+        self.schedule()
 
     def _rot_changed(self, axis: int, value: float) -> None:
         if self._syncing:
@@ -1921,7 +2013,7 @@ class MainWindow(QMainWindow):
             self.pr.settings.rot_offsets[j] = tuple(v)
         else:
             self.pr.settings.rot_offsets.pop(j, None)
-        self.schedule()
+        self._after_bone_value_edit(j)
 
     # ---- 뷰포트 본 편집 (파츠 목록 / 클릭 선택 / 끌어서 회전)
     def _bone_edit_toggled(self, on: bool) -> None:
@@ -1933,6 +2025,9 @@ class MainWindow(QMainWindow):
 
     def _bone_label(self, j: int) -> str:
         names = self.pr.tgt.skeleton.names if self.pr.tgt else []
+        lab = dict((jj, l) for l, jj in self._editable_joints()).get(j)
+        if lab:
+            return lab
         slot = next((s for s, jj in self.pr.tgt_slots.items() if jj == j), None) if self.pr.tgt else None
         return "%s (%s)" % (slot_label(slot), names[j]) if slot and j < len(names) else (names[j] if j < len(names) else str(j))
 
@@ -1942,12 +2037,14 @@ class MainWindow(QMainWindow):
             self.viewport.pickable, self.viewport.joint_names, self.viewport.edited_joints = set(), {}, set()
             self.bone_tree.clear()
             return
-        joints = [j for _s, j in self._mapped_tgt_joints()]
+        edj = self._editable_joints()
+        joints = [j for _l, j in edj]
+        labels = {j: l for l, j in edj}
         jset = set(joints)
         par = self.pr.tgt.skeleton.parents
         self.viewport.pickable = jset
-        self.viewport.joint_names = {j: self._bone_label(j) for j in joints}
-        self.viewport.edited_joints = set(self.pr.settings.rot_offsets)
+        self.viewport.joint_names = dict(labels)
+        self.viewport.edited_joints = self._edited_set()
         sel = self.viewport.selected_joint
         self.bone_tree.blockSignals(True)
         self.bone_tree.clear()
@@ -1967,7 +2064,7 @@ class MainWindow(QMainWindow):
                 k = parent_of(k)
             for k in reversed(chain):
                 p = parent_of(k)
-                it = QTreeWidgetItem([self._bone_label(k) + (" ●" if k in self.pr.settings.rot_offsets else "")])
+                it = QTreeWidgetItem([labels.get(k, str(k)) + (" ●" if self._edited(k) else "")])
                 it.setData(0, Qt.ItemDataRole.UserRole, k)
                 (items[p] if p in items else self.bone_tree.invisibleRootItem()).addChild(it)
                 items[k] = it
@@ -1981,17 +2078,17 @@ class MainWindow(QMainWindow):
         """본 편집 패널은 켜져 있을 때만, 타깃/매핑/보정 표시가 바뀌었을 때만 다시 만든다 (끌기 중 매 프레임 갱신 방지)."""
         if not getattr(self, "cb_bone_edit", None) or not self.cb_bone_edit.isChecked():
             return
-        sig = (id(self.pr.tgt), tuple(sorted(self.pr.tgt_slots.items())), tuple(sorted(self.pr.settings.rot_offsets)))
+        sig = (id(self.pr.tgt), tuple(sorted(self.pr.tgt_slots.items())), tuple(sorted(self._edited_set())), self.pr.rig() is not None if self.pr.src else None)
         if sig != getattr(self, "_bone_sig", None):
             self._bone_sig = sig
             self._refresh_bone_ui()
-        self.viewport.edited_joints = set(self.pr.settings.rot_offsets)
+        self.viewport.edited_joints = self._edited_set()
 
     def _update_bone_sel_label(self) -> None:
         j = self.viewport.selected_joint
         on = j is not None and self.pr.tgt is not None
         self.bone_sel_label.setText("선택: " + self._bone_label(j) if on else "파츠를 고르세요 (목록 또는 뷰포트 점 클릭)")
-        self.btn_bone_reset.setEnabled(bool(on and j in self.pr.settings.rot_offsets))
+        self.btn_bone_reset.setEnabled(bool(on and self._edited(j)))
 
     def _select_bone(self, j: int, from_tree: bool = False) -> None:
         """파츠 선택: 뷰포트 표시, 파츠 목록, 왼쪽 '본별 회전 보정' 콤보를 모두 같은 본으로 맞춘다."""
@@ -1999,6 +2096,7 @@ class MainWindow(QMainWindow):
         i = self.rot_combo.findData(j)
         if i >= 0 and self.rot_combo.currentIndex() != i:
             self.rot_combo.setCurrentIndex(i)
+        self._sync_bone_fields(j)
         if not from_tree:
             for k in range(self.bone_tree.topLevelItemCount()):
                 self._tree_select(self.bone_tree.topLevelItem(k), j)
@@ -2036,27 +2134,91 @@ class MainWindow(QMainWindow):
             st.rot_offsets[j] = tuple(float(round(x, 3)) for x in eul)
         else:
             st.rot_offsets.pop(j, None)
-        self.viewport.edited_joints = set(st.rot_offsets)
-        prev = self._syncing
-        self._syncing = True
-        for nf, x in zip(self.rot_fields, st.rot_offsets.get(j, (0.0, 0.0, 0.0))):
-            nf.set_value(x)
-        self._syncing = prev
-        self.btn_bone_reset.setEnabled(j in st.rot_offsets)
+        self.viewport.edited_joints = self._edited_set()
+        self._sync_bone_fields(j)
+        self.btn_bone_reset.setEnabled(self._edited(j))
         self.schedule()
+
+    def _bone_view_frame(self):
+        """지금 보이는 프레임의 타깃 월드 회전(파일 프레임)과 표준 프레임 변환 Ft (본 이동 끌기를 로컬 벡터로 바꿀 때 쓴다)."""
+        vd = self.viewport.vd
+        if vd is None or vd.tgt_wr is None or vd.Ft is None:
+            return None
+        f = min(self.viewport.frame, vd.tgt_wr.shape[0] - 1)
+        return vd.tgt_wr[f], vd.Ft
+
+    def _bone_moved(self, j: int, dview) -> None:
+        """뷰포트에서 본을 끌어 옮긴 만큼(표준 프레임 월드 이동)을 '본별 위치 보정'(바인드 포즈 기준)에 더한다."""
+        if self.pr.tgt is None:
+            return
+        st = self.pr.settings
+        dview = np.asarray(dview, dtype=float)
+        vf = self._bone_view_frame()
+        sk = self.pr.tgt.skeleton
+        p = int(sk.parents[j])
+        yaw = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
+        if vf is None:
+            d_bind = dview
+        else:
+            Wr, Ft = vf
+            dw = Q.rotate(Q.conj(Ft), dview)                       # 파일 프레임 월드 이동
+            if p < 0:
+                d_bind = Q.rotate(Q.conj(yaw), dview)               # 루트: 월드 이동 (Yaw 되돌림)
+            else:
+                local = Q.rotate(Q.conj(Wr[p]), dw)                 # 지금 프레임의 부모 로컬 벡터
+                bwr, _ = sk.bind_world()
+                d_bind = Q.rotate(Ft, Q.rotate(bwr[p], local))      # 바인드 포즈 기준 표준 프레임 벡터
+        cur = np.array(st.pos_offsets.get(j, (0.0, 0.0, 0.0)), dtype=float)
+        new = cur + d_bind
+        if np.max(np.abs(new)) > 1e-9:
+            st.pos_offsets[j] = tuple(float(round(x, 5)) for x in new)
+        else:
+            st.pos_offsets.pop(j, None)
+        self.viewport.edited_joints = self._edited_set()
+        self._sync_bone_fields(j)
+        self.btn_bone_reset.setEnabled(self._edited(j))
+        self.schedule()
+
+    def _bone_scaled(self, j: int, factor: float) -> None:
+        st = self.pr.settings
+        new = float(np.clip(st.scale_offsets.get(j, 1.0) * float(factor), 0.05, 20.0))
+        if abs(new - 1.0) > 1e-4:
+            st.scale_offsets[j] = round(new, 4)
+        else:
+            st.scale_offsets.pop(j, None)
+        self.viewport.edited_joints = self._edited_set()
+        self._sync_bone_fields(j)
+        self.btn_bone_reset.setEnabled(self._edited(j))
+        self.schedule()
+
+    def set_bone_tool(self, tool: str, enable: bool = False) -> None:
+        """본 편집 도구 바꾸기 (3ds Max 키: Q 선택 · W 이동 · E 회전 · R 크기). enable=True 면 본 편집이 꺼져 있을 때 켠다."""
+        if tool not in ("select", "move", "rotate", "scale"):
+            return
+        self.viewport.bone_tool = tool
+        for k, b in self.tool_buttons.items():
+            b.setChecked(k == tool)
+        if enable and not self.cb_bone_edit.isChecked():
+            self.cb_bone_edit.setChecked(True)
+        self.viewport.update()
 
     def _bone_reset_selected(self) -> None:
         j = self.viewport.selected_joint
         if j is None:
             return
-        self.pr.settings.rot_offsets.pop(j, None)
+        for d in (self.pr.settings.rot_offsets, self.pr.settings.pos_offsets, self.pr.settings.scale_offsets):
+            d.pop(j, None)
         self._fill_joint_combos()
-        self.viewport.edited_joints = set(self.pr.settings.rot_offsets)
+        self.viewport.edited_joints = self._edited_set()
+        self._sync_bone_fields(j)
         self._refresh_bone_ui()
         self.schedule()
 
     def _rot_reset(self) -> None:
         self.pr.settings.rot_offsets = {}
+        self.pr.settings.pos_offsets = {}
+        self.pr.settings.scale_offsets = {}
+        self.viewport.edited_joints = set()
         self._fill_joint_combos()
         self.schedule()
 

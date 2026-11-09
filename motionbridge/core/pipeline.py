@@ -112,6 +112,8 @@ class Project:
         self.tgt = m
         self.tgt_slots = auto_map(m.skeleton)
         self.settings.rot_offsets = {}
+        self.settings.pos_offsets = {}
+        self.settings.scale_offsets = {}
         self.settings.com_joint = -1
         self.result = None
         self.log += m.notes
@@ -121,6 +123,8 @@ class Project:
         """타깃 모델을 뺀다 (소스 모션은 그대로)."""
         self.tgt, self.tgt_slots = None, {}
         self.settings.rot_offsets = {}
+        self.settings.pos_offsets = {}
+        self.settings.scale_offsets = {}
         self.settings.com_joint = -1
         self.result, self.issues = None, []
 
@@ -163,7 +167,7 @@ class Project:
         out = []
         for c in default_chains(self.src_slots, self.tgt_slots):
             side = "L" if c.label.startswith("왼") else "R"
-            if self.use_chain.get(side, True):
+            if c.kind == "hand" or self.use_chain.get(side, True):   # 손 IK 는 settings.hand_ik 로만 켜고 끈다
                 out.append(c)
         return out
 
@@ -213,6 +217,8 @@ class Project:
         st = dataclasses.asdict(self.settings)
         tn = self.tgt.skeleton.names if self.tgt else []
         st["rot_offsets"] = {tn[j]: list(v) for j, v in self.settings.rot_offsets.items() if j < len(tn)}
+        st["pos_offsets"] = {tn[j]: list(v) for j, v in self.settings.pos_offsets.items() if j < len(tn)}
+        st["scale_offsets"] = {tn[j]: float(v) for j, v in self.settings.scale_offsets.items() if j < len(tn)}
         st["com_joint"] = tn[self.settings.com_joint] if (self.tgt and 0 <= self.settings.com_joint < len(tn)) else None
         st["hip_offset"] = list(self.settings.hip_offset)
         sn = self.src.skeleton.names if self.src else []
@@ -264,11 +270,13 @@ class Project:
         self.use_chain.update(d.get("use_chain", {}))
         st = dict(d.get("settings", {}))
         ro = st.pop("rot_offsets", {})
+        po = st.pop("pos_offsets", {})
+        so = st.pop("scale_offsets", {})
         com = st.pop("com_joint", None)
         fields = {f.name for f in dataclasses.fields(RetargetSettings)}
         base = dataclasses.asdict(RetargetSettings())
         for k, v in st.items():
-            if k in fields and k not in ("rot_offsets", "com_joint"):
+            if k in fields and k not in ("rot_offsets", "pos_offsets", "scale_offsets", "com_joint"):
                 base[k] = tuple(v) if k in ("hip_offset", "place_offset") else v
         base["rot_offsets"] = {}
         for nm, v in ro.items():
@@ -276,6 +284,17 @@ class Project:
                 base["rot_offsets"][tidx[nm]] = tuple(v)
             else:
                 warns.append("회전 보정의 '%s' 본이 타깃에 없음" % nm)
+        base["pos_offsets"], base["scale_offsets"] = {}, {}
+        for nm, v in po.items():
+            if nm in tidx:
+                base["pos_offsets"][tidx[nm]] = tuple(v)
+            else:
+                warns.append("위치 보정의 '%s' 본이 타깃에 없음" % nm)
+        for nm, v in so.items():
+            if nm in tidx:
+                base["scale_offsets"][tidx[nm]] = float(v)
+            else:
+                warns.append("크기 보정의 '%s' 본이 타깃에 없음" % nm)
         base["com_joint"] = tidx.get(com, -1) if com else -1
         self.settings = RetargetSettings(**base)
         self.result = None

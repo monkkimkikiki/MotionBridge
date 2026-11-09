@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import quat as Q
-from .mapping import DEFAULT_FRAME, detect_frame, frame_from_axes, refine_frame_with_anim
+from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_frame, frame_from_axes, refine_frame_with_anim, spine_blend
 from .model import Animation, Skeleton, fk
 
 
@@ -30,6 +30,7 @@ class IKChain:
     lower: int
     foot: int
     label: str = ""
+    kind: str = "foot"   # "foot": 발 IK(접지) / "hand": 손 IK (소스 손이 바닥 높이 0 이하로 닿았을 때만)
 
 
 @dataclass
@@ -54,6 +55,10 @@ class RetargetSettings:
     contact_height: float = 0.06  # 다리 길이 대비 비율
     contact_speed: float = 0.6  # 다리 길이/초
     blend_frames: int = 4
+    # 손 IK: 소스의 손 높이가 바닥(0) 근처이거나 그 아래로 내려갔을 때만 그쪽 팔에 IK 를 걸어 손을 바닥에 고정하고, 0 에서 벗어나면 풀어 준다
+    hand_ik: bool = True
+    hand_contact_height: float = 0.05   # 팔 길이 대비: 손 높이가 이 값 이하(바닥에 닿거나 파고듦)이면 접촉
+    hand_release_height: float = 0.12   # 팔 길이 대비: 한번 닿은 뒤 이 값을 넘어 떨어져야 IK 가 풀림 (경계에서 깜빡이지 않게)
     hip_drop: bool = True
     max_hip_drop: float = 0.15  # 다리 길이 대비 비율
     # 좌표 프레임 ('auto' 또는 '+X'..'-Z')
@@ -63,6 +68,10 @@ class RetargetSettings:
     tgt_fwd: str = "auto"
     # 본별 회전 보정: 타깃 관절 -> (x,y,z) 도. 표준 프레임 축(X=좌우, Y=위, Z=앞) 기준, 하위 본 전체에 적용.
     rot_offsets: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
+    # 본별 위치 보정: 타깃 관절 -> (x,y,z) 타깃 단위. 바인드 포즈 기준 표준 프레임 축(X=좌우, Y=위, Z=앞)으로 그 본(과 하위 본 전체)을 옮기고, 모션 중에는 부모를 따라간다.
+    pos_offsets: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
+    # 본별 크기 보정: 타깃 관절 -> 배율(1=그대로). 그 본을 기준점으로 하위 본 위치와 그 본들에 붙은 메시를 키운다/줄인다.
+    scale_offsets: Dict[int, float] = field(default_factory=dict)
     # 소스와 타깃이 같은 스켈레톤(본 이름·계층·모양이 같음)이고 사람 모양이 아니면 사람 본 매핑·좌표축 추정을 거치지 않고 본 이름대로 그대로 적용한다 (core/rigmatch)
     same_rig: bool = True
 
@@ -94,6 +103,7 @@ class RetargetResult:
     primary: Dict[int, int] = field(default_factory=dict)  # 타깃 본 -> 방향 기준이 된 매핑된 자식
     ik_applied: bool = False
     ghost_pos: Optional[np.ndarray] = None  # (T,Js,3) 타깃 표준 프레임·타깃 단위의 소스 고스트(타깃에 겹치도록 배치·회전 반영)
+    scale_cum: Optional[np.ndarray] = None  # (Jt,) 본별 누적 크기 배율 (크기 보정이 없으면 None). 메시 스키닝이 쓴다
 
 
 # --------------------------------------------------------------------------- 유틸
@@ -192,6 +202,17 @@ def retarget(
     pair_of: Dict[int, int] = {}
     for s, t in pairs:
         pair_of[t] = s
+    # 척추 본 개수/구성이 다르면(예: 소스 3개, 타깃 2개) 타깃 척추마다 소스 척추 값을 자연스럽게 섞는다
+    spine_mix: Dict[int, List[Tuple[int, float]]] = {}
+    if rig is None and src_slots and tgt_slots:
+        for name, parts in spine_blend(src_slots, tgt_slots).items():
+            tj = tgt_slots[name]
+            spine_mix[tj] = [(src_slots[sn], w) for sn, w in parts]
+            pair_of[tj] = max(spine_mix[tj], key=lambda x: x[1])[0]   # 방향 보정 등은 가장 비중 큰 소스 본 기준
+        if spine_mix:
+            pairs = [(s, t) for s, t in pairs if t not in spine_mix] + [(pair_of[t], t) for t in spine_mix]
+            warnings.append("ℹ 소스/타깃의 척추 본 구성이 달라 척추 움직임을 비율로 섞어 적용했습니다 (소스 %d개 → 타깃 %d개)"
+                            % (sum(1 for x in SPINE_SLOTS if x in src_slots), sum(1 for x in SPINE_SLOTS if x in tgt_slots)))
     mapped_t = sorted(pair_of)
     if not mapped_t:
         raise ValueError("매핑된 본이 없습니다.")
@@ -322,6 +343,11 @@ def retarget(
     for t in mapped_t:
         s = pair_of[t]
         D = Q.mul(rs[:, s], Q.conj(brs[s]))
+        if t in spine_mix and len(spine_mix[t]) == 2:
+            (sa, wa), (sb, wb) = spine_mix[t]
+            Da = Q.mul(rs[:, sa], Q.conj(brs[sa]))
+            Db = Q.mul(rs[:, sb], Q.conj(brs[sb]))
+            D = Q.slerp(Da, Db, wb)
         rot_des[t] = Q.mul(D, Q.mul(corr[t], brt[t]))
     for tj, eul in st.rot_offsets.items():
         if not any(abs(x) > 1e-9 for x in eul) or tj < 0 or tj >= Jt:
@@ -383,7 +409,25 @@ def retarget(
         if ch.upper not in mapped_set or ch.lower not in mapped_set or ch.foot not in mapped_set:
             warnings.append("IK 체인 '%s': 세 관절이 모두 매핑되어 있어야 합니다." % ch.label)
             continue
+        if ch.kind == "hand" and not st.hand_ik:
+            continue
         valid_chains.append(ch)
+
+    # 소스 바닥 높이(표준 프레임 Y): 매핑된 본 바인드 위치 중 가장 낮은 곳 — 손 높이 0 의 기준
+    ground_src = float(min(bps[pair_of[t], 1] for t in mapped_t))
+    ground_tgt = float(min(bpt[t, 1] for t in mapped_t))
+
+    def hand_contact(h: np.ndarray, lo: float, hi: float) -> np.ndarray:
+        """높이 h(바닥=0) 로 접촉 판정. lo 이하로 내려가면 접촉 시작, hi 를 넘어서 떨어져야 접촉 끝 (히스테리시스)."""
+        m = np.zeros(len(h), bool)
+        on = False
+        for i, v in enumerate(h):
+            if not on and v <= lo:
+                on = True
+            elif on and v > hi:
+                on = False
+            m[i] = on
+        return clean_mask(m, min_len=2, max_gap=1)
 
     def chain_lengths(ch: IKChain):
         return float(np.linalg.norm(bpt[ch.lower] - bpt[ch.upper])), float(np.linalg.norm(bpt[ch.foot] - bpt[ch.lower]))
@@ -393,7 +437,7 @@ def retarget(
         for ch in valid_chains:
             l1, l2 = chain_lengths(ch)
             Lleg = l1 + l2
-            Ls = Lleg / max(k, 1e-9)  # 소스 단위 다리 길이 추정
+            Ls = Lleg / max(k, 1e-9)  # 소스 단위 다리(팔) 길이 추정
             sc = ps[:, ch.src_foot]
             ymin = sc[:, 1].min()
             if T > 1:
@@ -401,7 +445,11 @@ def retarget(
             else:
                 vel = np.zeros_like(sc)
             sp = np.linalg.norm(vel, axis=1)
-            contact = clean_mask((sc[:, 1] - ymin < st.contact_height * Ls) & (sp < st.contact_speed * Ls))
+            if ch.kind == "hand":
+                # 손: 높이(소스 바닥=0)가 0 근처이거나 0 아래일 때만 접촉. 속도는 보지 않는다 (바닥을 짚고 끄는 동작도 있다)
+                contact = hand_contact(sc[:, 1] - ground_src, st.hand_contact_height * Ls, st.hand_release_height * Ls)
+            else:
+                contact = clean_mask((sc[:, 1] - ymin < st.contact_height * Ls) & (sp < st.contact_speed * Ls))
             fkc = Q.rotate(Ft, Wp[:, ch.foot])
             Dc = bpt[ch.foot] + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
             goal = Dc.copy()
@@ -416,10 +464,16 @@ def retarget(
                 w[a : b + 1] = ramp
                 goal[a : b + 1] = Dc[a : b + 1] * (1 - ramp)[:, None] + plant[None, :] * ramp[:, None]
             follow = float(np.clip(st.ik_follow, 0.0, 1.0))
-            amt = np.maximum(follow, w)  # IK 를 얼마나 적용할지
-            target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
-            if st.ground_clamp:
-                target[:, 1] = np.maximum(target[:, 1], bpt[ch.foot, 1] + st.ground_offset)
+            if ch.kind == "hand":
+                amt = w      # 손 IK 는 접촉 구간(과 부드러운 전환)에서만 — 0 에서 벗어나면 풀린다
+                # 바닥에 닿은(또는 파고든) 손은 타깃 바닥 위에 둔다
+                goal[:, 1] = np.maximum(goal[:, 1], ground_tgt + st.ground_offset)
+                target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
+            else:
+                amt = np.maximum(follow, w)  # IK 를 얼마나 적용할지
+                target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
+                if st.ground_clamp:
+                    target[:, 1] = np.maximum(target[:, 1], bpt[ch.foot, 1] + st.ground_offset)
             plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg))
         return plans
 
@@ -427,10 +481,14 @@ def retarget(
     Wr, Wp, Lr, Lp = build(zero)
     plans: List[ChainPlan] = plan_chains(Wp) if valid_chains else []
     drop = zero
-    if st.foot_ik and valid_chains:
-        if st.hip_drop and com >= 0:
+    hand_on = any(c.kind == "hand" for c in valid_chains)
+    any_applied = False
+    if valid_chains and (st.foot_ik or hand_on):
+        if st.foot_ik and st.hip_drop and com >= 0:
             need = np.zeros(T)
             for ch, pl in zip(valid_chains, plans):
+                if ch.kind != "foot":
+                    continue
                 A = Q.rotate(Ft, Wp[:, ch.upper])
                 v = pl.target[:, 1] - A[:, 1]
                 h = np.linalg.norm((pl.target - A)[:, [0, 2]], axis=1)
@@ -445,7 +503,14 @@ def retarget(
                 Wr, Wp, Lr, Lp = build(drop)
                 plans = plan_chains(Wp)
         # 2본 IK 적용
+        applied = False
         for ch, pl in zip(valid_chains, plans):
+            if ch.kind == "foot" and not st.foot_ik:
+                continue
+            if ch.kind == "hand" and not pl.contact.any():
+                continue          # 손이 바닥에 닿은 적이 없으면 손 IK 는 아무것도 바꾸지 않는다
+            applied = True
+            any_applied = True
             l1, l2 = chain_lengths(ch)
             A = Q.rotate(Ft, Wp[:, ch.upper])
             B = Q.rotate(Ft, Wp[:, ch.lower])
@@ -463,14 +528,51 @@ def retarget(
             Rlw = Q.mul(FtI, Rl2)
             Rfw = Wr[:, ch.foot]
             pu = tgt.parents[ch.upper]
-            Lr[:, ch.upper] = Q.mul(Q.conj(Wr[:, pu]), Ruw) if pu >= 0 else Ruw
-            Lr[:, ch.lower] = Q.mul(Q.conj(Ruw), Rlw)
-            Lr[:, ch.foot] = Q.mul(Q.conj(Rlw), Rfw)
+            nu = Q.mul(Q.conj(Wr[:, pu]), Ruw) if pu >= 0 else Ruw
+            nl = Q.mul(Q.conj(Ruw), Rlw)
+            nf = Q.mul(Q.conj(Rlw), Rfw)
+            if ch.kind == "hand":
+                # 손 IK 는 바닥에 닿은(전환 포함) 프레임에서만 — 벗어난 프레임은 원래 값 그대로 (완전히 풀림)
+                on = (pl.weight > 1e-9)[:, None]
+                nu = np.where(on, nu, Lr[:, ch.upper])
+                nl = np.where(on, nl, Lr[:, ch.lower])
+                nf = np.where(on, nf, Lr[:, ch.foot])
+                Ruw = np.where(on, Ruw, Wr[:, ch.upper])
+                Rlw = np.where(on, Rlw, Wr[:, ch.lower])
+            Lr[:, ch.upper], Lr[:, ch.lower], Lr[:, ch.foot] = nu, nl, nf
             Wr[:, ch.upper], Wr[:, ch.lower] = Ruw, Rlw
-        if any(pl.fail.any() for pl in plans):
+        if any(pl.fail.any() for ch, pl in zip(valid_chains, plans) if ch.kind == "foot"):
             warnings.append("일부 프레임에서 다리가 목표 발 위치에 닿지 않습니다(다리가 완전히 펴짐).")
+        if any(pl.fail.any() for ch, pl in zip(valid_chains, plans) if ch.kind == "hand"):
+            warnings.append("일부 프레임에서 팔이 바닥에 고정할 손 위치에 닿지 않습니다(팔이 완전히 펴짐).")
+        hands_used = [ch.label for ch, pl in zip(valid_chains, plans) if ch.kind == "hand" and pl.contact.any()]
+        if hands_used:
+            warnings.append("ℹ 손이 바닥(높이 0)에 닿는 구간에서 %s 에 IK 를 걸었습니다 (벗어나면 풀림)" % ", ".join(hands_used))
 
     Lr = Q.make_continuous(Q.normalize(Lr))
+    scale_cum = None
+    if st.scale_offsets or st.pos_offsets:
+        Lp = Lp.copy()
+        # 크기 보정: 본 j 의 배율은 j 아래 전체(j 의 자식 위치, 그 아래 메시)에 걸린다 -> 누적 배율 x 로컬 위치
+        if st.scale_offsets:
+            cum = np.ones(Jt)
+            for j in range(Jt):
+                f_j = float(st.scale_offsets.get(j, 1.0)) if 0 <= j < Jt else 1.0
+                p = int(tgt.parents[j])
+                cum[j] = f_j * (cum[p] if p >= 0 else 1.0)
+            for j in range(Jt):
+                p = int(tgt.parents[j])
+                if p >= 0:
+                    Lp[:, j] *= cum[p]
+            scale_cum = cum
+        # 위치 보정: 바인드 포즈 기준 표준 프레임 이동량을 부모 본의 로컬 벡터로 바꿔 더한다 -> 모션 중에도 부모를 따라 움직인다 (루트는 월드 이동, Yaw 반영)
+        for j, d in st.pos_offsets.items():
+            if not (0 <= j < Jt) or not any(abs(x) > 1e-12 for x in d):
+                continue
+            dv = np.asarray(d, dtype=float)
+            p = int(tgt.parents[j])
+            vec = Q.rotate(FtI, Q.rotate(yaw_q, dv)) if p < 0 else Q.rotate(Q.conj(bwr_t[p]), Q.rotate(FtI, dv))
+            Lp[:, j] += vec
     anim = Animation(sanim.name, fps, Lr, Lp)
 
     # ---- 소스 고스트: 소스 COM 의 바인드 위치를 타깃 COM 의 바인드 위치에 올려서 겹쳐 보이게 한다(루트 보정·회전·배치 포함). 높이는 소스 바닥 기준 그대로.
@@ -483,7 +585,7 @@ def retarget(
         ghost = g
     return RetargetResult(
         anim, float(k), (Fs, desc_s), (Ft, desc_t), plans, drop, warnings, list(pairs), com, corr, ps,
-        chains=valid_chains, primary=primary, ik_applied=bool(st.foot_ik and valid_chains), ghost_pos=ghost,
+        chains=valid_chains, primary=primary, ik_applied=any_applied, ghost_pos=ghost, scale_cum=scale_cum,
     )
 
 
@@ -493,6 +595,10 @@ def default_chains(src_slots: Dict[str, int], tgt_slots: Dict[str, int]) -> List
         need = ["%s_UpLeg" % side, "%s_LowLeg" % side, "%s_Foot" % side]
         if all(n in tgt_slots for n in need) and ("%s_Foot" % side) in src_slots:
             out.append(IKChain(src_slots["%s_Foot" % side], tgt_slots[need[0]], tgt_slots[need[1]], tgt_slots[need[2]], "%s 다리" % ("왼쪽" if side == "L" else "오른쪽")))
+    for side in ("L", "R"):    # 손 IK 체인: 소스 손이 바닥에 닿을 때만 쓰인다
+        need = ["%s_UpperArm" % side, "%s_LowerArm" % side, "%s_Hand" % side]
+        if all(n in tgt_slots for n in need) and ("%s_Hand" % side) in src_slots:
+            out.append(IKChain(src_slots["%s_Hand" % side], tgt_slots[need[0]], tgt_slots[need[1]], tgt_slots[need[2]], "%s 팔" % ("왼쪽" if side == "L" else "오른쪽"), "hand"))
     return out
 
 

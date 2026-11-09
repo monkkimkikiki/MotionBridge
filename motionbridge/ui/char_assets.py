@@ -20,6 +20,8 @@ from ..core.skelgraph import Group, Rec
 from .viewer import ASSET_MIME
 
 ROLE = Qt.ItemDataRole.UserRole
+# 플레이어블 캐릭터 표시는 인식이 정확해질 때까지 화면에서 꺼 둔다 (코드는 그대로 두고 이 스위치만 켜면 된다)
+PLAYER_FEATURE = False
 PLAYER_MARK = "🎮 [플레이어블]  "      # 플레이어블 캐릭터(직접 표시 / 게임 데이터로 확인) 이름 앞에 붙는 표시 (목록 맨 위에 모아 보여 준다)
 PLAYER_GUESS = "🎮? [플레이어블 추정]  "  # 이름·폴더만 보고 추정한 것 (게임 데이터로 확인하지 못함)
 MAX_FIRST = 4000        # 한 번의 검색에서 파일 안을 열어 볼 최대 개수 (넘으면 알리고 앞부분만)
@@ -124,6 +126,16 @@ class CharAssetPanel(QWidget):
         h.addWidget(self.btn_send)
         v.addLayout(h)
         h = QHBoxLayout()
+        self.btn_find_player = self.btn_player = None
+        if PLAYER_FEATURE:
+            self._build_player_buttons(h)
+        self.btn_clear = QPushButton("검사 기록 지우기")
+        self.btn_clear.clicked.connect(lambda *_a: self.clear_index())
+        h.addWidget(self.btn_clear)
+        h.addStretch(1)
+        v.addLayout(h)
+
+    def _build_player_buttons(self, h) -> None:
         self.btn_find_player = QPushButton("🎮  플레이어 자동 확인")
         self.btn_find_player.setToolTip("게임 데이터에서 플레이어가 조종하는 캐릭터를 직접 찾습니다: 게임 설정의 기본 게임모드 → 기본 폰 블루프린트가 쓰는 메시 → 그 스켈레톤. "
                                         "이름이 아니라 데이터로 확인하며, 확인된 캐릭터는 🎮 로 표시되어 맨 위로 올라갑니다.")
@@ -133,11 +145,6 @@ class CharAssetPanel(QWidget):
         self.btn_player.setToolTip("고른 캐릭터를 '플레이어블 캐릭터' 로 직접 표시하거나(맨 위로 올라갑니다) 해제합니다. 이름으로 잘못 짐작한 것을 바로잡을 때 쓰세요. 한 번 정하면 기억합니다.")
         self.btn_player.clicked.connect(lambda *_a: self.toggle_player())
         h.addWidget(self.btn_player)
-        self.btn_clear = QPushButton("검사 기록 지우기")
-        self.btn_clear.clicked.connect(lambda *_a: self.clear_index())
-        h.addWidget(self.btn_clear)
-        h.addStretch(1)
-        v.addLayout(h)
 
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
@@ -224,7 +231,8 @@ class CharAssetPanel(QWidget):
 
         def done(n):
             self._show(idx, self.query.text().strip(), None, extra=" (새로 읽은 파일 %d개)" % n)
-            self.find_players(quiet=True)     # 캐릭터 목록이 만들어졌으면 이어서 게임 데이터로 플레이어도 확인한다
+            if PLAYER_FEATURE:
+                self.find_players(quiet=True)     # 캐릭터 목록이 만들어졌으면 이어서 게임 데이터로 플레이어도 확인한다
 
         self.win.run_async(job, done, "캐릭터 자동 찾는 중 (파일 안 읽기)", cancellable=True)
 
@@ -252,7 +260,7 @@ class CharAssetPanel(QWidget):
 
     # ------------------------------------------------------------------ 보이기
     def _show(self, idx: skelgraph.SkelIndex, q: str, touch: Optional[Set[str]], extra: str = "") -> None:
-        groups = skelgraph.build_groups(idx.all(), q, touch, idx.marks, idx.proofs)
+        groups = skelgraph.build_groups(idx.all(), q, touch, idx.marks, idx.proofs, players=PLAYER_FEATURE)
         self.groups = groups
         self.tree.clear()
         for g in groups:

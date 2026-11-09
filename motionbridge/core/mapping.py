@@ -214,6 +214,36 @@ def auto_map(skel: Skeleton) -> Dict[str, int]:
     return out
 
 
+SPINE_SLOTS = ("Spine", "Spine1", "Spine2")
+
+
+def spine_blend(src_map: Dict[str, int], tgt_map: Dict[str, int]) -> Dict[str, List[Tuple[str, float]]]:
+    """소스와 타깃의 척추 본 개수/구성이 다를 때, 타깃 척추 슬롯마다 '소스 척추 슬롯 몇 개를 어떤 비율로 섞을지'.
+
+    각 척추 본이 척추 전체 길이에서 차지하는 구간의 중심끼리 맞춘다 (소스 3개 → 타깃 2개면 타깃 아래쪽 = 소스 1·2번째 사이,
+    타깃 위쪽 = 소스 2·3번째 사이). 양 끝 바깥은 가장 가까운 본에 고정. 구성이 같으면 빈 dict (기존 이름 대응 그대로)."""
+    S = [x for x in SPINE_SLOTS if x in src_map]
+    T = [x for x in SPINE_SLOTS if x in tgt_map]
+    if not S or not T or S == T:
+        return {}
+    ns, nt = len(S), len(T)
+    out: Dict[str, List[Tuple[str, float]]] = {}
+    for j, name in enumerate(T):
+        c = (j + 0.5) / nt                      # 이 타깃 본 구간의 중심(0~1)
+        f = c * ns - 0.5                         # 소스 본 번호로 환산(중심 기준)
+        f = min(max(f, 0.0), ns - 1.0)
+        i0 = int(np.floor(f))
+        i1 = min(i0 + 1, ns - 1)
+        w = f - i0
+        if w < 1e-6 or i0 == i1:
+            out[name] = [(S[i0], 1.0)]
+        elif w > 1 - 1e-6:
+            out[name] = [(S[i1], 1.0)]
+        else:
+            out[name] = [(S[i0], 1.0 - w), (S[i1], w)]
+    return out
+
+
 def pairs_from_slots(src_map: Dict[str, int], tgt_map: Dict[str, int]) -> List[Tuple[int, int]]:
     pairs = []
     used_t = set()

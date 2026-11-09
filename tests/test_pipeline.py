@@ -145,11 +145,13 @@ def test_profile_roundtrip_and_settings():
         pr = Project()
         pr.load_source(src)
         pr.load_target(tgt)
-        assert len(pr.pairs()) >= 15 and len(pr.chains()) == 2
+        assert len(pr.pairs()) >= 15 and len([c for c in pr.chains() if c.kind == 'foot']) == 2
         pr.settings.scale_mult = 1.07
         pr.settings.hip_offset = (0.0, 0.03, 0.0)
         pr.settings.rot_offsets = {pr.tgt_slots["Spine1"]: (5.0, 0.0, -3.0)}
         pr.settings.com_joint = pr.tgt_slots["Hips"]
+        pr.settings.pos_offsets = {pr.tgt_slots["Head"]: (0.0, 0.02, 0.01)}
+        pr.settings.scale_offsets = {pr.tgt_slots["L_Hand"]: 1.5}
         pr.use_chain["R"] = False
         p = os.path.join(d, "prof.json")
         pr.save_profile(p)
@@ -160,7 +162,8 @@ def test_profile_roundtrip_and_settings():
         assert pr2.load_profile(p) == []
         assert pr2.settings.scale_mult == 1.07 and pr2.settings.hip_offset == (0.0, 0.03, 0.0)
         assert pr2.settings.rot_offsets == pr.settings.rot_offsets and pr2.settings.com_joint == pr.settings.com_joint
-        assert len(pr2.chains()) == 1
+        assert len([c for c in pr2.chains() if c.kind == 'foot']) == 1
+        assert pr2.settings.pos_offsets == pr.settings.pos_offsets and pr2.settings.scale_offsets == pr.settings.scale_offsets
         r2 = pr2.run()
         assert np.allclose(r1.anim.rot, r2.anim.rot) and np.allclose(r1.anim.pos, r2.anim.pos)
         # 다른 이름의 타깃에는 경고만 내고 적용

@@ -113,8 +113,22 @@ def main():
         mw.set_extract_list([P + "A_Slash.uasset"], "anim")
         check(mw.ex_list.all_paths() == [P + "A_Slash.uasset"] and mw.ex_kind.currentData() == "anim", "추출 목록으로 보내기")
 
-        # 플레이어블 캐릭터: 아이콘 + 맨 위 + 직접 표시/해제
+        # 플레이어블 표시는 꺼져 있다 (인식이 정확해질 때까지): 아이콘도 맨 위 정렬도 없고 버튼도 없다
+        check(C.PLAYER_FEATURE is False and pn.btn_player is None and pn.btn_find_player is None, "플레이어블 기능은 화면에서 꺼짐")
         pn.clear_index()
+        _pi = pn._index()
+        for r in [S.Rec("Proj/Content/Characters/Player/SK_Hero.uasset", "mesh", "SK_Hero", "/Game/Characters/Player/SKEL_Hero.SKEL_Hero", bones=70),
+                  S.Rec("Proj/Content/Characters/Monster/SK_Ogre.uasset", "mesh", "SK_Ogre", "/Game/Characters/Monster/SKEL_Ogre.SKEL_Ogre", bones=60),
+                  S.Rec("Proj/Content/Characters/Monster/A_Roar.uasset", "anim", "A_Roar", "/Game/Characters/Monster/SKEL_Ogre.SKEL_Ogre", frames=30, length=1.0, tracks=60)]:
+            _pi.add(r)
+        pn._show(_pi, "", None)
+        _tt = [pn.tree.topLevelItem(i).text(0) for i in range(pn.tree.topLevelItemCount())]
+        check(not any("🎮" in x for x in _tt) and "Ogre" in _tt[0], "꺼져 있으면 표시도 없고 기존 순서(애니 많은 순): %s" % _tt)
+        pn.clear_index()
+        # --- 아래는 기능을 켰을 때의 동작 (나중에 인식이 정확해지면 켠다)
+        C.PLAYER_FEATURE = True
+        pn._build_player_buttons(type("H", (), {"addWidget": lambda *a: None})())
+        # 플레이어블 캐릭터: 아이콘 + 맨 위 + 직접 표시/해제
         SKP = "/Game/Characters/Player/SKEL_Hero.SKEL_Hero"
         SKM = "/Game/Characters/Monster/SKEL_Ogre.SKEL_Ogre"
         pidx = pn._index()
@@ -163,6 +177,7 @@ def main():
         pn.clear_index()
         check(S.norm_key(SKM) in pn._index().marks and not pn._index().proofs, "검사 기록 지워도 직접 표시 유지, 확인 결과는 지움")
 
+        C.PLAYER_FEATURE = False
         # 기록 지우기
         pn.clear_index()
         check(not pn._index().all() and pn.tree.topLevelItemCount() == 0, "검사 기록 지우기")

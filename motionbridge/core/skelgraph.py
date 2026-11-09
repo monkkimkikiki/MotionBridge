@@ -185,13 +185,14 @@ def guess_group_name(g: Group) -> str:
 
 
 def build_groups(records: Iterable[Rec], query: str = "", touch=None, marks: Optional[Dict[str, bool]] = None,
-                 proofs: Optional[Dict[str, str]] = None) -> List[Group]:
+                 proofs: Optional[Dict[str, str]] = None, players: bool = True) -> List[Group]:
     """records -> 스켈레톤별 그룹. query(쉼표 = 모두 포함, 대소문자 무시)가 있으면 그 말이 이름/경로에 든 그룹만.
 
     touch: 이번 검색에 걸린 에셋 경로 집합. 주면 '걸린 파일이 하나라도 든 그룹'도 보인다 (검색어가 애니메이션 이름에만 있어도 그 캐릭터가 나오게).
     marks: 스켈레톤 키 -> True/False. 사람이 직접 '플레이어블이다/아니다' 로 정한 것 (자동 추정보다 우선).
     proofs: 스켈레톤 키 -> 이유. 게임 데이터(기본 게임모드의 플레이어 폰 등)에서 플레이어블이라고 확인된 것. 이름 추정보다 우선.
     플레이어블 캐릭터는 항상 맨 위로 올린다 (직접 표시 / 데이터로 확인 → 이름으로 추정 순).
+    players=False 면 플레이어 판정·정렬을 아예 하지 않는다 (화면에서 이 기능을 꺼 둘 때).
     """
     groups: Dict[str, Group] = {}
     by_key: Dict[str, Rec] = {}
@@ -241,6 +242,9 @@ def build_groups(records: Iterable[Rec], query: str = "", touch=None, marks: Opt
                 continue
         if g.meshes or g.anims or g.skeleton_assets:
             out.append(g)
+    if not players:
+        out.sort(key=lambda g: (-(len(g.meshes) > 0), -len(g.anims), g.name.lower()))
+        return out
     marks = marks or {}
     proofs = proofs or {}
     for g in out:
