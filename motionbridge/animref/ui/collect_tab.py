@@ -14,7 +14,7 @@ from ..core.settings import SPEED_NAMES
 
 from .widgets import card, muted, restyle
 from .boss_panel import BossPanel
-from .widgets import open_path
+from .widgets import open_path, reveal
 
 OBS_HELP = """<h3>OBS 연결 방법 (처음 한 번만)</h3>
 <ol>
@@ -163,6 +163,16 @@ class CollectTab(QWidget):
         self.drop = DropZone()
         self.drop.filesDropped.connect(self.add_files)
         l2.addWidget(self.drop, 1)
+        prow2 = QHBoxLayout()
+        b_files = QPushButton("📄 영상 파일 선택…")
+        b_files.setToolTip("탐색기에서 영상 파일을 직접 골라요 (여러 개 가능). 끌어다 놓지 않아도 돼요.")
+        b_files.clicked.connect(self._pick_files)
+        b_folder = QPushButton("📁 폴더 가져오기…")
+        b_folder.setToolTip("폴더를 골라 그 안의 영상(하위 폴더 포함)을 한꺼번에 분석 목록에 넣어요.")
+        b_folder.clicked.connect(self._pick_folder)
+        prow2.addWidget(b_files)
+        prow2.addWidget(b_folder)
+        l2.addLayout(prow2)
         self.queue = QListWidget()
         self.queue.setMaximumHeight(110)
         self.queue.itemDoubleClicked.connect(lambda it: self.main.open_editor(it.data(Qt.ItemDataRole.UserRole)))
@@ -217,9 +227,9 @@ class CollectTab(QWidget):
         b_ref.setMaximumWidth(36)
         b_ref.clicked.connect(self.refresh_sources)
         b_dir = QPushButton("📂")
-        b_dir.setToolTip("녹화 폴더 열기")
+        b_dir.setToolTip("고른 영상 파일이 있는 폴더를 열어요 (탐색기에서 그 파일이 선택돼요). 고른 영상이 없으면 녹화 폴더를 열어요.")
         b_dir.setMaximumWidth(36)
-        b_dir.clicked.connect(self._open_rec_dir)
+        b_dir.clicked.connect(self._reveal_source)
         for b in (self.btn_src_all, self.btn_src_range, self.btn_src_name, b_ref, b_dir):
             srow3.addWidget(b)
         l2.addLayout(srow3)
@@ -489,6 +499,40 @@ class CollectTab(QWidget):
             return
         self.main.start_job("구간 분석", pipeline.process_ranges, (path, list(dlg.ranges), copy.deepcopy(self.main.s)),
                             on_done=self.main.on_clips_made)
+
+    def _reveal_source(self):
+        """고른 원본 영상의 파일 위치를 연다 (고른 게 없으면 녹화 폴더)."""
+        it = self.src_list.currentItem()
+        path = it.data(Qt.ItemDataRole.UserRole) if it else None
+        if path and Path(path).exists():
+            reveal(path)
+        elif path:
+            QMessageBox.information(self, "원본 없음", "영상 파일이 그 자리에 없어요 (옮겼거나 지웠어요):\n" + str(path))
+        else:
+            self._open_rec_dir()
+
+    def _pick_files(self):
+        exts = " ".join(f"*{x}" for x in sorted(media.VIDEO_EXTS))
+        files, _ = QFileDialog.getOpenFileNames(self, "분석할 영상 선택", sources.best_start_dir(self.main.s),
+                                                f"영상 파일 ({exts});;모든 파일 (*)")
+        if files:
+            self.add_files(files)
+            self.refresh_sources()
+
+    def _pick_folder(self):
+        """폴더를 골라 그 안의 영상(하위 폴더 포함)을 모두 분석 목록에 넣는다."""
+        d = QFileDialog.getExistingDirectory(self, "영상이 들어 있는 폴더 선택", sources.best_start_dir(self.main.s))
+        if not d:
+            return
+        files = sources.videos_in_folder(d, recursive=True)
+        if not files:
+            QMessageBox.information(self, "폴더", "이 폴더(하위 폴더 포함)에서 영상 파일을 찾지 못했어요.\n" + d)
+            return
+        self.main.s["last_dir"] = d
+        self.main.save_settings()
+        self.add_files(files)
+        self.refresh_sources()
+        self.main.flash("영상 %d개를 분석 목록에 넣었어요 (%s)" % (len(files), d))
 
     def _open_rec_dir(self):
         dirs = sources.candidate_dirs(self.main.s)

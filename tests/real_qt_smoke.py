@@ -309,6 +309,7 @@ try:
     _ct.refresh_sources()
     check(_ct._origin("C:/없는/영상.mp4") == "dropped", "수집 탭: 모르는 영상은 직접 넣은 영상으로 취급")
     check(hasattr(_ct, "rename_source") and hasattr(_ct, "src_clips") and hasattr(_ct, "btn_src_name"), "수집 탭: 영상 제목 붙이기 + 이 영상의 클립 목록")
+    check(hasattr(_ct, "_pick_files") and hasattr(_ct, "_pick_folder") and hasattr(_ct, "_reveal_source"), "수집 탭: 파일/폴더 가져오기 + 원본 위치 열기 버튼")
     from motionbridge.animref.ui import progress_dialog as _pd
     check(hasattr(_pd.ProgressDialog, "exec") and hasattr(_pd.ProgressDialog, "_progress"), "진행 현황 창 준비")
     from motionbridge.animref.ui import range_dialog as _rd

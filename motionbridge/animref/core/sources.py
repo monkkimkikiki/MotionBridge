@@ -27,6 +27,24 @@ def candidate_dirs(s, extra=()):
     return dirs
 
 
+def videos_in_folder(folder, recursive=True, limit=500):
+    """폴더 안의 영상 파일 목록 (이름순). recursive 면 하위 폴더까지 (limit 개까지)."""
+    root = Path(folder)
+    if not root.is_dir():
+        return []
+    it = root.rglob("*") if recursive else root.iterdir()
+    out = []
+    try:
+        for f in it:
+            if f.is_file() and f.suffix.lower() in media.VIDEO_EXTS:
+                out.append(str(f))
+                if len(out) >= limit:
+                    break
+    except OSError:
+        pass
+    return sorted(out, key=lambda x: x.lower())
+
+
 def best_start_dir(s, sources=()):
     """파일 선택 창을 처음 열 폴더."""
     for d in candidate_dirs(s):

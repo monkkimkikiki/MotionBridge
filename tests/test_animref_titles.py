@@ -42,5 +42,15 @@ with tempfile.TemporaryDirectory() as d:
     check(found and found[0]["title"] == "이름없는자 보스전" and found[0]["name"] == "2026-11-09 14-03-22.mp4", "원본 목록에 제목 포함, 파일 이름은 그대로")
     check(os.path.isfile(v), "영상 파일은 건드리지 않음")
 
+    # 폴더 가져오기: 하위 폴더까지 영상만 모아 이름순으로
+    fd = os.path.join(d, "vids")
+    os.makedirs(os.path.join(fd, "sub"))
+    for nm in ("b.mp4", "a.MKV", "memo.txt", os.path.join("sub", "c.mov")):
+        open(os.path.join(fd, nm), "wb").write(b"x")
+    got = [os.path.relpath(x, fd).replace("\\", "/") for x in sources.videos_in_folder(fd)]
+    check(got == ["a.MKV", "b.mp4", "sub/c.mov"], "폴더에서 영상만(하위 폴더 포함, 이름순): %s" % got)
+    check([os.path.basename(x) for x in sources.videos_in_folder(fd, recursive=False)] == ["a.MKV", "b.mp4"], "하위 폴더 제외 옵션")
+    check(sources.videos_in_folder(os.path.join(d, "없는폴더")) == [] and len(sources.videos_in_folder(fd, limit=2)) == 2, "없는 폴더/개수 제한")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)
