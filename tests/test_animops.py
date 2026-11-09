@@ -259,6 +259,16 @@ def test_project_frame_edits():
         assert not p.edits and not p.is_edited(), "새 소스를 열면 편집 초기화"
 
 
+def test_merge_edit():
+    E = A.EditOptions
+    assert A.merge_edit(None, None) is None
+    a = E(speed=2.0, fps=60.0)
+    assert A.merge_edit(a, E()) is a and A.merge_edit(E(), a) is a
+    m = A.merge_edit(E(speed=2.0, fps=30.0, trim_start=3), E(fps=60.0, compress=True, rot_tol_deg=1.0, loop_frames=4))
+    assert m.speed == 2.0 and m.fps == 60.0 and m.trim_start == 3 and m.loop_frames == 4
+    assert m.compress and m.rot_tol_deg == 1.0 and m.active()
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):

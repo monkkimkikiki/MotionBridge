@@ -302,6 +302,27 @@ def reconstruct(anim: Animation, keys: KeySet) -> Animation:
     return Animation(anim.name, anim.fps, Q.make_continuous(rot), pos)
 
 
+def merge_edit(a: Optional[EditOptions], b: Optional[EditOptions]) -> Optional[EditOptions]:
+    """두 가공 옵션을 합친다. 같은 항목이면 b 가 기본값이 아닐 때 b 를 쓰고, 아니면 a 를 쓴다."""
+    if a is None or not a.active():
+        return b
+    if b is None or not b.active():
+        return a
+    d = EditOptions()
+    return EditOptions(
+        trim_start=b.trim_start if b.trim_start > 0 else a.trim_start,
+        trim_end=b.trim_end if b.trim_end is not None else a.trim_end,
+        speed=b.speed if abs(b.speed - d.speed) > 1e-9 else a.speed,
+        frames=b.frames or a.frames,
+        seconds=b.seconds or a.seconds,
+        fps=b.fps or a.fps,
+        loop_frames=b.loop_frames if b.loop_frames > 0 else a.loop_frames,
+        compress=bool(a.compress or b.compress),
+        rot_tol_deg=b.rot_tol_deg if b.compress else a.rot_tol_deg,
+        pos_tol_cm=b.pos_tol_cm if b.compress else a.pos_tol_cm,
+    )
+
+
 # ------------------------------------------------------------------------------------------ 한 번에 적용
 def apply_edit(anim: Animation, opt: Optional[EditOptions], units_per_meter: float = 100.0,
                skel_parents: Optional[np.ndarray] = None) -> Tuple[Animation, Optional[KeySet], EditInfo]:

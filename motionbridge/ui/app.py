@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import os
 import sys
 from typing import Dict, List, Optional
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit, textmatch
+from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, osopen, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core.history import History
 from ..core.loader import FILE_FILTER
@@ -1203,11 +1204,52 @@ class MainWindow(QMainWindow):
         v.addWidget(b)
         lay.addWidget(g)
 
+        # 영상 찾기 탭의 '추출할 애니메이션 가공'과 같은 기능 — 내보낼 때 리타깃 결과에 적용된다
+        self.rt_edit = EditPanel("애니메이션 가공 (선택) — 늘리기 · fps · 구간 · 루프 · 키 압축", self.cfg, "rt_edit")
+        self.rt_edit.setToolTip("내보낼 때 리타깃 결과(또는 소스 모션)에 적용됩니다. 아무것도 안 고르면 가공하지 않습니다. "
+                                "내보내기 탭의 '추가 가공'과 함께 쓰면 두 설정이 합쳐집니다(같은 항목은 내보내기 탭 값이 우선).")
+        self.rt_edit_note = QLabel("")
+        self.rt_edit_note.setWordWrap(True)
+        self.rt_edit_note.setStyleSheet("color:#8aa")
+        for wd, sig in ((self.rt_edit.mode, "currentIndexChanged"), (self.rt_edit.value, "valueChanged"), (self.rt_edit.fps, "valueChanged"),
+                        (self.rt_edit.start, "valueChanged"), (self.rt_edit.end, "valueChanged"), (self.rt_edit.loop, "valueChanged"),
+                        (self.rt_edit.compress, "toggled"), (self.rt_edit.rot, "valueChanged"), (self.rt_edit.pos, "valueChanged")):
+            getattr(wd, sig).connect(lambda *_a: self._rt_edit_changed())
+        lay.addWidget(self.rt_edit)
+        lay.addWidget(self.rt_edit_note)
+        self._rt_edit_changed()
+
         b = QPushButton("모든 설정을 기본값으로")
         b.clicked.connect(self._reset_settings)
         lay.addWidget(b)
         lay.addStretch(1)
         return sc
+
+    def _rt_edit_changed(self) -> None:
+        """리타깃 탭 가공 패널: 값 기억 + 현재 클립이 어떻게 바뀌는지 한 줄로 보여준다."""
+        try:
+            self.rt_edit.save()
+        except Exception:
+            pass
+        opt = self.rt_edit.options()
+        if not opt.active():
+            self.rt_edit_note.setText("")
+            return
+        txt = "가공 켜짐 — 내보낼 때 적용됩니다."
+        try:
+            if self.pr.src is not None:
+                a = self.pr.anim
+                opt2 = dataclasses.replace(opt, compress=False)
+                b, _k, info = animops.apply_edit(a, opt2, 100.0, self.pr.src.skeleton.parents)
+                txt = "현재 클립: %d프레임 · %.1f fps → %d프레임 · %.1f fps%s (내보낼 때 적용)" % (
+                    info.frames_before, info.fps_before, info.frames_after, info.fps_after, " · 키 압축" if opt.compress else "")
+        except Exception:
+            pass
+        self.rt_edit_note.setText(txt)
+
+    def _export_edit(self):
+        """리타깃 탭 가공 + 내보내기 탭 가공을 합친 옵션."""
+        return animops.merge_edit(self.rt_edit.options(), self.edit_panel.options())
 
     # ------------------------------------------------------------------ 탭 3
     def _tab_quality(self) -> QWidget:
@@ -2003,9 +2045,10 @@ class MainWindow(QMainWindow):
         opt = ExportOptions(
             out_dir=out, presets=presets or ["blender"], formats=fmts or ["bvh"], include_skeleton=skel, what=what, clips=clips,
             include_mesh=self.cb_mesh.isChecked(), write_skeleton_json=self.cb_skel_json.isChecked(), blender=self.pr.blender,
-            edit=self.edit_panel.options(), organize=bool(self.cb_organize.isChecked()), char_name=self.char_edit.text().strip(),
+            edit=self._export_edit(), organize=bool(self.cb_organize.isChecked()), char_name=self.char_edit.text().strip(),
         )
         self.edit_panel.save()
+        self.rt_edit.save()
         bridge.save_config(self.cfg)
         self.pr.edit_info = None
         clip0 = self.pr.clip

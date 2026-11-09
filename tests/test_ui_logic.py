@@ -308,6 +308,20 @@ def test_full_flow():
         mw.do_export()
         walk2 = [os.path.join(r, f) for r, _ds, fl in os.walk(out2) for f in fl]
         assert walk2 and all(f.endswith("_curves.json") and os.sep + "Animations" + os.sep in f for f in walk2), walk2
+        # 리타깃 탭의 '애니메이션 가공'이 내보내기에 반영된다 (2배 빠르게 = 프레임 절반)
+        import json as _json
+        n_plain = _json.load(open(walk2[0], encoding="utf-8"))["frames"]
+        mw.rt_edit.mode.setCurrentIndex(mw.rt_edit.mode.findData("speed"))
+        mw.rt_edit.value.setValue(2.0)
+        assert "프레임" in mw.rt_edit_note.text() and mw.cfg.get("rt_edit_mode") == "speed", mw.rt_edit_note.text()
+        out_e = os.path.join(d, "e_edit")
+        mw.out_edit.setText(out_e)
+        mw.do_export()
+        walk_e = [os.path.join(r, f) for r, _ds, fl in os.walk(out_e) for f in fl]
+        n_fast = _json.load(open(walk_e[0], encoding="utf-8"))["frames"]
+        assert abs(n_fast - ((n_plain - 1) / 2.0 + 1)) <= 1, (n_plain, n_fast)
+        mw.rt_edit.mode.setCurrentIndex(0)
+        assert mw.rt_edit_note.text() == "", mw.rt_edit_note.text()
         # 형식 미선택 / FBX 인데 Blender 없음 -> 경고창, 파일 없음
         mw.cb_skeleton.setChecked(True)
         for cb in mw.cb_fmt.values():
