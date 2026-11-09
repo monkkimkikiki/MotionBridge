@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRect, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from ..core import boss, bossrun, settings as S
 from ..core.obs import ObsRecorder
@@ -209,7 +209,20 @@ class BossPanel(QWidget):
         row.addWidget(b)
         l.addLayout(row)
         self.g = QGroupBox("감지 설정 (시험하면서 조정하세요)")
-        f = QFormLayout(self.g)
+        gl = QVBoxLayout(self.g)
+        gl.setContentsMargins(6, 14, 6, 6)
+        self.scroll = QScrollArea()            # 항목이 많아서 칸이 좁아져도 숫자가 잘리지 않게 스크롤로 보여 준다
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setMinimumHeight(220)
+        self.scroll.setMaximumHeight(300)
+        gl.addWidget(self.scroll)
+        inner = QWidget()
+        self.scroll.setWidget(inner)
+        f = QFormLayout(inner)
+        f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        f.setVerticalSpacing(8)
         self.spins = {}
         for key, label, lo, hi, step, suffix, tip in (
                 ("start_hold", "시작: 체력바가 계속 보인 시간", 0.5, 30, 0.5, " 초", "이만큼 계속 보여야 보스전 시작으로 봐요 (잠깐 스친 화면 무시)"),
@@ -226,10 +239,15 @@ class BossPanel(QWidget):
             sp.setDecimals(2 if step < 0.1 else 1 if step < 1 else 0)
             sp.setSuffix(suffix)
             sp.setToolTip(tip)
+            sp.setMinimumWidth(150)
+            sp.setMinimumHeight(34)
+            sp.setStyleSheet("QDoubleSpinBox { padding: 4px 26px 4px 10px; }")   # 위아래 버튼이 숫자를 가리지 않게 오른쪽을 비움
             sp.setValue(float(boss.cfg(self.main.s)[key]))
             sp.valueChanged.connect(lambda v, k=key: self._set(k, float(v)))
             self.spins[key] = sp
-            f.addRow(label, sp)
+            lb = QLabel(label)
+            lb.setWordWrap(True)
+            f.addRow(lb, sp)
         self.ck_letter = QCheckBox("연출(위아래 검은 띠) 중에는 '안 보인 시간'을 세지 않기")
         self.ck_letter.setChecked(bool(boss.cfg(self.main.s)["letterbox_pause"]))
         self.ck_letter.toggled.connect(lambda v: self._set("letterbox_pause", bool(v)))

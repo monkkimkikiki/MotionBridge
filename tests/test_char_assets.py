@@ -75,6 +75,18 @@ def main():
         pn.index_all()
         check("A_Bow" in [a.name for a in pn.groups[0].anims], "게임 전체 색인으로 공용 폴더 애니도 연결: %s" % [a.name for a in pn.groups[0].anims])
 
+        # 검색어 없이 '자동으로 찾기': 지운 상태에서도 메쉬가 있는 캐릭터가 알아서 나온다. 입력하면 바로 걸러진다
+        pn.clear_index()
+        pn.query.setText("")
+        pn.index_all()
+        names = [g.name for g in pn.groups]
+        check("Swordman" in names and any(g.meshes for g in pn.groups), "자동 찾기: 검색어 없이 캐릭터 발견: %s" % names)
+        n_all = pn.tree.topLevelItemCount()
+        pn.query.setText("zzzz-없는-이름")
+        check(pn.tree.topLevelItemCount() == 0, "입력하면 목록이 바로 걸러짐(없는 이름 -> 0)")
+        pn.query.setText("")
+        check(pn.tree.topLevelItemCount() == n_all, "비우면 전체로 복귀")
+
         # 더블클릭/버튼은 추출으로 이어짐
         calls = []
         mw.extract_for_char = lambda paths, kind: calls.append((list(paths), kind))

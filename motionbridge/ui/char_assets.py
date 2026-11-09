@@ -18,7 +18,8 @@ from ..core.skelgraph import Group, Rec
 
 ROLE = Qt.ItemDataRole.UserRole
 MAX_FIRST = 4000        # 한 번의 검색에서 파일 안을 열어 볼 최대 개수 (넘으면 알리고 앞부분만)
-ANIM_ALL = r"(?i)(anim|/A[SM]?_[^/]*$)"   # '게임 전체 애니메이션 색인' 에 쓰는 검색식 (폴더 이름에 anim 이 없어도 A_/AS_/AM_ 이름은 포함)
+ANIM_ALL = r"(?i)(anim|/A[SM]?_[^/]*$)"   # 애니메이션 후보 (폴더 이름에 anim 이 없어도 A_/AS_/AM_ 이름은 포함)
+RIG_ALL = r"(?i)(anim|/A[SM]?_[^/]*$|/SKM?_[^/]*$|skeleton|skeletal|/SKEL_|character|/char[a-z]*/|mesh)"   # 자동 찾기: 애니메이션 + 메쉬/스켈레톤 후보
 
 
 def _anim_text(r: Rec) -> str:
@@ -52,13 +53,19 @@ class CharAssetPanel(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.addWidget(QLabel("<b>캐릭터·스켈레톤으로 찾기</b> — 파일 안을 실제로 읽어서, 같은 스켈레톤을 쓰는 메쉬와 '재생 가능한' 애니메이션만 캐릭터별로 묶습니다 "
                            "(폴더 위치·이름은 보지 않습니다)."))
+        self.btn_auto = QPushButton("🔍  자동으로 캐릭터 찾기 (게임 전체)")
+        self.btn_auto.setMinimumHeight(38)
+        self.btn_auto.setToolTip("검색어 없이, 게임의 메쉬·스켈레톤·애니메이션 파일 안을 읽어서 캐릭터별로 자동으로 묶습니다. 처음 한 번만 오래 걸리고, 이어서 하거나 취소해도 읽은 만큼은 남습니다.")
+        self.btn_auto.clicked.connect(lambda *_a: self.index_all())
+        v.addWidget(self.btn_auto)
         h = QHBoxLayout()
         self.query = QLineEdit(self.win.cfg.get("char_query", ""))
-        self.query.setPlaceholderText("캐릭터/메쉬 이름 (예: swordman — 쉼표로 나누면 모두 포함). 비우면 이미 검사한 전체")
+        self.query.setPlaceholderText("찾은 캐릭터 중에서 고르기 (예: swordman — 쉼표로 나누면 모두 포함). 비우면 전체")
+        self.query.textChanged.connect(self._filter)       # 입력하는 대로 이미 찾은 목록을 바로 걸러 보여 준다
         self.query.returnPressed.connect(self.search)
         h.addWidget(self.query, 1)
-        self.btn_search = QPushButton("검색")
-        self.btn_search.setToolTip("이름에 맞는 에셋의 파일 안을 열어 스켈레톤 연결을 확인합니다 (처음엔 오래 걸리고, 한 번 읽은 파일은 기억합니다)")
+        self.btn_search = QPushButton("이 이름으로 더 찾기")
+        self.btn_search.setToolTip("목록에 없으면: 이 이름에 맞는 에셋의 파일 안을 추가로 읽어 목록에 더합니다 (한 번 읽은 파일은 기억합니다)")
         self.btn_search.clicked.connect(lambda *_a: self.search())
         h.addWidget(self.btn_search)
         v.addLayout(h)
@@ -69,7 +76,8 @@ class CharAssetPanel(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self._double_clicked)
         v.addWidget(self.tree)
-        self.status = QLabel("검색어를 넣고 [검색]을 누르세요. 게임 폴더와 도우미는 위 1)·2)에서 설정합니다.")
+        self.status = QLabel("[자동으로 캐릭터 찾기]를 누르면 게임에서 캐릭터를 알아서 찾아 정리합니다. 게임 폴더와 도우미는 위 1)·2)에서 설정합니다.")
+        self._shown_once = False
         self.status.setWordWrap(True)
         v.addWidget(self.status)
 
@@ -88,15 +96,29 @@ class CharAssetPanel(QWidget):
         h.addWidget(self.btn_send)
         v.addLayout(h)
         h = QHBoxLayout()
-        self.btn_all = QPushButton("게임 전체 애니메이션 색인 만들기 (오래 걸림)")
-        self.btn_all.setToolTip("검색어에 안 걸리는 폴더(공용 애니메이션 등)에 있어도 이 스켈레톤을 쓰는 애니메이션을 찾으려면, 게임의 모든 애니메이션을 한 번 읽어 둡니다. 한 번만 하면 됩니다.")
-        self.btn_all.clicked.connect(lambda *_a: self.index_all())
-        h.addWidget(self.btn_all)
         self.btn_clear = QPushButton("검사 기록 지우기")
         self.btn_clear.clicked.connect(lambda *_a: self.clear_index())
         h.addWidget(self.btn_clear)
         h.addStretch(1)
         v.addLayout(h)
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        if not self._shown_once:         # 전에 찾아 둔 기록이 있으면 처음 열 때 바로 보여 준다
+            self._shown_once = True
+            try:
+                if self.win.ex_game.text().strip() and self._index().recs:
+                    self._show(self._index(), self.query.text().strip(), None, extra=" (전에 찾아 둔 기록)")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _filter(self, *_a) -> None:
+        """입력하는 대로 이미 찾은 목록을 걸러 보여 준다 (파일을 새로 읽지 않는다)."""
+        if not self.win.ex_game.text().strip():
+            return
+        idx = self._index()
+        if idx.recs:
+            self._show(idx, self.query.text().strip(), None)
 
     # ------------------------------------------------------------------ 색인
     def _index(self) -> skelgraph.SkelIndex:
@@ -128,7 +150,7 @@ class CharAssetPanel(QWidget):
         pattern = textmatch.and_regex(q) if q else ANIM_ALL
         if not pattern.startswith("(?i)"):
             pattern = "(?i)" + pattern  # 대소문자 구분 없이
-        if not q:  # 비우면 새로 검사하지 않고 이미 읽은 것만 보여 준다
+        if not q:  # 비우면 새로 검사하지 않고 이미 찾은 것 전체를 보여 준다
             self._show(idx, q, set())
             return
 
@@ -150,18 +172,18 @@ class CharAssetPanel(QWidget):
         a = self.win._extract_args()
         if a is None:
             return
-        if QMessageBox.question(self, "게임 전체 색인", "게임의 모든 애니메이션 파일을 열어 어느 스켈레톤을 쓰는지 기록합니다.\n수천 개면 수십 분 걸릴 수 있고, 중간에 취소해도 읽은 만큼은 저장됩니다.\n\n진행할까요?",
+        if QMessageBox.question(self, "자동으로 캐릭터 찾기", "게임의 메쉬·스켈레톤·애니메이션 파일을 열어 어느 스켈레톤을 쓰는지 기록하고, 캐릭터별로 자동으로 묶습니다.\n수천 개면 수십 분 걸릴 수 있고, 중간에 취소해도 읽은 만큼은 저장됩니다.\n\n진행할까요?",
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         idx = self._index()
 
         def job(w):
-            paths = [p for p in extractor.list_assets(*a, ANIM_ALL, 200000, None) if skelgraph.worth_inspecting(p)]
+            paths = [p for p in extractor.list_assets(*a, RIG_ALL, 200000, None) if skelgraph.worth_inspecting(p)]
             todo = idx.pending(paths)
             self._run_inspect(w, a, idx, todo)
             return len(todo)
 
-        self.win.run_async(job, lambda n: self._show(idx, self.query.text().strip(), None, extra=" (새로 읽은 파일 %d개)" % n), "게임 전체 애니메이션 읽는 중", cancellable=True)
+        self.win.run_async(job, lambda n: self._show(idx, self.query.text().strip(), None, extra=" (새로 읽은 파일 %d개)" % n), "캐릭터 자동 찾는 중 (파일 안 읽기)", cancellable=True)
 
     def _run_inspect(self, w, a, idx: skelgraph.SkelIndex, todo: List[str]) -> None:
         if not todo:
