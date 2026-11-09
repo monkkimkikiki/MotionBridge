@@ -213,7 +213,7 @@ class BossPanel(QWidget):
         self.rec_started = 0.0
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        c, l = card("👹  보스전 자동 녹화", "화면에 보스 체력바가 나타나면 녹화를 시작하고, 사라져서 보스전이 끝났다고 판단되면 자동으로 끝내고 분석해요.")
+        c, l = card("👹  보스전 자동 녹화", "화면에 보스 체력바가 나타나면 녹화를 시작하고, 사라져서 보스전이 끝났다고 판단되면 자동으로 녹화를 끝내요. 끝난 영상은 '원본 영상 목록'에 쌓여요(바로 분석하려면 아래 옵션 카드에서 켜세요).")
         self.status = QLabel("꺼짐")
         self.status.setObjectName("muted")
         self.status.setWordWrap(True)
@@ -443,7 +443,7 @@ class BossPanel(QWidget):
         import time
         dur = time.time() - self.rec_started
         reason = {"defeat": "보스 처치", "bar_lost": "체력바가 오래 안 보임", "max_time": "최대 시간"}.get(info.get("reason"), "보스전 끝")
-        self.main.flash("보스전이 끝났어요 (%s). 녹화를 마치고 분석해요." % reason)
+        self.main.flash("보스전이 끝났어요 (%s). 녹화를 마칩니다." % reason)
         self.collect.stop_record(auto=True, prebuffer=self.pre_path, min_seconds=float(boss.cfg(self.main.s)["min_seconds"]), took=dur)
         self.pre_path = None
 

@@ -294,6 +294,12 @@ try:
     check(hasattr(_ct.boss, "calibrate_photo") and hasattr(_ct.boss, "clear_photo"), "보스 패널: 사진으로 정확하게 지정 버튼")
     check(not _ct.boss.btn_unphoto.isEnabled(), "보스 패널: 사진 지정 전에는 해제 버튼 비활성")
     check("사진" in _ct.boss.ready_note.text(), "보스 패널: 안내에 사진 지정(선택) 언급")
+    check(hasattr(_ct, "src_list") and hasattr(_ct, "analyze_range") and hasattr(_ct, "refresh_sources"), "수집 탭: 원본 영상 목록 + 구간 분석")
+    check(not _ct.ck_autorec.isChecked() and not _main2.s.get("auto_analyze_recording"), "수집 탭: 녹화 후 자동 분석은 기본 꺼짐")
+    _ct.refresh_sources()
+    check(_ct._origin("C:/없는/영상.mp4") == "dropped", "수집 탭: 모르는 영상은 직접 넣은 영상으로 취급")
+    from motionbridge.animref.ui import range_dialog as _rd
+    check(_rd.fmt(75.34) == "1:15.3" and hasattr(_rd.RangeDialog, "add_range"), "구간 선택 창 준비")
     _ct.boss.spins["end_grace"].setValue(45)
     check(_bs.cfg(_main2.s)["end_grace"] == 45, "보스 패널: 설정이 저장 값에 반영")
     _ct.boss.spins["match"].setValue(65)

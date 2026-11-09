@@ -3,9 +3,10 @@ import copy
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-                               QListWidget, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
+                               QListWidgetItem, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
 
 from ..core import bossrun, cleanup, media, pipeline, sources
 from ..core.obs import ObsRecorder, friendly_error
@@ -13,6 +14,7 @@ from ..core.settings import SPEED_NAMES
 
 from .widgets import card, muted, restyle
 from .boss_panel import BossPanel
+from .widgets import open_path
 
 OBS_HELP = """<h3>OBS 연결 방법 (처음 한 번만)</h3>
 <ol>
@@ -27,6 +29,23 @@ OBS_HELP = """<h3>OBS 연결 방법 (처음 한 번만)</h3>
 <p>준비가 끝나면 이 화면의 <b>[연결 확인]</b>을 누르세요.</p>"""
 
 
+class _ThumbLoader(QThread):
+    ready = Signal(str, str)
+
+    def __init__(self, paths):
+        super().__init__()
+        self.paths = list(paths)
+        self.stop = False
+
+    def run(self):
+        for p in self.paths:
+            if self.stop:
+                return
+            t = sources.cached_thumb(p)
+            if t:
+                self.ready.emit(p, t)
+
+
 class DropZone(QFrame):
     filesDropped = Signal(list)
 
@@ -35,7 +54,7 @@ class DropZone(QFrame):
         self.setObjectName("drop")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(150)
+        self.setMinimumHeight(90)
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon = QLabel("🎞")
@@ -108,7 +127,7 @@ class CollectTab(QWidget):
         root.addLayout(row, 1)
 
         # --- 녹화 카드
-        c1, l1 = card("🎮  플레이하면서 녹화", "OBS로 녹화하고, 녹화를 끝내면 자동으로 분석해요.")
+        c1, l1 = card("🎮  플레이하면서 녹화", "OBS로 녹화하세요. 녹화한 영상은 오른쪽 '원본 영상 목록'에 쌓이고, 골라서 분석해요.")
         srow = QHBoxLayout()
         self.obs_status = QLabel("OBS 상태 확인 전")
         self.obs_status.setObjectName("muted")
@@ -162,6 +181,35 @@ class CollectTab(QWidget):
         qrow.addWidget(self.btn_clear)
         qrow.addWidget(self.btn_analyze, 1)
         l2.addLayout(qrow)
+        l2.addWidget(QLabel("📼  원본 영상 목록  (녹화한 영상이 여기 쌓여요)"))
+        self.src_list = QListWidget()
+        self.src_list.setIconSize(QSize(128, 72))
+        self.src_list.setSpacing(2)
+        self.src_list.setMinimumHeight(190)
+        self.src_list.setToolTip("영상을 고르고 아래 버튼을 누르세요. 더블클릭하면 원하는 구간만 골라 분석하는 창이 열려요.")
+        self.src_list.itemDoubleClicked.connect(lambda it: self.analyze_range(it.data(Qt.ItemDataRole.UserRole)))
+        l2.addWidget(self.src_list, 1)
+        self.src_empty = muted("")
+        l2.addWidget(self.src_empty)
+        srow3 = QHBoxLayout()
+        self.btn_src_all = QPushButton("▶ 전체 분석")
+        self.btn_src_all.setToolTip("고른 영상 전체를 분석해요")
+        self.btn_src_all.clicked.connect(lambda: self.analyze_source(self._cur_src()))
+        self.btn_src_range = QPushButton("✂ 구간만 분석…")
+        self.btn_src_range.setToolTip("영상을 보면서 원하는 부분(여러 구간 가능)만 골라 분석해요")
+        self.btn_src_range.clicked.connect(lambda: self.analyze_range(self._cur_src()))
+        b_ref = QPushButton("↻")
+        b_ref.setToolTip("목록 새로고침")
+        b_ref.setMaximumWidth(36)
+        b_ref.clicked.connect(self.refresh_sources)
+        b_dir = QPushButton("📂")
+        b_dir.setToolTip("녹화 폴더 열기")
+        b_dir.setMaximumWidth(36)
+        b_dir.clicked.connect(self._open_rec_dir)
+        for b in (self.btn_src_all, self.btn_src_range, b_ref, b_dir):
+            srow3.addWidget(b)
+        l2.addLayout(srow3)
+        self._thumbs = None
         erow = QHBoxLayout()
         b_edit = QPushButton("✂ 타임라인에서 직접 자르기")
         b_edit.setToolTip("원본 영상을 보면서 시작/끝을 지정해 클립을 직접 만들어요. AI가 찾은 동작은 책갈피로 표시돼요.")
@@ -207,6 +255,9 @@ class CollectTab(QWidget):
         self.ck_crop = QCheckBox("캐릭터 확대 클립도 저장 (캐릭터 주변만 잘라냄)")
         self.ck_full = QCheckBox("전체 화면 클립 저장")
         self.ck_ai = QCheckBox("잘라낸 뒤 AI로 자동 판정 (타격/피격/스킬/연출...)")
+        self.ck_autorec = QCheckBox("녹화를 끝내면 바로 분석 (끄면 원본 영상 목록에 넣어 두고, 골라서 분석)")
+        self.ck_autorec.setToolTip("기본은 꺼짐: 녹화한 영상은 목록에 쌓이고, 필요한 영상/구간만 골라 분석해요.")
+        self.ck_autorec.toggled.connect(lambda v: self._set("auto_analyze_recording", v))
         self.ck_combat = QCheckBox("효과음·번쩍임이 있는 구간만 (걷기·이동 장면 줄이기)")
         self.ck_combat.toggled.connect(lambda v: self._set("combat_only", v))
         self.ck_move = QCheckBox("걷기·달리기 같은 이동 장면도 포함")
@@ -216,7 +267,7 @@ class CollectTab(QWidget):
         self.ck_crop.toggled.connect(lambda v: self._set("save_crop", v))
         self.ck_full.toggled.connect(lambda v: self._set("save_full", v))
         self.ck_ai.toggled.connect(lambda v: self._set("auto_classify", v))
-        for w in (self.ck_full, self.ck_crop, self.ck_move, self.ck_combat, self.ck_ai):
+        for w in (self.ck_full, self.ck_crop, self.ck_move, self.ck_combat, self.ck_ai, self.ck_autorec):
             ck_box.addWidget(w)
         g.addLayout(ck_box, 2)
         l3.addLayout(g)
@@ -232,6 +283,7 @@ class CollectTab(QWidget):
 
         self.load_from_settings()
         QTimer.singleShot(800, lambda: self.check_obs(show_error=False))
+        QTimer.singleShot(1200, self.refresh_sources)
 
     # ---------------------------------------------------------------- 설정 연동
     def load_from_settings(self):
@@ -245,6 +297,7 @@ class CollectTab(QWidget):
         self.ck_full.setChecked(bool(s["save_full"]))
         self.ck_ai.setChecked(bool(s["auto_classify"]))
         self.ck_combat.setChecked(bool(s.get("combat_only", True)))
+        self.ck_autorec.setChecked(bool(s.get("auto_analyze_recording", False)))
         self.ck_move.setChecked(bool(s.get("include_move", False)))
         self._sync_combat()
         self.hotkey_hint.setText(f"게임 중에는 키보드 {s['hotkey'].upper()} 키로 녹화 시작/종료")
@@ -277,6 +330,10 @@ class CollectTab(QWidget):
 
     def set_busy(self, busy):
         self.btn_analyze.setEnabled(not busy and self.queue.count() > 0)
+        if hasattr(self, "btn_src_all"):
+            has = self.src_list.count() > 0
+            self.btn_src_all.setEnabled(has and not busy)
+            self.btn_src_range.setEnabled(has and not busy)
         if self.rec is None:
             self.btn_rec.setEnabled(not busy)
 
@@ -309,9 +366,23 @@ class CollectTab(QWidget):
 
     def start_analyze(self):
         files = [self.queue.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.queue.count())]
-        if not files:
-            return
-        origins = {f: (pipeline.RECORDED if f in self.recorded else pipeline.DROPPED) for f in files}
+        if files and self._analyze(files):
+            self.clear_queue()
+
+    def _origin(self, f):
+        """OBS 로 녹화한 영상이면 RECORDED(원본 정리 설정이 '녹화본' 쪽), 아니면 DROPPED."""
+        if f in self.recorded:
+            return pipeline.RECORDED
+        d = self.main.s.get("obs_record_dir")
+        try:
+            if d and Path(f).resolve().parent == Path(d).resolve():
+                return pipeline.RECORDED
+        except OSError:
+            pass
+        return pipeline.DROPPED
+
+    def _analyze(self, files):
+        origins = {f: self._origin(f) for f in files}
         s = self.main.s
         dropped = [f for f in files if origins[f] == pipeline.DROPPED]
         pol = s["source_policy_dropped"]
@@ -322,11 +393,85 @@ class CollectTab(QWidget):
                     f"분석이 끝나고 클립이 만들어지면 넣은 영상 원본 {len(dropped)}개를 {what}.\n계속할까요?\n\n"
                     "(원본을 남기려면 [설정] → 원본 영상 정리에서 '그대로 두기'로 바꾸세요)"
             ) != QMessageBox.StandardButton.Yes:
-                return
+                return False
         if self.main.start_job("영상 분석", pipeline.process_videos, (files, copy.deepcopy(s)),
                                on_done=self.main.on_clips_made, kwargs={"origins": origins}):
             self.recorded -= set(files)
-            self.clear_queue()
+            return True
+        return False
+
+    # ---------------------------------------------------------------- 원본 영상 목록
+    def _cur_src(self):
+        it = self.src_list.currentItem()
+        if it is None:
+            QMessageBox.information(self, "원본 영상", "목록에서 영상을 먼저 골라 주세요.")
+            return None
+        return it.data(Qt.ItemDataRole.UserRole)
+
+    def analyze_source(self, path):
+        if path and self._analyze([path]):
+            self.refresh_sources()
+
+    def analyze_range(self, path):
+        """영상을 보면서 원하는 구간만 골라 분석 (구간을 안 고르면 전체)."""
+        if not path:
+            return
+        if not Path(path).exists():
+            QMessageBox.information(self, "원본 없음", "영상을 찾을 수 없어요:\n" + str(path))
+            return
+        from .range_dialog import RangeDialog
+        dlg = RangeDialog(self.main, path)
+        if not dlg.exec():
+            return
+        if not dlg.ranges:
+            self.analyze_source(path)
+            return
+        self.main.start_job("구간 분석", pipeline.process_ranges, (path, list(dlg.ranges), copy.deepcopy(self.main.s)),
+                            on_done=self.main.on_clips_made)
+
+    def _open_rec_dir(self):
+        dirs = sources.candidate_dirs(self.main.s)
+        if dirs:
+            open_path(dirs[0])
+
+    def refresh_sources(self):
+        q = [self.queue.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.queue.count())]
+        try:
+            items = sources.list_sources(self.main.s, list(q) + sorted(self.recorded))[:100]
+        except Exception:  # noqa: BLE001
+            items = []
+        cur = self.src_list.currentItem().data(Qt.ItemDataRole.UserRole) if self.src_list.currentItem() else None
+        self.src_list.clear()
+        need = []
+        for src in items:
+            it = QListWidgetItem(f"{src['name']}\n{sources.describe(src)}")
+            it.setData(Qt.ItemDataRole.UserRole, src["path"])
+            it.setToolTip(src["path"])
+            if src["thumb"]:
+                it.setIcon(QIcon(QPixmap(src["thumb"])))
+            else:
+                need.append(src["path"])
+            self.src_list.addItem(it)
+            if cur and src["path"] == cur:
+                self.src_list.setCurrentItem(it)
+        if items and self.src_list.currentItem() is None:
+            self.src_list.setCurrentRow(0)
+        self.src_empty.setText("" if items else "아직 영상이 없어요. 녹화를 하거나 위에 영상 파일을 끌어다 놓으세요.")
+        self.btn_src_all.setEnabled(bool(items) and not self.main.busy)
+        self.btn_src_range.setEnabled(bool(items) and not self.main.busy)
+        if self._thumbs is not None and self._thumbs.isRunning():
+            self._thumbs.stop = True
+            self._thumbs.wait(3000)
+        if need:
+            self._thumbs = _ThumbLoader(need[:60])
+            self._thumbs.ready.connect(self._thumb_ready)
+            self._thumbs.start()
+
+    def _thumb_ready(self, path, thumb):
+        for i in range(self.src_list.count()):
+            it = self.src_list.item(i)
+            if it.data(Qt.ItemDataRole.UserRole) == path:
+                it.setIcon(QIcon(QPixmap(thumb)))
 
     # ---------------------------------------------------------------- OBS 녹화
     def show_obs_help(self):
@@ -402,7 +547,7 @@ class CollectTab(QWidget):
         self.rec_timer.start(500)
         self._tick()
         self.rec_label.show()
-        self.btn_rec.setText("■  녹화 끝내고 분석하기")
+        self.btn_rec.setText("■  녹화 끝내고 분석하기" if self.main.s.get("auto_analyze_recording") else "■  녹화 끝내기")
         restyle(self.btn_rec, "danger")
         self._set_status("● OBS 녹화 중" + (" (보스전 자동)" if auto else ""), True)
         if not auto:
@@ -441,8 +586,16 @@ class CollectTab(QWidget):
             merged = bossrun.merge_prebuffer(prebuffer, path)     # 원본 두 파일은 지우지 않는다
             if merged:
                 path = merged
+        self.recorded.add(path)
+        if not self.main.s.get("auto_analyze_recording", False):
+            # 기본: 바로 분석하지 않고 '원본 영상 목록'에 쌓아 둔다. 목록에서 영상/구간을 골라 분석한다.
+            self.refresh_sources()
+            for i in range(self.src_list.count()):
+                if self.src_list.item(i).data(Qt.ItemDataRole.UserRole) == path:
+                    self.src_list.setCurrentRow(i)
+            self.main.flash("녹화한 영상을 '원본 영상 목록'에 넣었어요. 목록에서 골라 분석하세요.")
+            return
         if self.main.busy:
-            self.recorded.add(path)
             self.add_files([path])
             self.main.flash("다른 작업이 진행 중이라 녹화 파일을 분석 목록에 추가했어요.")
             return

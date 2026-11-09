@@ -73,6 +73,49 @@ with tempfile.TemporaryDirectory() as d:
         check(hasattr(st, "kept"), "classify.run 도 같은 방식")
         remote.find_env = orig
 
+    # 오류 메시지로 '분석 환경 없음'을 알아본다 (앱이 이걸 보고 오류창 대신 자동 설치를 제안한다)
+    check(remote.is_need_env(remote.NEED_MSG + "\n\n(x)") and not remote.is_need_env("다른 오류"), "환경 없음 오류 판별")
+
+    # 원하는 구간만 분석: 구간 다듬기, 구간 파일 만들기, 원본은 그대로, 환경 없으면 자르기 전에 안내
+    check(pipeline.clean_ranges([(10, 5), (0, 0.3), (20, 40), (30, 50), (100, 200)], 60) == [(5.0, 10.0), (20.0, 50.0)],
+          "구간 다듬기(뒤집힘/짧음/겹침/길이초과): %s" % pipeline.clean_ranges([(10, 5), (0, 0.3), (20, 40), (30, 50), (100, 200)], 60))
+    check(pipeline.clean_ranges([], 60) == [] and pipeline.clean_ranges([("a", 1)], 60) == [], "빈/잘못된 구간은 버림")
+    src = os.path.join(d, "rec.mp4")
+    open(src, "wb").write(b"x")
+    cut_calls, seen = [], {}
+    def fake_cut(sp, a, length, out):
+        cut_calls.append((round(a, 1), round(length, 1)))
+        open(out, "wb").write(b"y")
+    orig_pv, orig_probe, orig_find, orig_off = pipeline.process_videos, pipeline.media.probe, remote.find_env, remote.should_offload
+    pipeline.process_videos = lambda files, s, log=None, progress=None, cancel=None, origins=None: seen.update(files=list(files), origins=dict(origins)) or pipeline.Result()
+    class _Info:
+        duration = 120.0
+    pipeline.media.probe = lambda p: _Info()
+    remote.should_offload = lambda: False
+    try:
+        pipeline.process_ranges(src, [(10, 20), (50, 70), (60, 80)], s, out_dir=os.path.join(d, "rg"), cut_fn=fake_cut)
+        check(cut_calls == [(10.0, 10.0), (50.0, 30.0)], "겹치는 구간은 합쳐 두 번만 자름: %s" % cut_calls)
+        check(len(seen["files"]) == 2 and all(os.path.isfile(f) for f in seen["files"]) and os.path.isfile(src), "구간 파일 생성, 원본은 그대로")
+        check(all(v == pipeline.RANGE for v in seen["origins"].values()) and pipeline.policy_for(s, pipeline.RANGE) == "keep", "구간 파일은 지우지 않는 정책")
+        n = len(cut_calls)
+        pipeline.process_ranges(src, [(10, 20)], s, out_dir=os.path.join(d, "rg"), cut_fn=fake_cut)
+        check(len(cut_calls) == n, "같은 구간은 다시 자르지 않음")
+        try:
+            pipeline.process_ranges(src, [(1, 1.2)], s, out_dir=os.path.join(d, "rg"), cut_fn=fake_cut)
+            check(False, "너무 짧은 구간만 있으면 오류")
+        except RuntimeError as e:
+            check("구간" in str(e), "짧은 구간 안내: %s" % e)
+        remote.should_offload = lambda: True
+        remote.find_env = lambda s=None: (None, "")
+        n = len(cut_calls)
+        try:
+            pipeline.process_ranges(src, [(30, 40)], s, out_dir=os.path.join(d, "rg2"), cut_fn=fake_cut)
+            check(False, "분석 환경이 없으면 안내")
+        except RuntimeError as e:
+            check(remote.is_need_env(str(e)) and len(cut_calls) == n, "분석 환경 없으면 자르기 전에 안내")
+    finally:
+        pipeline.process_videos, pipeline.media.probe, remote.find_env, remote.should_offload = orig_pv, orig_probe, orig_find, orig_off
+
     cands = remote.candidates({"analysis_python": "C:/x/python.exe"})
     check(str(cands[0]).replace("\\", "/").endswith("x/python.exe") and len(cands) > 3, "후보 경로: 설정값이 먼저")
 

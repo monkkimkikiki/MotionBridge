@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QInputDialog, QLa
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QTabWidget,
                                QVBoxLayout, QWidget)
 
-from ..core import library, link
+from ..core import library, link, remote
 from ..core import settings as S
 
 from .collect_tab import CollectTab
@@ -32,7 +32,8 @@ WELCOME = """<h2>AnimRef에 오신 걸 환영해요 👋</h2>
 <ol>
 <li><b>위쪽 [게임]</b>에서 게임 이름을 정하세요. 게임마다 따로 정리돼요.</li>
 <li><b>[① 수집하기]</b>에서 녹화해 둔 영상을 끌어다 놓고 <b>[분석 시작]</b>을 누르거나,<br>
-OBS를 연결해서 <b>[녹화 시작]</b> → 플레이 → <b>[녹화 끝내고 분석하기]</b>를 누르세요.</li>
+OBS를 연결해서 <b>[녹화 시작]</b> → 플레이 → <b>[녹화 끝내기]</b>를 누르세요. 녹화한 영상은 <b>'원본 영상 목록'</b>에 쌓이고,
+영상을 골라 <b>[전체 분석]</b>하거나 <b>[구간만 분석…]</b>으로 원하는 부분만 골라 분석할 수 있어요.</li>
 <li><b>[② 라이브러리]</b>에서 분류된 클립을 보고, 더블클릭하면 <b>슬로모션·프레임 단위</b>로 볼 수 있어요.</li>
 <li>직접 고르고 싶으면 <b>✂ 직접 자르기</b>: 원본 타임라인에서 AI 책갈피를 보며 구간을 지정해 클립을 만들어요.</li>
 </ol>
@@ -287,6 +288,7 @@ class MainWindow(QMainWindow):
         if self.busy:
             QMessageBox.information(self, "작업 중", "다른 작업이 진행 중이에요. 끝난 뒤에 다시 시도해 주세요.")
             return False
+        self._last_job = (title, fn, args, on_done, kwargs)   # 분석 환경을 설치한 뒤 이어서 다시 하려고 기억
         self.job = Job(title, fn, args, kwargs)
         self.job.log.connect(self.log)
         self.job.progress.connect(self._on_progress)
@@ -322,6 +324,10 @@ class MainWindow(QMainWindow):
         self.log(f"── {title} 완료")
         self.status.setText(f"✅ {title} 완료")
         self.library.refresh()
+        try:
+            self.collect.refresh_sources()
+        except Exception:  # noqa: BLE001
+            pass
         if on_done:
             on_done(result)
 
@@ -329,8 +335,48 @@ class MainWindow(QMainWindow):
         self.log(f"── {title}: {msg}")
         self.status.setText(f"{'⏹' if cancelled else '⚠'} {msg.splitlines()[0]}")
         self.library.refresh()
+        if not cancelled and remote.is_need_env(msg):
+            self.offer_env_install(retry=getattr(self, "_last_job", None))
+            return
         if not cancelled:
             QMessageBox.warning(self, f"{title} 실패", msg + "\n\n자세한 내용은 아래 [로그 보기]에서 확인할 수 있어요.")
+
+    def offer_env_install(self, retry=None):
+        """AI 분석 환경이 없을 때: 오류만 띄우지 않고 바로 설치할지 묻고, 설치가 끝나면 하던 분석을 이어서 한다."""
+        r = QMessageBox.question(
+            self, "AI 분석 환경 설치",
+            "자동 분석(캐릭터 탐지 · AI 분류)에 쓰는 AI 구성요소(torch · ultralytics)가 아직 이 PC에 없어요.\n\n"
+            "지금 자동으로 설치할까요?\n"
+            "· 처음 한 번만 설치하면 돼요 (디스크 약 5GB, 인터넷 필요, 10~30분).\n"
+            "· 파이썬(3.9~3.12)이 없으면 winget 으로 3.11 을 먼저 설치해요.\n"
+            "· 설치가 끝나면 방금 하려던 분석을 이어서 자동으로 시작해요.\n"
+            "· 중간에 취소해도 다음에 이어서 설치돼요.")
+        if r == QMessageBox.StandardButton.Yes:
+            self.install_analysis_env(retry)
+
+    def install_analysis_env(self, retry=None):
+        from ..core import envsetup
+        if remote.local_has_torch():
+            QMessageBox.information(self, "분석 환경", "이 프로그램 안에 이미 분석 환경이 있어요.")
+            return False
+
+        def job(log=None, progress=None, cancel=None):
+            return envsetup.install(log or (lambda *_a: None), progress or (lambda *_a: None), cancel)
+
+        def done(py):
+            self.s["analysis_python"] = ""      # 자동으로 찾는 위치에 만들었으니 비워 둔다
+            self.save_settings()
+            remote._CHECKED.clear()
+            try:
+                self.settings_tab._check_env(True)
+            except Exception:  # noqa: BLE001
+                pass
+            self.flash("분석 환경을 만들었어요." + (" 하던 분석을 이어서 시작해요." if retry else ""))
+            if retry:
+                title, fn, args, on_done, kwargs = retry
+                QTimer.singleShot(300, lambda: self.start_job(title, fn, args, on_done=on_done, kwargs=kwargs))
+
+        return self.start_job("분석 환경 설치", job, (), on_done=done)
 
     def cancel_job(self):
         if self.busy:

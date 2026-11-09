@@ -7,7 +7,7 @@ from .segment import cinematic_segments, merge_padded, segment_series, track_vid
 from .signals import (audio_onsets, energy_peaks, hit_windows, is_combat_candidate, merge_for_full,
                       merge_hits, segment_hints)
 
-RECORDED, DROPPED = "recorded", "dropped"
+RECORDED, DROPPED, RANGE = "recorded", "dropped", "range"
 
 
 class Result(list):
@@ -17,6 +17,8 @@ class Result(list):
 
 
 def policy_for(s, origin):
+    if origin == RANGE:      # 원본 영상에서 구간만 떼어 분석한 파일: 원본은 건드리지 않고, 떼어 낸 파일은 지우지 않는다
+        return cleanup.KEEP
     key = "source_policy_recorded" if origin == RECORDED else "source_policy_dropped"
     return s.get(key, cleanup.KEEP)
 
@@ -158,3 +160,68 @@ def process_recording(path, s, log=noop, progress=noop, cancel=None):
     progress(-1, "OBS가 녹화 파일을 마무리하는 중...")
     media.wait_until_stable(path)
     return process_videos([path], s, log, progress, cancel, origins={str(path): RECORDED})
+
+
+# ---------------------------------------------------------------- 원하는 구간만 분석
+MIN_RANGE = 1.0   # 초. 이보다 짧은 구간은 버린다
+
+
+def clean_ranges(ranges, duration=0.0):
+    """[(시작초, 끝초), ...] 를 다듬는다: 순서가 뒤집히면 바로잡고, 영상 길이 안으로 자르고, 너무 짧은 건 버리고, 겹치면 합친다."""
+    out = []
+    for r in ranges or []:
+        try:
+            a, b = float(r[0]), float(r[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if b < a:
+            a, b = b, a
+        a = max(a, 0.0)
+        if duration and duration > 0:
+            b = min(b, float(duration))
+        if b - a >= MIN_RANGE:
+            out.append((a, b))
+    out.sort()
+    merged = []
+    for a, b in out:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def range_file(src, a, b, out_dir):
+    """구간 파일 이름: <원본이름>__<시작>-<끝>.mp4 (초 단위, 같은 구간이면 같은 이름이라 다시 만들지 않는다)."""
+    return Path(out_dir) / ("%s__%ds-%ds.mp4" % (Path(src).stem, int(round(a)), int(round(b))))
+
+
+def process_ranges(path, ranges, s, log=noop, progress=noop, cancel=None, out_dir=None, cut_fn=None):
+    """원본 영상 path 에서 ranges(초 구간)만 떼어 내 분석한다. 원본은 그대로 둔다. 구간 파일은 앱 데이터의 ranges 폴더에 남는다."""
+    from . import settings as S
+    if remote.should_offload():          # 분석 환경이 없으면 자르기 전에 먼저 알려 준다 (헛수고 방지)
+        py, why = remote.find_env(s)
+        if py is None:
+            raise RuntimeError(remote.NEED_MSG + ("\n\n(" + why + ")" if why else ""))
+    dur = 0.0
+    try:
+        dur = media.probe(path).duration
+    except Exception:  # noqa: BLE001
+        pass
+    rs = clean_ranges(ranges, dur)
+    if not rs:
+        raise RuntimeError("분석할 구간이 없어요. 구간은 1초 이상이어야 해요.")
+    od = Path(out_dir) if out_dir else S.app_dir() / "ranges"
+    od.mkdir(parents=True, exist_ok=True)
+    cut = cut_fn or media.cut
+    files = []
+    for k, (a, b) in enumerate(rs):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        f = range_file(path, a, b, od)
+        progress(0.0, "구간 %d/%d 잘라 내는 중 (%d초 ~ %d초)" % (k + 1, len(rs), a, b))
+        if not f.exists():
+            cut(str(path), a, b - a, str(f))
+        files.append(str(f))
+    log("선택한 구간 %d개만 분석합니다 (원본은 그대로 둬요)" % len(files))
+    return process_videos(files, s, log, progress, cancel, origins={f: RANGE for f in files})

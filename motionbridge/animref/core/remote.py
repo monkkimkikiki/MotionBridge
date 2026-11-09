@@ -26,6 +26,11 @@ WORKER_ENV = "ANIMREF_WORKER"
 NEED_MSG = ("자동 분석(캐릭터 탐지 · AI 분류)에는 AI 구성요소(torch, ultralytics)가 필요한데, 이 프로그램에는 들어 있지 않아요.\n\n"
             "[⚙ 설정] → '분석 환경' 의 [자동 설치] 버튼을 누르면 이 프로그램이 알아서 만들어요 (처음 한 번, 수 GB). "
             "AnimRef 를 따로 설치해 둔 폴더의 .venv 가 있으면 그것도 자동으로 찾아 써요.")
+def is_need_env(msg) -> bool:
+    """오류 메시지가 '분석 환경이 없음' 때문인지."""
+    return NEED_MSG[:30] in str(msg or "")
+
+
 _CHECKED = {}   # python 경로 -> (ok, 메시지)
 
 

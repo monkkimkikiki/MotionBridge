@@ -427,7 +427,7 @@ class SettingsTab(QWidget):
         self._check_env(True)
 
     def _install_env(self):
-        from ..core import envsetup
+        from ..core import envsetup  # noqa: F401
         if remote.local_has_torch():
             QMessageBox.information(self, "분석 환경", "이 프로그램 안에 이미 분석 환경이 있어요.")
             return
@@ -437,17 +437,7 @@ class SettingsTab(QWidget):
                                 "· 파이썬(3.9~3.12)이 없으면 winget 으로 3.11 을 먼저 설치해요.\n"
                                 "· 중간에 취소해도 다음에 이어서 설치돼요.\n\n진행할까요?") != QMessageBox.StandardButton.Yes:
             return
-
-        def job(log=None, progress=None, cancel=None):
-            return envsetup.install(log or (lambda *_a: None), progress or (lambda *_a: None), cancel)
-
-        def done(py):
-            self.main.s["analysis_python"] = ""      # 자동으로 찾는 위치에 만들었으니 비워 둔다
-            self.main.save_settings()
-            self._check_env(True)
-            self.main.flash("분석 환경을 만들었어요. 이제 자동 분석을 쓸 수 있어요.")
-
-        self.main.start_job("분석 환경 설치", job, (), on_done=done)
+        self.main.install_analysis_env()
 
     def _pick_py(self):
         p, _ = QFileDialog.getOpenFileName(self, "AI 분석용 python.exe (AnimRef 의 .venv\\Scripts)", self.ed_py.text() or "",

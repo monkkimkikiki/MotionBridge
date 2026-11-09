@@ -100,6 +100,7 @@ DEFAULTS = {
     "group_precision": 50,      # 0(크게 묶기) ~ 100(잘게 묶기)
     "min_group": 3,
     "hotkey": "f9",
+    "auto_analyze_recording": False,   # 녹화를 끝내면 바로 분석할지 (끄면 '원본 영상 목록'에 넣어 두고 골라서 분석)
     "obs": {"host": "localhost", "port": 4455, "password": ""},
     "boss": {},                 # 보스전 자동 녹화 설정 (core/boss.py DEFAULTS 와 합쳐서 씀)
     "labels": DEFAULT_LABELS,
