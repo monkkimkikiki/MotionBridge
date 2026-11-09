@@ -725,15 +725,19 @@ class ClipEditor(QDialog):
         if b - a < 0.1:
             QMessageBox.information(self, "클립 만들기", "구간이 너무 짧아요.")
             return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            make_manual_clip(self.path, a, b, copy.deepcopy(self.main.s), self.label_combo.currentData(),
-                             log=self.main.log)
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "클립 만들기 실패", str(e))
+        from .progress_dialog import ProgressDialog
+
+        dlg = ProgressDialog(self, "클립 만드는 중", make_manual_clip,
+                             (self.path, a, b, copy.deepcopy(self.main.s), self.label_combo.currentData()),
+                             intro=f"{fmt_t(a)} ~ {fmt_t(b)} ({b - a:.1f}초) 구간을 잘라 클립으로 저장해요.")
+        dlg.job.log.connect(self.main.log)
+        dlg.exec()
+        if dlg.cancelled:
+            self.sel_label.setText("클립 만들기를 취소했어요.")
             return
-        QApplication.restoreOverrideCursor()
+        if dlg.error:
+            QMessageBox.warning(self, "클립 만들기 실패", dlg.error)
+            return
         self.changed = True
         self.reload_clips()
         self.sel_label.setText(f"✅ 클립을 만들었어요 ({b - a:.2f}초). 라이브러리에서 볼 수 있어요.")

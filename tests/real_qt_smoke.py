@@ -298,6 +298,8 @@ try:
     check(not _ct.ck_autorec.isChecked() and not _main2.s.get("auto_analyze_recording"), "수집 탭: 녹화 후 자동 분석은 기본 꺼짐")
     _ct.refresh_sources()
     check(_ct._origin("C:/없는/영상.mp4") == "dropped", "수집 탭: 모르는 영상은 직접 넣은 영상으로 취급")
+    from motionbridge.animref.ui import progress_dialog as _pd
+    check(hasattr(_pd.ProgressDialog, "exec") and hasattr(_pd.ProgressDialog, "_progress"), "진행 현황 창 준비")
     from motionbridge.animref.ui import range_dialog as _rd
     check(_rd.fmt(75.34) == "1:15.3" and hasattr(_rd.RangeDialog, "add_range"), "구간 선택 창 준비")
     _ct.boss.spins["end_grace"].setValue(45)

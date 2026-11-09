@@ -100,15 +100,49 @@ def sample_frames(path, n=8, width=320):
     return frames
 
 
-def cut(src, start, length, out, crf=18, vf=None):
+def cut(src, start, length, out, crf=18, vf=None, on_progress=None, cancel=None):
+    """구간을 잘라 mp4 로 저장. on_progress(0~1) 를 주면 ffmpeg 진행률을 알려 주고, cancel(Event)이 켜지면 중단한다."""
     args = ["-y", "-loglevel", "error", "-ss", f"{start:.3f}", "-i", src, "-t", f"{length:.3f}"]
     if vf:
         args += ["-vf", vf]
     args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out]
-    r = _run(args)
-    if r.returncode != 0:
-        raise RuntimeError("클립 저장 실패: " + r.stderr.strip()[-400:])
+    if on_progress is None and cancel is None:
+        r = _run(args)
+        if r.returncode != 0:
+            raise RuntimeError("클립 저장 실패: " + r.stderr.strip()[-400:])
+        return
+    from . import Cancelled
+    import threading
+    cmd = [ffmpeg_exe(), "-hide_banner", "-progress", "pipe:1", "-nostats", *map(str, args)]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                         creationflags=_NO_WINDOW)
+    err = []
+    threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True).start()
+    total = max(float(length), 0.001)
+    try:
+        for line in p.stdout:
+            if cancel is not None and cancel.is_set():
+                p.kill()
+                p.wait()
+                try:
+                    Path(out).unlink()
+                except OSError:
+                    pass
+                raise Cancelled()
+            line = line.strip()
+            if on_progress and (line.startswith("out_time_us=") or line.startswith("out_time_ms=")):
+                try:
+                    v = float(line.split("=", 1)[1]) / 1e6      # 마이크로초 (out_time_ms 도 ffmpeg 에서는 마이크로초 값)
+                    on_progress(min(max(v / total, 0.0), 1.0))
+                except ValueError:
+                    pass
+    finally:
+        rc = p.wait()
+    if rc != 0:
+        raise RuntimeError("클립 저장 실패: " + ("".join(err)).strip()[-400:])
+    if on_progress:
+        on_progress(1.0)
 
 
 def thumbnail(video, t, out, width=320):

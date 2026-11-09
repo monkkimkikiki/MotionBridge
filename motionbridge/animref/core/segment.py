@@ -348,8 +348,10 @@ def merge_padded(segs, pre, post, max_len):
     return out
 
 
-def make_manual_clip(path, t0, t1, s, label=None, log=noop):
-    """사용자가 타임라인에서 직접 지정한 구간으로 클립을 만든다 (여유 시간 없이 그대로)."""
+def make_manual_clip(path, t0, t1, s, label=None, log=noop, progress=noop, cancel=None):
+    """사용자가 타임라인에서 직접 지정한 구간으로 클립을 만든다 (여유 시간 없이 그대로).
+    progress(0~1, 글) 로 진행을 알리고, cancel(Event)이 켜지면 멈춘다."""
+    progress(0.02, "영상 정보 읽는 중...")
     info = media.probe(path)
     t0, t1 = max(0.0, float(t0)), min(float(t1), info.duration or float(t1))
     if t1 - t0 < 0.1:
@@ -362,7 +364,11 @@ def make_manual_clip(path, t0, t1, s, label=None, log=noop):
     while (cdir / f"{name}.mp4").exists() or (cdir / f"{name}.json").exists():
         name, k = f"{base}_{k}", k + 1
     mp4 = cdir / f"{name}.mp4"
-    media.cut(path, t0, t1 - t0, mp4, s.get("crf", 23))
+    log(f"클립 자르는 중: {t0:.1f}초 ~ {t1:.1f}초 ({t1 - t0:.1f}초)")
+    progress(0.05, f"영상 자르는 중... ({t1 - t0:.1f}초 분량)")
+    media.cut(path, t0, t1 - t0, mp4, s.get("crf", 23),
+              on_progress=lambda f: progress(0.05 + 0.85 * f, f"영상 자르는 중... {int(f * 100)}%"), cancel=cancel)
+    progress(0.92, "미리보기 그림 만드는 중...")
     media.thumbnail(mp4, (t1 - t0) / 2, cdir / f"{name}.thumb.jpg")
     meta = {
         "game": s["game"], "source_video": str(path), "source_name": Path(path).name,
@@ -375,6 +381,8 @@ def make_manual_clip(path, t0, t1, s, label=None, log=noop):
     }
     sessions.record(gdir, meta, getattr(info, "duration", 0.0))
     jp = cdir / f"{name}.json"
+    progress(0.97, "라이브러리에 저장하는 중...")
     jp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     log(f"수동 클립 저장: {name}.mp4 ({t1 - t0:.2f}초)")
+    progress(1.0, "완료!")
     return str(jp)
