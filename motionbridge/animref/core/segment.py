@@ -14,6 +14,7 @@ import numpy as np
 
 from . import Cancelled, media, noop
 from .signals import FrameCues
+from . import sessions
 from .library import game_dir, safe_name
 from .settings import SPEED_PRESETS, models_dir, percentile
 
@@ -281,6 +282,7 @@ def write_clips(path, segs, info, s, view="full", log=noop, progress=noop, cance
             "label_manual": None, "group": None,
             "created": datetime.now().isoformat(timespec="seconds"),
         }
+        sessions.record(gdir, meta, getattr(info, "duration", 0.0))
         jp = cdir / f"{name}.json"
         jp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         out.append(str(jp))
@@ -371,6 +373,7 @@ def make_manual_clip(path, t0, t1, s, label=None, log=noop):
         "label_manual": label or None, "group": None,
         "created": datetime.now().isoformat(timespec="seconds"),
     }
+    sessions.record(gdir, meta, getattr(info, "duration", 0.0))
     jp = cdir / f"{name}.json"
     jp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     log(f"수동 클립 저장: {name}.mp4 ({t1 - t0:.2f}초)")

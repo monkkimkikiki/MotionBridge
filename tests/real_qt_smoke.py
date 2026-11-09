@@ -246,5 +246,40 @@ with tempfile.TemporaryDirectory() as d:
     mw.close()
     check(alink.LOCAL_TOOL is None if ar.inner is not None else True, "닫으면 직접 전달 해제")
 
+# 라이브러리 탭: 날짜 > 세션 > 분류 트리 (진짜 Qt 에서만 확인 가능)
+try:
+    import json as _json
+    import types as _types
+    from datetime import datetime as _dt
+    from pathlib import Path as _P
+    from motionbridge.animref.ui.library_tab import LibraryTab
+    from motionbridge.animref.core import settings as _AS
+    with tempfile.TemporaryDirectory() as _d:
+        _s = _AS.load() if hasattr(_AS, "load") else dict(_AS.DEFAULTS)
+        _s["library_dir"], _s["game"] = _d, "g"
+        _cd = _P(_d) / "g" / "clips"
+        _cd.mkdir(parents=True)
+        _v = _P(_d) / "2026-11-09 14-03-22.mkv"
+        _v.write_bytes(b"v")
+        _ts = _dt(2026, 11, 9, 14, 25, 10).timestamp()
+        os.utime(_v, (_ts, _ts))
+        for _n, _l in (("c1", "타격"), ("c2", "피격")):
+            (_cd / (_n + ".mp4")).write_bytes(b"x")
+            (_cd / (_n + ".json")).write_text(_json.dumps({"source_video": str(_v), "source_name": _v.name, "label_manual": _l, "created": "2026-11-09T15:00:00"}), encoding="utf-8")
+        _main = _types.SimpleNamespace(s=_s, busy=False, save_settings=lambda: None, flash=lambda *a: None, log=lambda *a: None)
+        _lt = LibraryTab(_main)
+        _lt.refresh()
+        _root = _lt.sess_tree.topLevelItem(0)
+        check(_root is not None and _root.childCount() == 1, "라이브러리: 날짜 1개")
+        _sess = _root.child(0).child(0) if _root is not None and _root.childCount() else None
+        check(_sess is not None and "14:03:22 ~ 14:25:10" in _sess.text(0), "라이브러리: 세션 시각 표시: %s" % (_sess.text(0) if _sess else None))
+        check(_sess is not None and [_sess.child(i).text(0).split("  ")[0] for i in range(_sess.childCount())] == ["전체", "타격", "피격"], "라이브러리: 전체/타격/피격")
+        _lt.sess_tree.setCurrentItem(_sess.child(1))
+        check(len(_lt.shown) == 1, "라이브러리: 타격만 보임")
+        _lt.sess_tree.setCurrentItem(_sess.child(0))
+        check(len(_lt.shown) == 2, "라이브러리: 전체는 둘 다")
+except Exception as _e:  # noqa: BLE001
+    check(False, "라이브러리 탭 스모크 예외: %r" % (_e,))
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

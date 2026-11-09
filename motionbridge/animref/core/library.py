@@ -221,13 +221,24 @@ def rename_clip(s, meta, new_name):
     return meta, notes
 
 
-def export(clips, dest, log=print):
-    """분류/묶음별 폴더로 복사한다."""
+def export(clips, dest, log=print, sess=None):
+    """분류/묶음별 폴더로 복사한다. sess(Sessions)를 주면 '날짜 / 세션 / 분류' 폴더로 나눈다 (라이브러리 화면과 같은 구조, 바꾼 이름 그대로)."""
     dest = Path(dest)
     n = 0
+    tree = {}
+    if sess is not None:
+        from . import sessions as _s
+        for day in _s.build_tree(list(clips), sess, [], final_label):
+            for sx in day["sessions"]:
+                for m in sx["clips"]:
+                    tree[m["_json"]] = (day["date_name"], sx["name"])
     for m in clips:
         src = file_of(m, "video")
-        d = dest / safe_name(final_label(m)) / safe_name(m.get("group") or OTHER_GROUP)
+        if m["_json"] in tree:
+            dn, sn = tree[m["_json"]]
+            d = dest / safe_name(dn) / safe_name(sn) / safe_name(final_label(m))
+        else:
+            d = dest / safe_name(final_label(m)) / safe_name(m.get("group") or OTHER_GROUP)
         d.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, d / src.name)
         sheet = file_of(m, "sheet")

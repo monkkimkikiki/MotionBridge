@@ -4,11 +4,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap, QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
+from PySide6.QtWidgets import (QAbstractItemView, QTreeWidget, QTreeWidgetItem, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QListView, QListWidget, QListWidgetItem, QMenu, QMessageBox,
                                QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
-from ..core import classify, library
+from ..core import classify, library, sessions
 from ..core.settings import label_names
 
 from .player import PlayerDialog
@@ -30,6 +30,8 @@ class LibraryTab(QWidget):
         self.main = main
         self.setObjectName("page")
         self.clips, self.shown = [], []
+        self.scope = None  # None = 전체, 아니면 (날짜, 세션 키, 분류) — 세션 트리에서 고른 곳
+        self._sess = None
         self._icons = {}
 
         root = QHBoxLayout(self)
@@ -38,10 +40,18 @@ class LibraryTab(QWidget):
 
         # --- 왼쪽 필터
         left = QVBoxLayout()
-        left.addWidget(QLabel("분류"))
+        left.addWidget(QLabel("녹화 날짜 › 세션 › 분류"))
+        self.sess_tree = QTreeWidget()
+        self.sess_tree.setHeaderHidden(True)
+        self.sess_tree.setToolTip("녹화한 날짜 아래에 녹화를 시작했다가 끝낸 한 번(세션)이 있고, 그 안에 전체·분류별 클립이 있어요.\n우클릭: 날짜/세션 이름 바꾸기, 원본 녹화 위치 열기")
+        self.sess_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.sess_tree.customContextMenuRequested.connect(self._tree_menu)
+        self.sess_tree.currentItemChanged.connect(lambda *_: self._scope_changed())
+        left.addWidget(self.sess_tree, 4)
+        left.addWidget(QLabel("분류 (모든 세션)"))
         self.label_list = QListWidget()
         self.label_list.currentItemChanged.connect(lambda *_: self._label_changed())
-        left.addWidget(self.label_list, 3)
+        left.addWidget(self.label_list, 2)
         left.addWidget(QLabel("비슷한 모션 묶음"))
         self.group_list = QListWidget()
         self.group_list.currentItemChanged.connect(lambda *_: self.apply_filter())
@@ -56,7 +66,7 @@ class LibraryTab(QWidget):
         left.addWidget(self.view_combo)
         lw = QWidget()
         lw.setLayout(left)
-        lw.setFixedWidth(230)
+        lw.setFixedWidth(300)
         root.addWidget(lw)
 
         # --- 오른쪽
@@ -136,7 +146,13 @@ class LibraryTab(QWidget):
 
     # ---------------------------------------------------------------- 데이터
     def refresh(self):
-        self.clips = library.load_clips(library.game_dir(self.main.s))
+        gdir = library.game_dir(self.main.s)
+        self.clips = library.load_clips(gdir)
+        self._sess = sessions.Sessions(gdir)
+        for m in self.clips:  # 클립이 어느 날짜/세션인지 (원본 녹화 기준)
+            m["_session_date"] = sessions.date_of(self._sess.ensure(m).get("start", ""))
+        self._sess.save()
+        self._fill_tree()
         cur = self.label_list.currentItem().data(ROLE) if self.label_list.currentItem() else ALL
         counts = {}
         for m in self.clips:
@@ -152,6 +168,103 @@ class LibraryTab(QWidget):
         self.label_list.blockSignals(False)
         self._label_changed()
         self.stack.setCurrentIndex(1 if self.clips else 0)
+
+    # ---------------------------------------------------------------- 날짜 › 세션 › 분류 트리
+    def _fill_tree(self):
+        cur = self.scope
+        order = [n for n in label_names(self.main.s)]
+        tree = sessions.build_tree(self.clips, self._sess, order, library.final_label)
+        self.sess_tree.blockSignals(True)
+        self.sess_tree.clear()
+        root = QTreeWidgetItem([f"전체 보기  ({len(self.clips)})"])
+        root.setData(0, ROLE, ("scope", None))
+        self.sess_tree.addTopLevelItem(root)
+        pick = root
+        for d in tree:
+            di = QTreeWidgetItem([f"📅 {d['date_name']}  ({d['count']})"])
+            di.setData(0, ROLE, ("date", d["date"], d["date_name"]))
+            root.addChild(di)
+            if cur and cur == (d["date"], None, None):
+                pick = di
+            for sx in d["sessions"]:
+                si = QTreeWidgetItem(["🎬 " + sessions.session_title(sx)])
+                si.setData(0, ROLE, ("session", d["date"], sx["key"], sx["name"]))
+                si.setToolTip(0, "원본 녹화: " + sx["key"])
+                di.addChild(si)
+                if cur and cur == (d["date"], sx["key"], None):
+                    pick = si
+                for lab, items in [("전체", sx["clips"])] + list(sx["labels"].items()):
+                    li = QTreeWidgetItem([f"{lab}  ({len(items)})"])
+                    li.setData(0, ROLE, ("label", d["date"], sx["key"], None if lab == "전체" else lab))
+                    si.addChild(li)
+                    if cur and cur == (d["date"], sx["key"], None if lab == "전체" else lab):
+                        pick = li
+        root.setExpanded(True)
+        for i in range(root.childCount()):
+            root.child(i).setExpanded(True)  # 날짜는 펼치고, 세션 안(분류)은 필요할 때 연다
+        self.sess_tree.setCurrentItem(pick)
+        self.sess_tree.blockSignals(False)
+        self._read_scope()
+
+    def _read_scope(self):
+        it = self.sess_tree.currentItem()
+        d = it.data(0, ROLE) if it is not None else None
+        if not d or d[0] == "scope":
+            self.scope = None
+        elif d[0] == "date":
+            self.scope = (d[1], None, None)
+        elif d[0] == "session":
+            self.scope = (d[1], d[2], None)
+        else:
+            self.scope = (d[1], d[2], d[3])
+
+    def _scope_changed(self):
+        self._read_scope()
+        self.apply_filter()
+
+    def _tree_menu(self, pos):
+        it = self.sess_tree.itemAt(pos)
+        d = it.data(0, ROLE) if it is not None else None
+        if not d or d[0] not in ("date", "session"):
+            return
+        menu = QMenu(self)
+        if d[0] == "date":
+            menu.addAction("✏ 날짜 폴더 이름 바꾸기", lambda: self._rename_node(d))
+        else:
+            menu.addAction("✏ 세션 이름 바꾸기", lambda: self._rename_node(d))
+            menu.addAction("🕒 시작/종료 시각 고치기", lambda: self._edit_times(d))
+            menu.addAction("원본 녹화 위치 열기", lambda: reveal(d[2]) if Path(d[2]).exists() else QMessageBox.information(self, "원본", "원본 영상이 없어요(옮겼거나 지웠어요)."))
+        menu.exec(self.sess_tree.viewport().mapToGlobal(pos))
+
+    def _rename_node(self, d):
+        old = d[2] if d[0] == "date" else d[3]
+        text, ok = QInputDialog.getText(self, "이름 바꾸기", "표시 이름 (비우면 기본 이름으로 돌아가요. 클립 파일은 그대로예요):", text=old)
+        if not ok:
+            return
+        if d[0] == "date":
+            self._sess.rename_date(d[1], text if text.strip() != d[1] else "")
+        else:
+            self._sess.rename_session(d[2], text)
+        self._sess.save()
+        self._fill_tree()
+        self.apply_filter()
+
+    def _edit_times(self, d):
+        rec = self._sess.data["sessions"].get(d[2], {})
+        text, ok = QInputDialog.getText(self, "시작/종료 시각", "시작 ~ 종료 (예: 2026-11-09 14:03:22 ~ 2026-11-09 14:25:10):",
+                                        text="%s ~ %s" % ((rec.get("start") or "").replace("T", " "), (rec.get("end") or "").replace("T", " ")))
+        if not ok or "~" not in text:
+            return
+        a, b = [t.strip().replace(" ", "T") for t in text.split("~", 1)]
+        try:
+            from datetime import datetime as _dt
+            _dt.fromisoformat(a), _dt.fromisoformat(b)
+        except ValueError:
+            QMessageBox.warning(self, "시각", "형식이 맞지 않아요. 예: 2026-11-09 14:03:22")
+            return
+        self._sess.set_times(d[2], a, b)
+        self._sess.save()
+        self.refresh()
 
     def _add_item(self, lst, text, data):
         it = QListWidgetItem(text)
@@ -190,7 +303,8 @@ class LibraryTab(QWidget):
         label, group, view = self._cur(self.label_list), self._cur(self.group_list), self.view_combo.currentData()
         qs = [t.strip() for t in self.search.text().lower().split(",") if t.strip()]  # 쉼표: 모두 포함
         self.shown = [m for m in self.clips
-                      if label in (ALL, library.final_label(m))
+                      if sessions.matches_scope(m, self.scope, library.final_label)
+                      and label in (ALL, library.final_label(m))
                       and group in (ALL, m.get("group") or library.OTHER_GROUP)
                       and view in (ALL, m.get("view"))
                       and all(q in m.get("source_name", "").lower() or q in Path(m["_json"]).stem.lower() for q in qs)]
@@ -383,7 +497,7 @@ class LibraryTab(QWidget):
         d = QFileDialog.getExistingDirectory(self, "내보낼 폴더 선택")
         if not d:
             return
-        n = library.export(self.shown, d, log=self.main.log)
+        n = library.export(self.shown, d, log=self.main.log, sess=self._sess)
         if QMessageBox.question(self, "내보내기 완료", f"{n}개 클립을 내보냈어요.\n폴더를 열까요?") == QMessageBox.StandardButton.Yes:
             open_path(d)
 
