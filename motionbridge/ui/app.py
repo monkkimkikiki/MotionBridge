@@ -435,9 +435,35 @@ class MainWindow(QMainWindow):
         self.retime_bar = RetimeBar(self)
         rl.addWidget(self.retime_bar)
         split.addWidget(right)
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 1)
-        split.setSizes([640, 740])
+        # 기본 비율: 왼쪽(탭) 47% : 오른쪽(뷰포트) 53%. 창 크기를 바꿔도 이 비율을 유지하고, 경계를 끌어 바꾸면 그 비율을 기억한다.
+        self._split = split
+        ratio = self.cfg.get("split_ratio", 0.47)
+        self._split_ratio = min(max(float(ratio), 0.25), 0.70) if isinstance(ratio, (int, float)) else 0.47
+        split.setStretchFactor(0, 47)
+        split.setStretchFactor(1, 53)
+        split.setSizes([int(1000 * self._split_ratio), int(1000 * (1 - self._split_ratio))])
+        self._split_applied = False
+        moved = getattr(split, "splitterMoved", None)
+        if moved is not None and hasattr(moved, "connect"):
+            moved.connect(self._split_moved)
+
+    def _apply_split_ratio(self) -> None:
+        w = max(int(self._split.width()), 200)
+        self._split.setSizes([int(w * self._split_ratio), w - int(w * self._split_ratio)])
+
+    def _split_moved(self, *_a) -> None:
+        if not getattr(self, "_split_applied", False):
+            return
+        a, b = self._split.sizes()[:2]
+        if a + b > 0:
+            self._split_ratio = min(max(a / (a + b), 0.25), 0.70)
+            self.cfg["split_ratio"] = round(self._split_ratio, 3)
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        super().showEvent(ev)
+        if not getattr(self, "_split_applied", True) and hasattr(self, "_split"):
+            self._apply_split_ratio()  # 처음 보일 때 실제 창 너비에 비율을 맞춘다
+            self._split_applied = True
 
     # ------------------------------------------------------------------ 탭 0 (게임에서 추출)
     def _tab_extract(self) -> QWidget:
@@ -2027,7 +2053,7 @@ def run_gui(handoff: str = "") -> int:
     app.setApplicationName("MotionBridge")
     _dark_palette(app)
     w = MainWindow()
-    w.resize(1380, 880)
+    w.resize(1600, 920)
     w.show()
     w.start_link()
     app.aboutToQuit.connect(w.stop_link)

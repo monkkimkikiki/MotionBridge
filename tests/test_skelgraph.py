@@ -67,6 +67,19 @@ check(mesh is not None and len(al) == 4, "메쉬 -> 연결된 재생 가능 애�
 check(S.anims_for_mesh(RECS, "Nope")[0] == [], "모르는 메쉬")
 check(not S.worth_inspecting("Proj/Content/Characters/X/Textures/T_Body_D.uasset") and S.worth_inspecting("Proj/Content/Characters/X/Anim/A_Run.uasset"), "텍스처는 미리 거름")
 
+# 이름 후보 -> 데이터로 걸러 다시 정하기
+from motionbridge.core.assetidx import AnimCandidate as AC  # noqa: E402
+name_cands = [AC("Proj/Content/Characters/Swordman/Anim/A_Slash.uasset", 0.9, "이름 일치"),
+              AC("Proj/Content/Characters/Swordman/Anim/A_BossRoar.uasset", 0.8, "폴더 일치"),   # 검사했더니 보스 스켈레톤 -> 빠져야
+              AC("Proj/Content/Characters/Swordman/Anim/A_Empty.uasset", 0.7, "이름 일치"),    # 재생 불가 -> 빠져야
+              AC("Proj/Content/Characters/Swordman/Anim/A_Unknown.uasset", 0.6, "이름 일치")]  # 검사 전 -> 미확인으로 뒤에
+out, st, dropped = S.refine_by_skeleton(RECS, "/Game/Characters/Swordman/Meshes/SK_Swordman", name_cands, lambda p, sc, why: AC(p, sc, why))
+names_out = [os.path.basename(c.path) for c in out]
+check(st == "linked" and dropped == 2, "걸러낸 개수/상태: %s %s" % (st, dropped))
+check(names_out[0] == "A_Slash.uasset" and "A_Emote_Bow.uasset" in names_out and "A_BossRoar.uasset" not in names_out and "A_Empty.uasset" not in names_out, "연결 확인된 것 앞, 틀린 것 제외: %s" % names_out)
+check(names_out[-1] == "A_Unknown.uasset" and "미확인" in out[-1].why, "검사 안 한 것은 미확인으로 뒤에")
+check(S.refine_by_skeleton([], "x", name_cands, lambda *a: None)[1] == "no_index" and S.refine_by_skeleton(RECS, "nope", name_cands, lambda *a: None)[1] == "mesh_unknown", "기록 없음/모르는 메쉬")
+
 # 캐시
 with tempfile.TemporaryDirectory() as d:
     idx = S.SkelIndex(os.path.join(d, "i.json"))

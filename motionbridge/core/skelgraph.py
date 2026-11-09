@@ -257,3 +257,42 @@ class SkelIndex:
         except (OSError, ValueError):
             pass
         return idx
+
+
+def refine_by_skeleton(records: Iterable[Rec], mesh_path: str, cands: list, make, limit: int = 400):
+    """이름으로 뽑은 애니메이션 후보를, 파일 안 데이터로 걸러서 다시 정한다.
+
+    - 이 메쉬의 스켈레톤에 연결되고 재생 가능한 애니메이션 -> 맨 앞 ('스켈레톤 확인 ✔'). 이름 점수가 있으면 그 점수로 정렬.
+    - 이미 검사했는데 다른 스켈레톤이거나 재생 불가 -> 후보에서 뺀다.
+    - 아직 검사 안 한 후보 -> 뒤에 '미확인' 으로 남긴다.
+    make(path, score, why) 로 후보 객체를 만든다. 돌려주는 값: (새 후보 목록, 상태, 뺀 개수).
+    상태: 'linked' (데이터로 확인함) / 'mesh_unknown' (이 메쉬를 검사한 적 없음) / 'no_index' (검사 기록 없음).
+    """
+    recs = list(records)
+    if not recs:
+        return cands, "no_index", 0
+    linked, mesh = anims_for_mesh(recs, mesh_path)
+    if mesh is None:
+        return cands, "mesh_unknown", 0
+    inspected = {r.key: r for r in recs if r.kind in ("anim", "montage")}
+    inspected_keys = set(inspected) | {norm_key(p) for p in ()}
+    name_score = {norm_key(c.path): c for c in cands}
+    out = []
+    seen = set()
+    for r in linked:
+        k = r.key
+        c = name_score.get(k)
+        out.append(make(r.path, c.score if c is not None else 0.0, "스켈레톤 연결 확인 ✔" + ((" · " + c.why) if c is not None and c.why else "")))
+        seen.add(k)
+    out.sort(key=lambda c: (-c.score, os.path.basename(c.path).lower()))
+    out = out[:limit]
+    dropped = 0
+    for c in cands:
+        k = norm_key(c.path)
+        if k in seen:
+            continue
+        if k in inspected_keys:
+            dropped += 1  # 검사했더니 이 스켈레톤이 아니거나 재생 불가
+            continue
+        out.append(make(c.path, c.score, ((c.why + " · ") if c.why else "") + "미확인(스켈레톤 검사 전)"))
+    return out, "linked", dropped

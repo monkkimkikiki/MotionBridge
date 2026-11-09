@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, skelgraph, textmatch, vision
 from .widgets import EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
@@ -449,6 +449,10 @@ class VidFindTab(QWidget):
         self.anim_note = QLabel("")
         self.anim_note.setWordWrap(True)
         v.addWidget(self.anim_note)
+        self.btn_verify = QPushButton("스켈레톤으로 확인 (정확도↑)")
+        self.btn_verify.setToolTip("고른 메쉬와 후보 애니메이션 파일을 실제로 열어, 같은 스켈레톤에 연결되고 재생 가능한 것만 앞에 두고 아닌 것은 뺍니다.")
+        self.btn_verify.clicked.connect(lambda *_a: self.verify_links())
+        v.addWidget(self.btn_verify)
         h = QHBoxLayout()
         b = QPushButton("전체 선택")
         b.clicked.connect(lambda *_a: self._select_visible_anims())
@@ -1271,12 +1275,17 @@ class VidFindTab(QWidget):
         kinds = self._kinds()
         force = True if (self.ck_player.isChecked() or kinds == {assetidx.KIND_PLAYER}) else None
         hidden_kind = 0
+        n_drop = 0
+        skel_state: Dict[str, int] = {}
         for p in (self._chosen_rigged() if self.char_mode else self._selected_mesh_paths()):
             m = idx.mesh(p)
             nm = m.name if m else assetidx.mesh_name(p)
             if force or assetidx.is_player_path(p):
                 players.append(nm)
             cands = idx.rank_anims(p, label, hits, 60, player=force)
+            cands, st, dropped = self._refine(p, cands)
+            n_drop += dropped
+            skel_state[st] = skel_state.get(st, 0) + 1
             if not cands:
                 empty.append(nm)
             for c in cands:
@@ -1295,8 +1304,50 @@ class VidFindTab(QWidget):
             msg += " 이름이 맞는 애니메이션을 못 찾은 캐릭터: %s — 0번 탭에서 직접 검색해 보세요." % ", ".join(empty)
         if hidden_kind:
             msg += " 종류 체크로 %d개를 뺐습니다." % hidden_kind
+        if skel_state.get("linked"):
+            msg += " ✔ 스켈레톤 연결 확인된 재생 가능 애니메이션을 앞에 두었고" + (", 다른 스켈레톤이거나 재생 못 하는 %d개는 뺐습니다." % n_drop if n_drop else ".")
+        elif skel_state.get("mesh_unknown") or skel_state.get("no_index"):
+            msg += " 아직 파일 안을 읽어 확인하지 않아 이름 점수만 보입니다 — [스켈레톤으로 확인]을 누르면 실제 연결로 걸러냅니다."
         self.anim_note.setText(msg)
         self._apply_anim_filter()
+
+    def _skel_index(self):
+        try:
+            return self.win.char_panel._index()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _refine(self, mesh_path: str, cands):
+        sidx = self._skel_index()
+        if sidx is None:
+            return cands, "no_index", 0
+        return skelgraph.refine_by_skeleton(sidx.all(), mesh_path, cands, lambda p, sc, why: assetidx.AnimCandidate(p, sc, why))
+
+    def verify_links(self) -> None:
+        """고른 메쉬와 그 후보 애니메이션의 파일 안을 읽어, 실제로 같은 스켈레톤에 연결되고 재생 가능한지 확인한다."""
+        a = self.win._extract_args()
+        idx = self.index
+        if a is None or idx is None:
+            return
+        meshes = self._chosen_rigged() if self.char_mode else self._selected_mesh_paths()
+        if not meshes:
+            QMessageBox.warning(self, "스켈레톤 확인", "메쉬를 먼저 고르세요.")
+            return
+        sidx = self._skel_index()
+        if sidx is None:
+            return
+        label = self.label.currentData() or None
+        hits = int(self.hits.value()) or None
+        todo = set(meshes)
+        for p in meshes:
+            todo.update(c.path for c in idx.rank_anims(p, label, hits, 60, player=None))
+        todo = [p for p in sorted(todo) if skelgraph.worth_inspecting(p)]
+
+        def job(w):
+            self.win.char_panel._run_inspect(w, a, sidx, sidx.pending(todo))
+            return len(todo)
+
+        self.win.run_async(job, lambda n: self._refill_anims(), "스켈레톤 연결 확인 중 (파일 안을 읽는 중)", cancellable=True)
 
     def _char_map(self, anims: List[str]) -> Dict[str, str]:
         """고른 메시가 둘 이상일 때, 애니메이션마다 이름이 가장 어울리는 캐릭터 폴더를 정한다 (못 정하면 경로로)."""

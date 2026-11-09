@@ -44,6 +44,7 @@ def main():
         mw = A.MainWindow()
         pn = mw.char_panel
         check(isinstance(pn, C.CharAssetPanel), "패널이 추출 탭에 있음")
+        check(abs(mw._split_ratio - 0.47) < 1e-6, "기본 화면 비율 47:53")
         mw.ex_game.setText(os.path.join(d, "game"))
         mw._extract_args = lambda: ("helper", "G", "GAME_UE5_4", None, None)
         W = type("W", (), {"cancel": threading.Event(), "progress": type("P", (), {"emit": lambda *a: None})()})()
