@@ -1538,8 +1538,7 @@ class VidFindTab(QWidget):
             files, glb, nbones = res
             self.last_files = list(files)
             win.ex_files.set_paths(files)
-            win._after_load("target")
-            win.tabs.setCurrentIndex(1)
+            win._after_load("target")   # 탭은 옮기지 않는다
             win.statusBar().showMessage("메시를 뷰포트로 열었습니다: %s (본 %d개)" % (name, nbones) if nbones else
                                         "메시를 열었지만 스켈레톤(리깅)이 없어요: %s — 다른 후보를 써 보세요" % name)
 

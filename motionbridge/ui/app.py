@@ -993,11 +993,11 @@ class MainWindow(QMainWindow):
 
     def _open_path_as_target(self, path: str) -> None:
         self._remember_dir(path)
-        self.run_async(lambda w: self.pr.load_target(path), lambda m: (self._after_load("target"), self.tabs.setCurrentIndex(1)), "타깃 읽는 중")
+        self.run_async(lambda w: self.pr.load_target(path), lambda m: self._after_load("target"), "타깃 읽는 중")  # 열어도 탭은 그대로 (파일·매핑으로 자동 이동 안 함)
 
     def _open_path(self, path: str) -> None:
         self._remember_dir(path)
-        self.run_async(lambda w: self.pr.load_source(path), lambda m: (self._after_load("source"), self.tabs.setCurrentIndex(1)), "소스 읽는 중")
+        self.run_async(lambda w: self.pr.load_source(path), lambda m: self._after_load("source"), "소스 읽는 중")
 
     # ------------------------------------------------------------------ 탭 1
     def _tab_files(self) -> QWidget:
