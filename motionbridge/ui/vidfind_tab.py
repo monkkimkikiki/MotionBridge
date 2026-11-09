@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, panel, skelgraph, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, pairing, panel, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
 from .widgets import EditPanel, fit_widths, wrappable
 
@@ -498,6 +498,23 @@ class VidFindTab(QWidget):
                                   "다시 줄 세웁니다. 이름이 비슷해도 동작이 다른 것, 이름이 달라도 동작이 같은 것을 가려냅니다. 좌우 반전(거울) 동작도 같이 봅니다." % MAX_MOTION_RANK)
         self.btn_mrank.clicked.connect(lambda *_a: self.rank_by_motion())
         v.addWidget(self.btn_mrank)
+        self.react_only = QCheckBox("🥊 피격·그로기·처형 계열만 보기")
+        self.react_only.setToolTip("이름에 hit/react/stagger/groggy/execute/finisher/victim 같은 낱말이 든 애니메이션만 남깁니다 (상대 캐릭터의 '맞는 모션'을 찾을 때).")
+        self.react_only.toggled.connect(lambda *_a: self._apply_anim_filter())
+        v.addWidget(self.react_only)
+        ph = QHBoxLayout()
+        self.btn_pair = QPushButton("🔗 고른 모션의 짝 찾기 (상대 쪽 모션 목록으로)")
+        self.btn_pair.setToolTip("목록에서 모션 하나(예: 보스가 처형당하는 모션)를 고르고 누르면, 반대편 캐릭터(보스 ↔ 플레이어)의 모션 중\n"
+                                 "길이가 비슷한(기본 ±30프레임) 것과 이름이 겹치는 것을 점수순으로 목록에 올립니다. 서로 맞물리는 연출(처형·패리 피니셔·잡기)에서 통합니다.\n"
+                                 "필요하면 먼저 파일 안을 읽어 길이를 알아냅니다(처음엔 시간이 걸림).")
+        self.btn_pair.clicked.connect(lambda *_a: self.find_pair())
+        ph.addWidget(self.btn_pair, 1)
+        ph.addWidget(QLabel("길이 오차(프레임)"))
+        self.pair_tol = QSpinBox()
+        self.pair_tol.setRange(1, 300)
+        self.pair_tol.setValue(int(self.cfg.get("vf_pair_tol", 30)))
+        ph.addWidget(self.pair_tol)
+        v.addLayout(ph)
         self.btn_panel = QPushButton("🧑‍⚖ AI 회의로 찾기… (여러 AI 가 영상과 목록을 보며 토론)")
         self.btn_panel.setToolTip("고른 영상 장면을 한 장의 시트로 붙여, 이미지를 보는 AI(Qwen-VL·Claude·Gemini …)가 직접 보고, 글 전용 AI(GPT-OSS)는 그 묘사를 읽고,\n"
                                   "모두 지금 목록(위쪽 %d개)에서 맞는 애니메이션을 고르고 서로의 이유를 보며 고칩니다. 합의 순위로 목록을 다시 줄 세웁니다." % MAX_PANEL_NAMES)
@@ -1299,12 +1316,12 @@ class VidFindTab(QWidget):
         for i in range(n):
             it = self.anim_list.item(i)
             hay = (it.text() + " " + str(it.data(Qt.ItemDataRole.UserRole) or "")).lower()
-            ok = all(t in hay for t in terms)
+            ok = all(t in hay for t in terms) and (not self.react_only.isChecked() or pairing.is_reaction(os.path.basename(str(it.data(Qt.ItemDataRole.UserRole) or it.text()))))
             it.setHidden(not ok)
             if not ok and it.isSelected():
                 it.setSelected(False)  # 가려진 것은 선택에서도 뺀다 (모르는 사이에 추출되지 않게)
             shown += 1 if ok else 0
-        self.anim_count.setText(("%d / %d개 표시" % (shown, n)) if terms else ("%d개" % n if n else ""))
+        self.anim_count.setText(("%d / %d개 표시" % (shown, n)) if (terms or self.react_only.isChecked()) else ("%d개" % n if n else ""))
 
     def _select_visible_anims(self) -> None:
         for i in range(self.anim_list.count()):
@@ -1444,6 +1461,63 @@ class VidFindTab(QWidget):
         """고른 메시가 한 캐릭터뿐이면 애니메이션도 그 캐릭터 폴더에 모은다 (애니 경로가 달라도)."""
         names = {layout.character_of(it.data(Qt.ItemDataRole.UserRole)) for it in self.mesh_list.selectedItems()}
         return names.pop() if len(names) == 1 else None
+
+    # ================================================================== 짝 찾기 (상대 모션 -> 맞물리는 모션)
+    def find_pair(self) -> None:
+        sel = [it for it in self.anim_list.selectedItems() if not it.isHidden()]
+        if len(sel) != 1:
+            QMessageBox.warning(self, "짝 찾기", "기준이 될 모션을 목록에서 하나만 고르세요 (예: 보스가 처형당하는 모션).")
+            return
+        idx = self.index
+        sidx = self._skel_index()
+        a = self.win._extract_args()
+        if idx is None or sidx is None or a is None:
+            QMessageBox.warning(self, "짝 찾기", "에셋 이름 목록과 게임 설정이 필요합니다. 0번 탭에서 게임을 설정하고 '캐릭터 추측'이나 '에셋 목록 읽기'를 먼저 하세요.")
+            return
+        base = sel[0].data(Qt.ItemDataRole.UserRole)
+        want = assetidx.KIND_MONSTER if assetidx.path_kind(base) == assetidx.KIND_PLAYER else assetidx.KIND_PLAYER   # 반대편 캐릭터
+        pool = sorted(idx.anims_of_kinds({want}))[: self.PLAYER_LIST_MAX]
+        if not pool:
+            QMessageBox.warning(self, "짝 찾기", "반대편 캐릭터의 애니메이션 이름이 목록에 없습니다.")
+            return
+        tol = int(self.pair_tol.value())
+        self.cfg["vf_pair_tol"] = tol
+        bridge.save_config(self.cfg)
+
+        def lens(paths):
+            out = {}
+            for r in sidx.all():
+                if r.path in paths and r.kind in ("anim", "montage") and r.length > 0 and r.frames > 0:
+                    out[r.path] = (r.frames, r.length)
+            return out
+
+        def job(w):
+            need = [p for p in [base] + pool if skelgraph.worth_inspecting(p)]
+            todo = sidx.pending(need)
+            if todo:
+                w.progress.emit(0, len(todo), "길이를 알아내려고 파일 안을 읽는 중 (%d개, 처음 한 번만)" % len(todo))
+                self.win.char_panel._run_inspect(w, a, sidx, todo)
+            known = lens(set([base] + pool))
+            if base not in known:
+                raise RuntimeError("기준 모션의 길이를 읽지 못했습니다 (몽타주이거나 읽을 수 없는 파일일 수 있어요).")
+            fr, ln = known[base]
+            cands = [(p, *known.get(p, (-1, -1.0))) for p in pool]
+            return pairing.pair_rank(base, fr, ln, cands, tol), (fr, ln), len(known) - 1
+
+        def done(out):
+            hits, (fr, ln), n_known = out
+            self.anim_list.clear()
+            for h in hits:
+                it = QListWidgetItem("%3d%%  %s    %s" % (round(h.score * 100), os.path.basename(h.path).split(".")[0], h.why))
+                it.setData(Qt.ItemDataRole.UserRole, h.path)
+                it.setToolTip(h.path)
+                self.anim_list.addItem(it)
+            self.anim_note.setText("기준 '%s' (%d프레임, %.2f초) → %s 쪽 모션 %d개 중 길이 ±%d프레임 안 %d개 (길이를 읽은 것 %d개). "
+                                   "이제 [AI 회의로 찾기]로 영상과 맞는 것을 고르세요." % (os.path.basename(base).split(".")[0], fr, ln, "플레이어" if want == assetidx.KIND_PLAYER else "몬스터·보스",
+                                                                           len(pool), tol, len(hits), n_known))
+            self._apply_anim_filter()
+
+        self.win.run_async(job, done, "짝 찾는 중", cancellable=True, on_cancel=lambda: self.anim_note.setText("짝 찾기를 취소했습니다 (목록은 그대로)."))
 
     # ================================================================== AI 회의
     def _panel_members(self, picked: Dict[str, bool], second_model: str):

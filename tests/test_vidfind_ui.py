@@ -306,6 +306,42 @@ def main():
         del mw.extract_for_char, vt.open_mesh_in_viewport, vt.open_in_viewport
         vis = [i for i in range(3) if not vt.anim_list.item(i).isHidden()]
         check(vis == [2], "쉼표: player 와 attack 둘 다 든 것만: %s" % vis)
+        # 짝 찾기: 보스 처형당함 모션(5.5초) -> 플레이어 모션 중 길이 ±30프레임·이름 겹침
+        from motionbridge.core import skelgraph as SG
+        boss = "Sparta/Content/Characters/Monsters/Captive/Animations/A_Captive_Execute_Victim_01"
+        pl = ["Sparta/Content/Characters/Player/Animations/AS_PC_Execute_Attacker_01", "Sparta/Content/Characters/Player/Animations/AS_PC_Light_01",
+              "Sparta/Content/Characters/Player/Animations/AS_PC_Dodge"]
+        sidx = SG.SkelIndex()
+        for pth, fr, ln in ((boss, 330, 5.5), (pl[0], 332, 5.53), (pl[1], 336, 5.6), (pl[2], 60, 1.0)):
+            sidx.add(SG.Rec(pth, "anim", os.path.basename(pth), "Skel", fr, ln, 10))
+        snap_index = vt.index
+        vt.index = assetidx.AssetIndex(MESHES, ANIMS + [boss] + pl, [])
+        vt._skel_index = lambda: sidx
+        mw.char_panel._run_inspect = lambda w, a_, s_, todo: None
+        snap = [(vt.anim_list.item(i).text(), vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole)) for i in range(vt.anim_list.count())]
+        snap_filter = vt.anim_filter.text()
+        vt.anim_filter.setText("")
+        vt.anim_list.clear()
+        it = V.QListWidgetItem("x")
+        it.setData(A.Qt.ItemDataRole.UserRole, boss)
+        vt.anim_list.addItem(it)
+        it.setSelected(True)
+        vt.pair_tol.setValue(30)
+        vt.find_pair()
+        got = [vt.anim_list.item(i).data(A.Qt.ItemDataRole.UserRole) for i in range(vt.anim_list.count())]
+        check(got[:2] == [pl[0], pl[1]] and pl[2] not in got, "짝 찾기: 길이·이름으로 줄임 %s" % [os.path.basename(g) for g in got])
+        vt.react_only.setChecked(True)
+        vis_r = [i for i in range(vt.anim_list.count()) if not vt.anim_list.item(i).isHidden()]
+        check(vis_r == [0], "피격·처형 계열만 보기: %s" % vis_r)
+        vt.react_only.setChecked(False)
+        vt.anim_list.clear()
+        for txt, pth in snap:   # 다음 시험이 쓰는 목록 상태로 복구
+            it = V.QListWidgetItem(txt)
+            it.setData(A.Qt.ItemDataRole.UserRole, pth)
+            vt.anim_list.addItem(it)
+        vt.anim_filter.setText(snap_filter)
+        del vt._skel_index
+        vt.index = snap_index
         # AI 회의: 참가자 만들기, 결과로 목록 다시 줄 세우기
         from motionbridge.core import panel as P
         _fake_mp = V.vision.make_provider
