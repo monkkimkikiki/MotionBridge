@@ -235,12 +235,15 @@ fi
 """
     s += 'echo "== [2/5] 파이썬 %s 환경 만들기"\n' % e.python
     if e.key == "gvhmr":
-        s += """"$MM" create -y -n gvhmr -c conda-forge python=3.10 pip git ffmpeg
+        s += """[ -d "$MAMBA_ROOT_PREFIX/envs/gvhmr" ] || "$MM" create -y -n gvhmr -c conda-forge python=3.10 pip git ffmpeg
 cd "$MB_BASE"
 echo "== [3/5] 소스 받기"
 [ -d gvhmr/.git ] || git clone --depth 1 https://github.com/zju3dv/GVHMR gvhmr
 cd gvhmr
 echo "== [4/5] 패키지 설치 (PyTorch 포함 수 GB — 오래 걸립니다)"
+echo "  - 빌드 도구 + numpy 먼저 설치 (chumpy 가 빌드할 때 numpy 를 필요로 해요)"
+"$MM" run -n gvhmr pip install -U pip "setuptools<70" wheel "numpy==1.23.5"
+"$MM" run -n gvhmr pip install --no-build-isolation chumpy || "$MM" run -n gvhmr pip install chumpy-fix || echo "!! chumpy 설치 실패 — 아래 requirements 단계에서 다시 시도합니다"
 "$MM" run -n gvhmr pip install -r requirements.txt
 "$MM" run -n gvhmr pip install -e .
 echo "== [5/5] 체크포인트 받기 (Google Drive)"
@@ -252,13 +255,16 @@ mkdir -p inputs/checkpoints
             s += 'if [ ! -e "%s" ]; then f="$(find inputs/checkpoints -name %s 2>/dev/null | head -1)"; if [ -n "$f" ]; then mkdir -p "$(dirname %s)"; mv "$f" %s; fi; fi\n' % (
                 rel, sh_quote(os.path.basename(rel)), sh_quote(rel), sh_quote(rel))
     else:
-        s += """"$MM" create -y -n wham -c conda-forge python=3.9 pip git ffmpeg
+        s += """[ -d "$MAMBA_ROOT_PREFIX/envs/wham" ] || "$MM" create -y -n wham -c conda-forge python=3.9 pip git ffmpeg
 cd "$MB_BASE"
 echo "== [3/5] 소스 받기"
 [ -d wham/.git ] || git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/yohanshin/WHAM wham
 cd wham
 echo "== [4/5] 패키지 설치 (PyTorch 1.11 / CUDA 11.3 — 오래 걸립니다)"
 "$MM" install -y -n wham -c pytorch -c conda-forge pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=11.3
+echo "  - 빌드 도구 + numpy 먼저 설치 (chumpy 가 빌드할 때 numpy 를 필요로 해요)"
+"$MM" run -n wham pip install -U pip "setuptools<70" wheel "numpy==1.23.5"
+"$MM" run -n wham pip install --no-build-isolation chumpy || "$MM" run -n wham pip install chumpy-fix || echo "!! chumpy 설치 실패 — 아래 requirements 단계에서 다시 시도합니다"
 "$MM" run -n wham pip install -r requirements.txt
 "$MM" run -n wham pip install -v -e third-party/ViTPose
 echo "== [5/5] 체크포인트·보조 데이터 받기 (Google Drive)"

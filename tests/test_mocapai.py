@@ -97,6 +97,14 @@ def _bash_ok(script: str) -> str:
         os.remove(f.name)
 
 
+def test_install_chumpy():
+    for e in mocapai.ENGINES.values():
+        sc = mocapai.install_script(e)
+        check = sc.index("--no-build-isolation chumpy") < sc.index("pip install -r requirements.txt") and "numpy==1.23.5" in sc and ("envs/%s" % e.key) in sc
+        assert check, e.key
+    print("chumpy OK")
+
+
 def test_scripts():
     g, w = M.GVHMR, M.WHAM
     scripts = {
@@ -163,5 +171,6 @@ if __name__ == "__main__":
     test_smpl_to_motion_and_bvh()
     test_paths_and_status()
     test_scripts()
+    test_install_chumpy()
     test_run_script_and_place_models()
     print("test_mocapai ALL OK")
