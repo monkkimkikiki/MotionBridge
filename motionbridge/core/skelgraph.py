@@ -79,7 +79,7 @@ class Rec:
                 out.append("프레임 없음")
             if self.length == 0:
                 out.append("길이 0")
-            if self.tracks <= 0 and not self.compressed:
+            if self.tracks == 0 and not self.compressed:   # -1 = 도우미가 키 수를 못 읽음(모름) -> 프레임/길이가 있으면 통과
                 out.append("키(트랙) 데이터 없음")
         elif self.kind == "montage":
             if not self.sequences:

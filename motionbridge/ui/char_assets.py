@@ -9,12 +9,15 @@ import os
 import re
 from typing import List, Optional, Set
 
-from PySide6.QtCore import Qt
+import json
+
+from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from ..core import bridge, extractor, skelgraph, textmatch
 from ..core.skelgraph import Group, Rec
+from .viewer import ASSET_MIME
 
 ROLE = Qt.ItemDataRole.UserRole
 MAX_FIRST = 4000        # 한 번의 검색에서 파일 안을 열어 볼 최대 개수 (넘으면 알리고 앞부분만)
@@ -36,6 +39,26 @@ def _anim_text(r: Rec) -> str:
         elif r.compressed:
             bits.append("압축 데이터")
     return "%s  · %s" % (r.name or os.path.basename(r.path), " · ".join(bits)) if bits else (r.name or os.path.basename(r.path))
+
+
+class _DragTree(QTreeWidget):
+    """고른 메쉬/애니메이션을 뷰포트로 끌어다 놓을 수 있는 트리 (종류와 게임 안 경로를 실어 보낸다)."""
+
+    def mimeData(self, items):  # noqa: N802
+        md = QMimeData()
+        kind, paths = "", []
+        for it in items:
+            stack = [it]
+            while stack:
+                x = stack.pop(0)
+                d = x.data(0, ROLE)
+                if d and (not kind or d[0] == kind) and d[1] not in paths:
+                    kind = kind or d[0]
+                    paths.append(d[1])
+                for i in range(x.childCount()):
+                    stack.append(x.child(i))
+        md.setData(ASSET_MIME, json.dumps({"kind": kind, "paths": paths}).encode("utf-8"))
+        return md
 
 
 class CharAssetPanel(QWidget):
@@ -70,9 +93,12 @@ class CharAssetPanel(QWidget):
         h.addWidget(self.btn_search)
         v.addLayout(h)
 
-        self.tree = QTreeWidget()
+        self.tree = _DragTree()
+        self.tree.setDragEnabled(True)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self.tree.setHeaderHidden(True)
         self.tree.setMinimumHeight(260)
+        self.tree.setToolTip("메쉬/애니메이션을 고른 뒤 오른쪽 뷰포트로 끌어다 놓으면 바로 열립니다")
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self._double_clicked)
         v.addWidget(self.tree)
@@ -83,7 +109,7 @@ class CharAssetPanel(QWidget):
 
         h = QHBoxLayout()
         self.btn_prev = QPushButton("선택한 애니메이션 미리보기")
-        self.btn_prev.setToolTip("애니메이션을 추출해서 바로 뷰포트에 엽니다 (더블클릭도 같음)")
+        self.btn_prev.setToolTip("애니메이션을 추출해서 바로 뷰포트에 엽니다 (더블클릭, 또는 뷰포트로 끌어다 놓기도 같음)")
         self.btn_prev.clicked.connect(lambda *_a: self.preview())
         h.addWidget(self.btn_prev)
         self.btn_mesh = QPushButton("선택한 메쉬를 타깃으로 열기")
@@ -214,9 +240,13 @@ class CharAssetPanel(QWidget):
         for g in groups:
             self.tree.addTopLevelItem(self._group_item(g))
         n_un = len(idx.unreadable)
+        nolink = [r for r in idx.all() if r.kind in ("mesh", "anim", "montage") and not r.skel_key]
+        n_nolink = len(nolink)
         msg = skelgraph.summarize(groups) + extra
         if not groups:
             msg = "맞는 캐릭터를 찾지 못했습니다" + extra + ". 검색어를 바꾸거나, 도우미가 파일을 읽지 못했는지(UE 버전·usmap) 확인하세요."
+        if n_nolink:
+            msg += " · 스켈레톤 연결을 읽지 못한 메쉬/애니 %d개(캐릭터에 못 묶음 — 도우미가 연결 정보를 못 읽은 경우%s)" % (n_nolink, (": " + next((r.reason for r in nolink if r.reason), "")) if any(r.reason for r in nolink) else "")
         if n_un:
             msg += " · 열지 못한 파일 %d개" % n_un
         self.status.setText(msg)

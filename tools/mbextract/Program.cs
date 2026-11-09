@@ -109,9 +109,9 @@ try
                 {
                     if (obj is UAnimSequence seq)
                     {
-                        Emit(new { type = "node", path = p, kind = "anim", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")),
+                        Emit(new { type = "node", path = p, kind = "anim", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")), reason = SkelDiag(obj),
                                    frames = IntOf(Get(obj, "NumFrames")), length = FloatOf(Get(obj, "SequenceLength")), rate = FloatOf(Get(obj, "RateScale")),
-                                   tracks = CountOf(Get(obj, "TrackToSkeletonMapTable")) + CountOf(Get(obj, "CompressedTrackToSkeletonMapTable")) + CountOf(Get(obj, "RawAnimationData")),
+                                   tracks = TracksOf(obj),
                                    compressed = Get(obj, "CompressedDataStructure") != null || Get(obj, "CompressedData") != null,
                                    additive = Convert.ToString(Get(obj, "AdditiveAnimType")) ?? "" });
                         found++;
@@ -125,7 +125,7 @@ try
                     }
                     else if (obj is USkeletalMesh)
                     {
-                        Emit(new { type = "node", path = p, kind = "mesh", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")),
+                        Emit(new { type = "node", path = p, kind = "mesh", name = obj.Name, skeleton = PathOf(Get(obj, "Skeleton")), reason = SkelDiag(obj),
                                    bones = CountOf(Get(Get(obj, "ReferenceSkeleton"), "FinalRefBoneInfo")) });
                         found++;
                     }
@@ -255,10 +255,42 @@ static IEnumerable<UAnimSequence> SequencesOf(UObject obj)
 static object? Get(object? o, string name)
 {
     if (o == null) return null;
+    const System.Reflection.BindingFlags f = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     try
     {
         var t = o.GetType();
-        const System.Reflection.BindingFlags f = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var p = t.GetProperty(name, f);
+        if (p != null && p.GetIndexParameters().Length == 0) { var v = p.GetValue(o); if (v != null) return v; }
+        var fi = t.GetField(name, f);
+        if (fi != null) { var v = fi.GetValue(o); if (v != null) return v; }
+    }
+    catch { }
+    // 멤버로 없으면 파일에 저장된 속성 목록(Properties)에서 같은 이름을 찾는다 (버전마다 멤버로 안 풀어 두는 값이 있다)
+    try
+    {
+        if (o is UObject)
+        {
+            var props = o.GetType().GetProperty("Properties", f)?.GetValue(o) as System.Collections.IEnumerable;
+            if (props != null)
+                foreach (var tag in props)
+                {
+                    var nm = Get2(tag, "Name")?.ToString();
+                    if (nm == name) return Get2(tag, "Tag");
+                }
+        }
+    }
+    catch { }
+    return null;
+}
+
+// Properties 목록 안에서만 쓰는 단순 읽기 (Get 이 서로를 부르며 무한히 돌지 않게)
+static object? Get2(object? o, string name)
+{
+    if (o == null) return null;
+    const System.Reflection.BindingFlags f = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    try
+    {
+        var t = o.GetType();
         var p = t.GetProperty(name, f);
         if (p != null && p.GetIndexParameters().Length == 0) return p.GetValue(o);
         var fi = t.GetField(name, f);
@@ -268,31 +300,84 @@ static object? Get(object? o, string name)
     return null;
 }
 
+// 값 상자(FPropertyTagType 등)를 벗겨서 안의 값을 꺼낸다
+static object? Unwrap(object? o)
+{
+    for (int i = 0; i < 4 && o != null; i++)
+    {
+        if (o is string || o.GetType().IsPrimitive || o is Enum || o is System.Collections.ICollection) return o;
+        var g = Get2(o, "GenericValue") ?? Get2(o, "Value");
+        if (g == null || ReferenceEquals(g, o)) return o;
+        o = g;
+    }
+    return o;
+}
+
 static string PathOf(object? o, int depth = 0)
 {
-    if (o == null || depth > 4) return "";
+    if (o == null || depth > 5) return "";
     try
     {
         if (o is string s) return s;
         var t = o.GetType();
-        var gp = t.GetMethod("GetPathName", Type.EmptyTypes);
-        if (gp != null) { var r = gp.Invoke(o, null) as string; if (!string.IsNullOrEmpty(r)) return r!; }
-        // Lazy<T> 는 Value, FPackageIndex 는 ResolvedObject 안에 경로가 있다
-        foreach (var n in new[] { "ResolvedObject", "Value" })
+        // GetPathName 은 선택 인자가 있는 경우가 많아 빈 인자 목록으로는 못 찾는다 -> 이름으로 찾아 기본값으로 부른다
+        foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
         {
-            var inner = Get(o, n);
+            if (m.Name != "GetPathName") continue;
+            var ps = m.GetParameters();
+            if (ps.Any(x => !x.IsOptional)) continue;
+            var r = m.Invoke(o, ps.Select(x => Type.Missing).ToArray()) as string;
+            if (!string.IsNullOrEmpty(r)) return r!;
+        }
+        // Lazy<T> / FPackageIndex / 속성 값 상자: 안쪽으로 한 겹씩 벗겨서 찾는다
+        foreach (var n in new[] { "ResolvedObject", "Value", "Object", "GenericValue", "Tag" })
+        {
+            var inner = Get2(o, n);
             if (inner != null && !ReferenceEquals(inner, o)) { var r = PathOf(inner, depth + 1); if (r.Length > 0) return r; }
         }
-        var owner = Get(o, "Owner");
-        var nm = Get(o, "Name")?.ToString();
-        if (owner != null && !string.IsNullOrEmpty(nm)) { var op = PathOf(owner, depth + 1); if (op.Length > 0) return op; }
+        // 오브젝트: 패키지 이름 + 오브젝트 이름
+        var owner = Get2(o, "Owner");
+        var nm = Get2(o, "Name")?.ToString();
+        if (owner != null)
+        {
+            var pk = Get2(owner, "Name")?.ToString();
+            if (!string.IsNullOrEmpty(pk)) return pk + (string.IsNullOrEmpty(nm) ? "" : "." + nm);
+            var op = PathOf(owner, depth + 1);
+            if (op.Length > 0) return op;
+        }
+        var pkgName = Get2(o, "Package") is object pkgObj ? Get2(pkgObj, "Name")?.ToString() : null;
+        if (!string.IsNullOrEmpty(pkgName)) return pkgName + (string.IsNullOrEmpty(nm) ? "" : "." + nm);
     }
     catch { }
     return "";
 }
 
-static int IntOf(object? o) { try { return o == null ? -1 : Convert.ToInt32(o); } catch { return -1; } }
-static double FloatOf(object? o) { try { return o == null ? -1 : Convert.ToDouble(o); } catch { return -1; } }
+// 스켈레톤 경로를 못 읽었을 때만 이유(어떤 타입이 들어 있었는지)를 남긴다 — 파이썬이 상태줄에 보여 줘서 원인을 알 수 있게
+static string SkelDiag(UObject obj)
+{
+    try
+    {
+        var sk = Get(obj, "Skeleton");
+        if (sk != null && PathOf(sk).Length > 0) return "";
+        return "skeleton=" + (sk == null ? "null" : sk.GetType().Name);
+    }
+    catch (Exception e) { return "skeleton 읽기 예외 " + e.GetType().Name; }
+}
+
+// 키(트랙) 수. 어느 쪽 목록도 못 읽었으면 -1 (없다는 뜻이 아니라 '모름')
+static int TracksOf(UObject obj)
+{
+    int n = 0; bool any = false;
+    foreach (var nm in new[] { "TrackToSkeletonMapTable", "CompressedTrackToSkeletonMapTable", "RawAnimationData", "AnimationTrackNames" })
+    {
+        var v = Get(obj, nm);
+        if (v != null) { any = true; n += CountOf(v); }
+    }
+    return any ? n : -1;
+}
+
+static int IntOf(object? o) { try { o = Unwrap(o); return o == null ? -1 : Convert.ToInt32(o); } catch { return -1; } }
+static double FloatOf(object? o) { try { o = Unwrap(o); return o == null ? -1 : Convert.ToDouble(o); } catch { return -1; } }
 static int CountOf(object? o)
 {
     try

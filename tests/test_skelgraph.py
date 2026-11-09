@@ -117,5 +117,10 @@ emit(type="done", count=1)
     check(len(recs) == 2 and recs[0].kind == "anim" and recs[0].playable() and recs[1].kind == "unreadable", "inspect 결과 해석")
     check(seen == {"A/A_Slash.uasset", "A/Bad.uasset", "A/Mat.uasset"} and ev and ev[-1]["done"] == 3, "검사한 경로/진행")
 
+# 도우미가 키(트랙) 수를 못 읽은 경우(-1)는 '없음'이 아니라 '모름' -> 프레임/길이가 있으면 재생 가능으로 본다. 진짜 0 은 불가
+_a = S.Rec("A/X.uasset", "anim", skeleton="/Game/S/SK", frames=30, length=1.0, tracks=-1)
+_b = S.Rec("A/Y.uasset", "anim", skeleton="/Game/S/SK", frames=30, length=1.0, tracks=0)
+check(_a.playable() and not _b.playable(), "트랙 수 모름(-1)은 통과, 0 은 재생 불가")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

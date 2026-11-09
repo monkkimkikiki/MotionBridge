@@ -303,5 +303,26 @@ try:
 except Exception as _e:  # noqa: BLE001
     check(False, "보스 패널 스모크 예외: %r" % (_e,))
 
+# 에셋 목록 -> 뷰포트 끌어다 놓기: 트리가 종류/경로를 실은 데이터를 만들고, 뷰포트가 그걸 받아 신호를 낸다
+try:
+    import json as _j3
+    from PySide6.QtCore import QMimeData as _MD
+    from PySide6.QtWidgets import QTreeWidgetItem as _TI
+    from motionbridge.ui import char_assets as _CA
+    from motionbridge.ui.viewer import ASSET_MIME as _AM, Viewport as _VP
+    _tr = _CA._DragTree()
+    _root = _TI(["g"])
+    _leaf = _TI(["a"])
+    _leaf.setData(0, _CA.ROLE, ("anim", "G/A_Slash.uasset"))
+    _root.addChild(_leaf)
+    _tr.addTopLevelItem(_root)
+    _md = _tr.mimeData([_root])
+    _d = _j3.loads(bytes(_md.data(_AM)).decode("utf-8"))
+    check(_d == {"kind": "anim", "paths": ["G/A_Slash.uasset"]}, "끌기 데이터: %s" % _d)
+    _vp = _VP()
+    check(_vp.acceptDrops(), "뷰포트가 끌어다 놓기를 받음")
+except Exception as _e:  # noqa: BLE001
+    check(False, "끌어다 놓기 스모크 예외: %r" % (_e,))
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

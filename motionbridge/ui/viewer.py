@@ -6,6 +6,8 @@ import time
 from typing import Optional
 
 import numpy as np
+import json
+
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtCore import QLineF
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
@@ -14,6 +16,7 @@ from PySide6.QtWidgets import QWidget
 from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, drag_placement, overlay_names, render_surface,
                           skin_display, wire_segments)
 
+ASSET_MIME = "application/x-motionbridge-asset"
 _POINT_RADIUS = {"pt_mesh": 0.0, "pt_target_joints": 2.0, "pt_plant": 6.0, "pt_bad": 6.0}
 
 # 메시 표시 방식 (키, 이름)
@@ -38,6 +41,7 @@ class Viewport(QWidget):
     camera_moved = Signal()
     key_action = Signal(str)  # 뷰포트에 포커스가 있을 때의 키: prev next first last play
     placement_dragged = Signal(float, float, float)  # 드래그로 바뀐 애니메이션 배치 (dx, dz, dyaw°)
+    asset_dropped = Signal(str, list)  # 에셋 목록에서 끌어다 놓음: (종류 "anim"|"mesh", 게임 안 경로들)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,8 +66,29 @@ class Viewport(QWidget):
         self._dm_owner = None
         self._qimg_ref = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setAcceptDrops(True)
         self._last = None
         self._base_target = None  # follow 모드에서 카메라 높이 기준
+
+    # --------------------------------------------------------------- 에셋 끌어다 놓기
+    def dragEnterEvent(self, e) -> None:  # noqa: N802
+        if e.mimeData().hasFormat(ASSET_MIME):
+            e.acceptProposedAction()
+
+    dragMoveEvent = dragEnterEvent  # noqa: N815
+
+    def dropEvent(self, e) -> None:  # noqa: N802
+        md = e.mimeData()
+        if not md.hasFormat(ASSET_MIME):
+            return
+        try:
+            d = json.loads(bytes(md.data(ASSET_MIME)).decode("utf-8"))
+            kind, paths = str(d.get("kind", "")), [str(x) for x in d.get("paths", [])]
+        except (ValueError, AttributeError):
+            return
+        if kind in ("anim", "mesh") and paths:
+            e.acceptProposedAction()
+            self.asset_dropped.emit(kind, paths)
 
     # --------------------------------------------------------------- 데이터
     def set_data(self, pr, vd: Optional[ViewData], reframe: bool = False) -> None:

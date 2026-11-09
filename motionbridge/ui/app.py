@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(0, 0, 0, 0)
         self.viewport = Viewport()
         self.viewport.key_action.connect(self._viewport_key)
+        self.viewport.asset_dropped.connect(lambda kind, paths: self.extract_for_char(paths, kind))  # 에셋 목록에서 끌어다 놓으면 바로 열기
         rl.addWidget(self.viewport, 1)
         opts = QHBoxLayout()
         self._view_checks: Dict[str, object] = {}
