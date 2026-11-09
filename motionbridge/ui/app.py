@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPale
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton,
-    QScrollArea, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
+    QScrollArea, QSlider, QSplitter, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
     QWidget, QLineEdit, QButtonGroup, QAbstractItemView, QTreeWidget, QTreeWidgetItem,
 )
 
@@ -120,6 +120,8 @@ class MainWindow(QMainWindow):
 
     def import_animref(self) -> None:
         """메뉴: AnimRef 가 만든 query.json 을 골라 '영상으로 찾기' 탭에 넣는다 (실시간 연결이 안 될 때)."""
+        self.set_mode("motionbridge")
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self.vidfind))
         self.vidfind.open_query_file()
 
     def handoff(self, query_path: str) -> None:
@@ -134,6 +136,7 @@ class MainWindow(QMainWindow):
     def _on_link_open(self, query) -> None:
         """UI 스레드: AnimRef 요청을 받으면 '영상으로 찾기' 탭에 후보 화면을 띄운다."""
         self.vidfind.load_query(query)
+        self.set_mode("motionbridge")
         self.tabs.setCurrentIndex(self.tabs.indexOf(self.vidfind))
         self.show()
         self.raise_()
@@ -341,7 +344,6 @@ class MainWindow(QMainWindow):
     # ================================================================== UI
     def _build_ui(self) -> None:
         split = QSplitter(Qt.Orientation.Horizontal)
-        self.setCentralWidget(split)
 
         self.tabs = ChromeTabs()  # 크롬식 탭 줄: 누르면 전환 · 끌어내면 별도 창 · 다른 창 탭 줄에 놓으면 합쳐짐
         self.tabs.addTab(self._tab_extract(), "추출", "0. 게임에서 추출")
@@ -352,14 +354,14 @@ class MainWindow(QMainWindow):
         self.vidfind = VidFindTab(self)
         self.tabs.addTab(self.vidfind, "영상찾기", "영상으로 찾기")
         self.tabs.addTab(self._tab_help(), "도우미", "추출 도우미")
-        self.animref = AnimRefTab(self)  # 처음 열 때 만들어진다 (시작이 느려지지 않게)
-        self.tabs.addTab(self.animref, "AnimRef", "AnimRef — 게임 영상에서 모션 클립 수집")
         self.mocap = MocapTab(self)
         self.tabs.addTab(self.mocap, "AI모캡", "AI 모캡 — 영상에서 사람 3D 모션 (GVHMR / WHAM)")
-        # 탭 줄 맨 앞은 AnimRef (번호·단축키는 그대로). 처음 보이는 화면은 예전처럼 '추출'이라 AnimRef 화면은 열 때 만들어진다.
-        self.tabs.hub.set_front(self.animref)
-        self.tabs.hub.move(self.animref, self.tabs, 0)
+        # 탭 줄 순서: 추출 다음이 영상찾기 (번호·단축키는 그대로, 분리했다 합쳐도 이 자리로 돌아온다)
+        self.tabs.hub.set_rank(self.vidfind, 0.5)
+        self.tabs.hub.move(self.vidfind, self.tabs, 1)
         self.tabs.setCurrentIndex(0)
+        # AnimRef 는 탭이 아니라 최상단 선택(AnimRef | MotionBridge)의 한 화면이다. 처음 열 때 만들어진다 (시작이 느려지지 않게)
+        self.animref = AnimRefTab(self)
         self.tabs.setMinimumWidth(500)
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         split.addWidget(self.tabs)
@@ -496,6 +498,53 @@ class MainWindow(QMainWindow):
         moved = getattr(split, "splitterMoved", None)
         if moved is not None and hasattr(moved, "connect"):
             moved.connect(self._split_moved)
+
+        # ---- 최상단: [AnimRef] [MotionBridge] — 전체 화면을 고른다. 시작은 AnimRef.
+        root = QWidget()
+        rv = QVBoxLayout(root)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(0)
+        bar = QHBoxLayout()
+        bar.setContentsMargins(8, 6, 8, 0)
+        bar.setSpacing(4)
+        self.mode_btns: Dict[str, QPushButton] = {}
+        for key, text, tip in (("animref", "AnimRef", "게임 영상에서 모션 클립을 모으고 정리합니다"),
+                               ("motionbridge", "MotionBridge", "추출 · 영상찾기 · 매핑 · 리타깃 · 검수 · 내보내기")):
+            b_ = QPushButton(text)
+            b_.setCheckable(True)
+            b_.setToolTip(tip)
+            b_.setMinimumHeight(34)
+            b_.setMinimumWidth(130)
+            b_.setStyleSheet("QPushButton{font-size:14px;font-weight:600;padding:4px 18px;border:1px solid #3a4050;border-bottom:none;"
+                             "border-top-left-radius:8px;border-top-right-radius:8px;background:#262b36;color:#9aa3b5}"
+                             "QPushButton:checked{background:#3b4a6b;color:#ffffff}")
+            b_.clicked.connect(lambda _c=False, k=key: self.set_mode(k))
+            bar.addWidget(b_)
+            self.mode_btns[key] = b_
+        bar.addStretch(1)
+        rv.addLayout(bar)
+        self.mode_stack = QStackedWidget()
+        self.mode_stack.addWidget(self.animref)
+        self.mode_stack.addWidget(split)
+        rv.addWidget(self.mode_stack, 1)
+        self.setCentralWidget(root)
+        self.set_mode("animref")
+
+    MODES = ("animref", "motionbridge")
+
+    def set_mode(self, key: str) -> None:
+        """최상단 선택: 'animref' 또는 'motionbridge'."""
+        if key not in self.MODES:
+            return
+        self.mode_stack.setCurrentIndex(self.MODES.index(key))
+        for k, b_ in self.mode_btns.items():
+            b_.setChecked(k == key)
+        if key == "motionbridge" and hasattr(self, "_split") and not getattr(self, "_split_applied", True):
+            self._apply_split_ratio()
+            self._split_applied = True
+
+    def mode(self) -> str:
+        return self.MODES[self.mode_stack.currentIndex()]
 
     def _apply_split_ratio(self) -> None:
         w = max(int(self._split.width()), 200)

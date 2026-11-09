@@ -72,14 +72,17 @@ with tempfile.TemporaryDirectory() as d:
     mw = A.MainWindow()
     mw.show()
     app.processEvents()
-    check(mw.tabs.count() == 9, "메인 창 탭 9개")
+    check(mw.mode() == "animref" and mw.animref.isVisible() and not mw.tabs.isVisible(), "시작 화면은 AnimRef")
+    mw.set_mode("motionbridge")
+    app.processEvents()
+    check(mw.tabs.count() == 8, "메인 창 탭 8개 (AnimRef 는 최상단 선택)")
     check(sum(1 for p in mw.tabs.pages if p.isVisible()) == 1, "메인 창: 처음에 보이는 탭 화면은 하나")
     for i in range(mw.tabs.count()):
         mw.tabs.setCurrentIndex(i)
         app.processEvents()
         vis = [mw.tabs.tabText(k) for k, p in enumerate(mw.tabs.pages) if p.isVisible()]
         check(len(vis) == 1 and mw.tabs.widget(i).isVisible(), "탭 %d 에서 보이는 화면: %s" % (i, vis))
-    check(mw.tabs.currentIndex() == 8, "모든 탭 순회")
+    check(mw.tabs.currentIndex() == 7, "모든 탭 순회")
     vt = mw.vidfind
     win = mw.tabs.hub.detach(vt, None)
     app.processEvents()
@@ -88,10 +91,10 @@ with tempfile.TemporaryDirectory() as d:
     check(mw.tabs.hub.view_of(vt).current_page() is vt, "분리 후에도 이동 호출 동작")
     win.close()
     app.processEvents()
-    check(mw.tabs.pages.index(vt) == mw.tabs.hub.home_index(vt) + 1, "닫으면 원래 자리 (맨 앞 AnimRef 다음에 번호 순서대로): %d" % mw.tabs.pages.index(vt))
+    check(mw.tabs.pages.index(vt) == 1, "닫으면 원래 자리 (둘째 칸): %d" % mw.tabs.pages.index(vt))
     # AnimRef 탭: 열 때 AnimRef 화면이 만들어지고, '추출 툴로 보내기'가 같은 프로그램의 영상찾기 탭으로 바로 간다
     ar = mw.animref
-    mw.tabs.setCurrentIndex(7)
+    mw.set_mode("animref")
     app.processEvents()
     check(ar.inner is not None, "AnimRef 화면 생성: %s" % (ar.error or "ok"))
     if ar.inner is not None:

@@ -568,6 +568,34 @@ class QInputDialog(Stub):
         return QInputDialog.text_ret
 
 
+class QStackedWidget(QWidget):
+    def __init__(self, *a, **k):
+        super().__init__()
+        self._pages, self._cur = [], -1
+
+    def addWidget(self, w):
+        self._pages.append(w)
+        if self._cur < 0:
+            self._cur = 0
+        return len(self._pages) - 1
+
+    def setCurrentIndex(self, i):
+        if 0 <= i < len(self._pages):
+            self._cur = i
+
+    def currentIndex(self):
+        return self._cur
+
+    def currentWidget(self):
+        return self._pages[self._cur] if 0 <= self._cur < len(self._pages) else None
+
+    def count(self):
+        return len(self._pages)
+
+    def widget(self, i):
+        return self._pages[i] if 0 <= i < len(self._pages) else None
+
+
 class QFileDialog(Stub):
     open_ret = ("", "")
     save_ret = ("", "")

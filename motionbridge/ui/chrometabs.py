@@ -291,7 +291,15 @@ class TabHub:
         """합칠 때 정하는 자리 순서. 기본은 번호(처음 추가된 순서)이고, front 로 지정한 화면은 항상 맨 앞."""
         if page in getattr(self, "front", []):
             return -1000 + self.front.index(page)
+        if page in getattr(self, "ranks", {}):
+            return self.ranks[page]
         return self.home_index(page)
+
+    def set_rank(self, page, rank: float) -> None:
+        """이 화면의 탭 줄 자리 순서를 정한다 (번호는 그대로). 예: 1번과 2번 사이에 두려면 1.5 — 분리했다 합쳐도 그 자리로 돌아온다."""
+        if not hasattr(self, "ranks"):
+            self.ranks = {}
+        self.ranks[page] = float(rank)
 
     def set_front(self, page) -> None:
         """이 화면을 탭 줄 맨 앞에 둔다 (번호는 그대로, 분리했다 합쳐도 맨 앞으로 돌아온다)."""
