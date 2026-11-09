@@ -83,7 +83,7 @@ def test_compute_and_files():
         out = os.path.join(d, "o")
         files, warns = pr.export(ExportOptions(out_dir=out, presets=["max"], formats=["bip"], what="retargeted"))
         names = sorted(os.path.basename(f) for f in files)
-        assert len(names) == 2 and names[0].endswith("_biped.mbbip") and names[1].endswith("_biped.ms"), names
+        assert len(names) == 2 and names[0].endswith("_retarget.mbbip") and names[1].endswith("_retarget.ms"), names
         ms = open([f for f in files if f.endswith(".ms")][0], encoding="utf-8").read()
         dat = [f for f in files if f.endswith(".mbbip")][0]
         assert os.path.basename(dat) in ms and "__DATA__" not in ms
@@ -103,6 +103,8 @@ def test_compute_and_files():
         assert not [n for n in declared if n.lower() in kw], [n for n in declared if n.lower() in kw]
         assert not re.search(r"\+\s*[\w\.\[\]]+\s+as\s+\w+\s*\+", ms), "a + b as string + ... 는 (a+b) as string 으로 해석됨"
         assert "biped.createNew" in ms and "biped.setTransform" in ms and "biped.saveBipFile" in ms
+        _lint_scope(ms)
+        assert "getSaveFileName" not in ms, "저장 위치를 묻지 않고 자동으로 저장해야 함"
         lines = open(dat, encoding="utf-8").read().split("\n")
         assert lines[0] == biped.FORMAT
         hdr = {l.split()[0]: l.split()[1:] for l in lines[1:] if l and l.split()[0] != "P" and l != "DATA"}
@@ -126,6 +128,34 @@ def test_compute_and_files():
     print("biped files OK")
 
 
+def _lint_scope(ms: str) -> None:
+    """3ds Max 에서 실제로 났던 컴파일 오류 'No outer local variable references permitted here' 를 정적으로 점검:
+    mbRun 안에 중첩 함수가 없어야 하고, 최상위 함수는 mbRun 의 지역변수를 쓰지 않아야 한다."""
+    import re
+    # 'as' 는 '+' 보다 우선순위가 낮다: "a" + x as string + "b" 는 ("a"+x) as string 이 되어 실행 중 오류. 괄호로 감싸야 한다
+    assert not re.search(r"\bas\s+(string|integer|float)\s*\+", ms), "'as 형 +' — (x as string) 으로 괄호를 치세요"
+    i0 = ms.index("fn mbRun =")
+    run = ms[i0:]
+    assert not re.search(r"^\s+fn\s", run, re.M), "mbRun 안에 중첩 함수가 있음 (바깥 지역변수를 못 쓴다)"
+    run_locals = set()
+    for m_ in re.finditer(r"\blocal\s+([^\n]+)", run):
+        for part in re.split(r",(?![^\[\(]*[\]\)])", m_.group(1)):
+            mm = re.match(r"\s*([A-Za-z_]\w*)", part)
+            if mm:
+                run_locals.add(mm.group(1))
+    top = ms[:i0]
+    for m_ in re.finditer(r"^fn\s+(\w+)((?:\s+\w+)*)\s*=(.*?)(?=^fn\s|\Z)", top, re.M | re.S):
+        name, params, body = m_.group(1), set(m_.group(2).split()), m_.group(3)
+        own = set(params)
+        for l_ in re.finditer(r"\blocal\s+([A-Za-z_]\w*)", body):
+            own.add(l_.group(1))
+        for l_ in re.finditer(r"\bfor\s+([A-Za-z_]\w*)", body):
+            own.add(l_.group(1))
+        body_nc = re.sub(r'"[^"\n]*"', '""', re.sub(r"--[^\n]*", "", body))
+        for v in run_locals - own:
+            assert not re.search(r"(?<![\w.:])%s(?!\w)" % re.escape(v), body_nc), (name, "mbRun 의 지역변수를 함수에서 씀", v)
+
+
 if __name__ == "__main__":
     test_parts()
     test_compute_and_files()
@@ -143,6 +173,8 @@ def test_template_script():
         assert "loadMaxFile tmplFile" in ms and "saveMaxFile outMax" in ms and "Vertical_Horizontal_Turn" in ms
         files2, _w = biped.export_biped(d, "u", skel, anim, pr.tgt_slots, F, 100.0)
         assert 'local tmplFile = ""' in open(files2[0], encoding="utf-8").read(), "템플릿이 없으면 예전처럼 Biped 를 새로 만든다"
+        _lint_scope(ms)
+        assert "mbUniqueStem tdir baseName" in ms and "getSaveFileName" not in ms and "checkForSave()" in ms
         data = open(files[1], encoding="utf-8").read().splitlines()
         assert any(l.startswith("lr ") for l in data), "좌우 축 벡터가 데이터에 들어감"
     print("biped template OK")

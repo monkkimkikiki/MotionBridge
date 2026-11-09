@@ -158,11 +158,60 @@ def write_data(path: str, d: dict) -> None:
 
 
 # ---------------------------------------------------------------------------------------------------- MaxScript
-SCRIPT = r'''-- MotionBridge -> 3ds Max Biped  (자동 생성 파일)
+SCRIPT = r'''-- MotionBridge -> 3ds Max Biped  (자동 생성 파일, 리타깃 결과)
 -- 사용법: 3ds Max 에서 [Scripting > Run Script...] 로 이 파일을 실행하세요.
---   * 같은 폴더의 "__DATA__" 를 읽어서 Biped 를 만들고, 모션 키를 넣고, .bip 로 저장합니다.
---   * 장면에 있던 Biped 는 건드리지 않고 새로 만듭니다. 저장 위치는 실행할 때 물어봅니다.
+--   * 같은 폴더의 "__DATA__" 를 읽어서 Biped 에 리타깃한 모션 키를 넣고 .bip 로 저장합니다 (저장 위치를 묻지 않습니다).
+--   * 템플릿 .max 가 지정되어 있으면 그 파일을 열어 안의 Biped 에 모션을 적용하고, 템플릿이 있는 폴더에
+--     "<이 파일 이름>.max" (+ .bip) 로 다른 이름 저장합니다. 템플릿 원본은 건드리지 않고, 같은 이름이 있으면 _2, _3 … 을 붙입니다.
+--   * 템플릿이 없으면 새 Biped 를 만들어 이 스크립트와 같은 폴더에 .bip 로 저장합니다.
 --   * 오류가 나면 [MAXScript Listener] 창(F11)의 내용을 알려 주세요.
+
+-- 주의: MaxScript 는 함수 안에서 바깥 함수의 지역변수/지역함수를 쓸 수 없어서(컴파일 오류), 도우미 함수는 모두 여기(최상위)에 두고 필요한 값은 인자로 받는다.
+fn mbTryGetNode b arr link = ( local n = undefined ; try ( n = biped.getNode b arr link:link ) catch () ; if n == undefined do ( try ( n = biped.getNode b.transform.controller arr link:link ) catch () ) ; n )
+
+fn mbMakeBiped h ang spN fgN toN =
+(
+	local b = undefined
+	try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:spN legLinks:3 fingers:fgN fingerLinks:3 toes:toN toeLinks:1 ankleAttach:0.2 ) catch ()
+	if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:spN legLinks:3 fingers:fgN fingerLinks:3 ) catch () )
+	if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] ) catch () )
+	b
+)
+
+-- 오른쪽 허벅지 -> 왼쪽 허벅지 방향(좌우 축)이 XY 평면에서 몇 도인지 (없으면 undefined)
+fn mbLrAngle b slotNames arrs links =
+(
+	local li = findItem slotNames "L_UpLeg"
+	local ri = findItem slotNames "R_UpLeg"
+	if li == 0 or ri == 0 then undefined else
+	(
+		local nl = mbTryGetNode b arrs[li] links[li]
+		local nr = mbTryGetNode b arrs[ri] links[ri]
+		if nl == undefined or nr == undefined then undefined else
+		(
+			local v = nl.transform.pos - nr.transform.pos
+			atan2 v.y v.x
+		)
+	)
+)
+
+fn mbAngDiff a b = ( (mod (a - b + 540.0) 360.0) - 180.0 )
+
+-- 같은 이름의 파일이 없는 이름(stem)을 찾는다: base, base_2, base_3 ... (확장자 목록 전부 비어 있어야 함)
+fn mbUniqueStem dir base exts =
+(
+	local stem = base
+	local i = 2
+	local clash = true
+	while clash do
+	(
+		clash = false
+		for e in exts do ( if doesFileExist (dir + stem + e) do clash = true )
+		if clash do ( stem = base + "_" + (i as string) ; i += 1 )
+	)
+	stem
+)
+
 fn mbRun =
 (
 	local dataFile = (getFilenamePath (getThisScriptFilename())) + "__DATA__"
@@ -209,84 +258,64 @@ fn mbRun =
 
 	-- 템플릿 모드(__TEMPLATE__ 가 비어 있지 않을 때): 스키닝된 .max 를 열어 그 안의 Biped 에 키를 굽고 .max 로 저장한다 (Biped 를 새로 만들지 않음)
 	local tmplFile = "__TEMPLATE__"
+	local scriptFile = getThisScriptFilename()
+	local scriptDir = if scriptFile != undefined then (getFilenamePath scriptFile) else (getFilenamePath dataFile)
+	local baseName = if scriptFile != undefined then (getFilenameFile scriptFile) else (clipName + "_retarget")
 	local outBip = undefined, outMax = undefined
 	if tmplFile != "" then
 	(
 		if not (doesFileExist tmplFile) do ( messageBox ("템플릿 .max 파일을 찾지 못했습니다:\n" + tmplFile) ; return undefined )
-		outMax = getSaveFileName caption:"저장할 .max 파일 (템플릿에 모션을 구워 저장)" filename:(clipName + ".max") types:"3ds Max (*.max)|*.max"
-		if outMax == undefined do return undefined
-		outBip = (getFilenamePath outMax) + (getFilenameFile outMax) + ".bip"
+		local tdir = getFilenamePath tmplFile
+		local stem = mbUniqueStem tdir baseName #(".max", ".bip")
+		outMax = tdir + stem + ".max"
+		outBip = tdir + stem + ".bip"
 	)
 	else
 	(
-		outBip = getSaveFileName caption:"저장할 .bip 파일" filename:(clipName + ".bip") types:"Biped (*.bip)|*.bip"
-		if outBip == undefined do return undefined
+		local stem = mbUniqueStem scriptDir baseName #(".bip")
+		outBip = scriptDir + stem + ".bip"
 	)
 
 	local U = units.decodeValue "1.0m"      -- 3ds Max 시스템 단위로 1 미터
 	local msgs = #()
-	fn tryGetNode b arr link = ( local n = undefined ; try ( n = biped.getNode b arr link:link ) catch () ; if n == undefined do ( try ( n = biped.getNode b.transform.controller arr link:link ) catch () ) ; n )
 
-	-- ---------------------------------------------------------------- Biped 만들기
-	fn makeBiped h ang spN fgN toN =
-	(
-		local b = undefined
-		try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:spN legLinks:3 fingers:fgN fingerLinks:3 toes:toN toeLinks:1 ankleAttach:0.2 ) catch ()
-		if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] arms:true neckLinks:1 spineLinks:spN legLinks:3 fingers:fgN fingerLinks:3 ) catch () )
-		if b == undefined do ( try ( b = biped.createNew h ang [0,0,0] ) catch () )
-		b
-	)
+	-- ---------------------------------------------------------------- Biped 준비
 	local bip = undefined
 	if tmplFile != "" then
 	(
+		if not (checkForSave()) do return undefined      -- 지금 장면에 저장 안 한 변경이 있으면 먼저 물어본다
 		loadMaxFile tmplFile quiet:true useFileUnits:true
 		U = units.decodeValue "1.0m"
 		-- Biped 의 중심(COM, Bip01): 컨트롤러가 Vertical_Horizontal_Turn 인 노드
 		for o in objects where bip == undefined do ( try ( if classof o.controller == Vertical_Horizontal_Turn do bip = o ) catch () )
 		if bip == undefined do ( messageBox "템플릿 .max 안에서 Biped 를 찾지 못했습니다." ; return undefined )
 	)
-	else bip = makeBiped (heightM * U) 0 spineN fingN toesN
+	else bip = mbMakeBiped (heightM * U) 0 spineN fingN toesN
 	if bip == undefined do ( messageBox "Biped 를 만들지 못했습니다." ; return undefined )
 	local ctrl = bip.transform.controller
 	ctrl.figureMode = true
 
 	-- 정면 방향 맞추기: 오른쪽 허벅지 -> 왼쪽 허벅지 방향(좌우 축)이 데이터와 같아지게 Biped 를 돌려서 다시 만든다.
 	-- (발끝이 없는 모델에서도 되도록 발끝 대신 허벅지를 쓴다. 만든 뒤 실제로 재서 확인하고, 틀리면 반대 방향으로 한 번 더 시도한다.)
-	fn lrAngle b =
-	(
-		local li = findItem pSlot "L_UpLeg"
-		local ri = findItem pSlot "R_UpLeg"
-		if li == 0 or ri == 0 then undefined else
-		(
-			local nl = tryGetNode b pArr[li] pLink[li]
-			local nr = tryGetNode b pArr[ri] pLink[ri]
-			if nl == undefined or nr == undefined then undefined else
-			(
-				local v = nl.transform.pos - nr.transform.pos
-				atan2 v.y v.x
-			)
-		)
-	)
-	fn angDiff a b = ( (mod (a - b + 540.0) 360.0) - 180.0 )
 	local facingMsg = ""
 	if tmplFile == "" and length lrDir > 0.5 do
 	(
 		local target = atan2 lrDir.y lrDir.x
-		local cur = lrAngle bip
-		if cur != undefined and abs (angDiff target cur) > 5.0 do
+		local cur = mbLrAngle bip pSlot pArr pLink
+		if cur != undefined and abs (mbAngDiff target cur) > 5.0 do
 		(
-			local need = angDiff target cur
+			local need = mbAngDiff target cur
 			local tryAng = #(need, -need)
 			local okAng = false
 			for k = 1 to 2 while not okAng do
 			(
 				local old = for o in objects where (matchPattern o.name pattern:(bip.name + "*")) collect o
 				delete old
-				bip = makeBiped (heightM * U) tryAng[k] spineN fingN toesN
+				bip = mbMakeBiped (heightM * U) tryAng[k] spineN fingN toesN
 				ctrl = bip.transform.controller
 				ctrl.figureMode = true
-				local now = lrAngle bip
-				if now != undefined and abs (angDiff target now) <= 5.0 do okAng = true
+				local now = mbLrAngle bip pSlot pArr pLink
+				if now != undefined and abs (mbAngDiff target now) <= 5.0 do okAng = true
 			)
 			if okAng then facingMsg = "정면 방향 맞춤 완료" else append msgs "⚠ Biped 정면 방향을 데이터와 맞추지 못했습니다 (좌우 축 불일치) — 캐릭터가 돌아가 보일 수 있습니다."
 		)
@@ -295,7 +324,7 @@ fn mbRun =
 	local nodes = #()
 	for i = 1 to nParts do
 	(
-		local n = tryGetNode bip pArr[i] pLink[i]
+		local n = mbTryGetNode bip pArr[i] pLink[i]
 		append nodes n
 		if n == undefined do append msgs ("Biped 에서 찾지 못한 부위: " + pSlot[i])
 	)
@@ -315,7 +344,7 @@ fn mbRun =
 				if length db > 1e-6 do
 				(
 					local e = acos (amax -1.0 (amin 1.0 (dot (normalize db) pDir[i])))
-					if e > 10.0 do append offList (pSlot[i] + ":" + ((floor e) as integer) as string + "도")
+					if e > 10.0 do append offList (pSlot[i] + ":" + (((floor e) as integer) as string) + "도")
 				)
 			)
 		)
@@ -412,7 +441,7 @@ fn mbRun =
 					(
 						got = normalize got
 						local e = acos (amax -1.0 (amin 1.0 (dot want got)))
-						if e > 15.0 do append worst (pSlot[i] + "@" + (t as string) + ":" + ((floor e) as integer) as string + "도")
+						if e > 15.0 do append worst (pSlot[i] + "@" + (t as string) + ":" + (((floor e) as integer) as string) + "도")
 					)
 				)
 			)
@@ -461,8 +490,8 @@ def export_biped(out_dir: str, base: str, skel: Skeleton, anim: Animation, slots
                  units_per_meter: float, template: str = "") -> Tuple[List[str], List[str]]:
     """(만든 파일 목록, 경고 목록)"""
     d = compute(skel, anim, slots, frame_to_canon, units_per_meter)
-    ms = os.path.join(out_dir, base + "_biped.ms")
-    data = os.path.join(out_dir, base + "_biped.mbbip")
+    ms = os.path.join(out_dir, base + "_retarget.ms")
+    data = os.path.join(out_dir, base + "_retarget.mbbip")
     write_data(data, d)
     write_script(ms, os.path.basename(data), template)
     warns = []

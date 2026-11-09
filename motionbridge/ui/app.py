@@ -1472,11 +1472,14 @@ class MainWindow(QMainWindow):
             h.addWidget(cb)
         lay.addWidget(g)
         h2 = QHBoxLayout()
-        h2.addWidget(QLabel("Biped 템플릿 .max (선택)"))
+        h2.addWidget(QLabel("스키닝된 .max (선택)"))
         self.biped_tpl = QLineEdit(self.cfg.get("biped_template", ""))
-        self.biped_tpl.setPlaceholderText("스키닝된 .max (bip > refbone 구조). 지정하면 Biped 를 새로 만들지 않고 이 파일의 Biped 에 키를 구워 .max 로 저장")
-        self.biped_tpl.setToolTip("3ds Max Biped(.ms) 형식에만 쓰입니다. 이미 메시가 스키닝된 .max 를 지정하면, 만들어지는 .ms 를 3ds Max 에서 실행할 때 그 파일을 열어\n"
-                                  "그 안의 Biped(COM 포함)에 모션을 굽고 새 .max 와 .bip 로 저장합니다. 타깃 모델의 바인드 포즈와 템플릿 Biped 의 기본 자세가 같아야 합니다.")
+        self.biped_tpl.setPlaceholderText("비워 두면 새 Biped 를 만들어 .bip 만 저장 · 스키닝된 .max 를 고르면 그 안의 Biped 에 모션을 적용해 같은 폴더에 *_retarget.max 로 저장")
+        self.biped_tpl.setToolTip("3ds Max Biped 형식으로 내보낼 때만 쓰입니다.\n"
+                                  "· 비워 둘 때: 3ds Max 에서 *_retarget.ms 를 실행하면 새 Biped 를 만들고 모션을 넣어 같은 폴더에 *_retarget.bip 로 저장합니다.\n"
+                                  "· 스키닝된 .max 를 고를 때: *_retarget.ms 를 실행하면 그 파일을 열어 안의 Biped(bip > refbone 구조)에 모션을 적용하고,\n"
+                                  "  그 .max 가 있는 폴더에 *_retarget.max 와 *_retarget.bip 로 다른 이름 저장합니다. 원본 .max 는 그대로, 같은 이름이 있으면 _2, _3 을 붙입니다.\n"
+                                  "저장 위치는 묻지 않습니다. 모든 프레임에 키를 넣습니다.")
         h2.addWidget(self.biped_tpl, 1)
         b2 = QPushButton("찾아보기…")
         b2.clicked.connect(self._pick_biped_template)
