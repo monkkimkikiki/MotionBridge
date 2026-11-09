@@ -145,5 +145,43 @@ with tempfile.TemporaryDirectory() as _d:
     _j.add(S.Rec(_bad.path, "anim", skeleton="", frames=10, length=1.0, tracks=5))
     check(_j.pending([_bad.path]) == [], "한 번 다시 읽은 연결 없는 파일은 반복해 읽지 않음")
 
+# ---- 플레이어블 캐릭터 표시 / 맨 위로
+SK_PL = "/Game/Characters/Player/Meshes/SKEL_Hero.SKEL_Hero"
+SK_EN = "/Game/Characters/Enemy/Wolf/SKEL_Wolf.SKEL_Wolf"
+SK_MX = "/Game/Characters/Player/Enemy/SKEL_X.SKEL_X"
+SK_CC = "/Game/Chars/PlayerKnight/SKEL_Knight.SKEL_Knight"
+PR = [
+    R("Proj/Content/Characters/Enemy/Wolf/SK_Wolf.uasset", "mesh", "SK_Wolf", SK_EN, bones=60),
+    R("Proj/Content/Characters/Enemy/Wolf/A_Howl.uasset", "anim", "A_Howl", SK_EN, frames=30, length=1.0, tracks=60),
+    R("Proj/Content/Characters/Player/Meshes/SK_Hero.uasset", "mesh", "SK_Hero", SK_PL, bones=70),
+    R("Proj/Content/Characters/Player/Meshes/SKEL_Hero.uasset", "skeleton", "SKEL_Hero", bones=70),
+    R("Proj/Content/Characters/Player/Anim/A_Slash.uasset", "anim", "A_Slash", SK_PL, frames=30, length=1.0, tracks=70),
+    R("Proj/Content/Characters/Player/Enemy/SK_X.uasset", "mesh", "SK_X", SK_MX, bones=50),
+    R("Proj/Content/Chars/PlayerKnight/SK_Knight.uasset", "mesh", "SK_Knight", SK_CC, bones=70),
+    # 메쉬는 없고 애니메이션만 있는데 경로가 전부 플레이어 쪽
+    R("Proj/Content/PC/Anim/A_Roll.uasset", "anim", "A_Roll", "/Game/PC/SKEL_Z.SKEL_Z", frames=30, length=1.0, tracks=70),
+]
+pg = {g.name: g for g in S.build_groups(PR)}
+check(pg["Hero"].player and "player" in pg["Hero"].player_why.lower(), "Player 폴더 -> 플레이어블: %s" % pg["Hero"].player_why)
+check(not pg["Wolf"].player and "enemy" in pg["Wolf"].player_why.lower(), "Enemy 폴더 -> 아님")
+check(not pg["X"].player and pg["X"].player_manual is None, "플레이어/몬스터 말이 섞이면 자동으로는 정하지 않음: %s" % pg["X"].player_why)
+check(pg["Knight"].player, "PlayerKnight(카멜케이스) 도 인식")
+check(any(g.player and not g.meshes for g in S.build_groups(PR)), "메쉬 없이 애니 경로가 PC 쪽이면 플레이어블")
+ordr = S.build_groups(PR)
+npl = sum(1 for g in ordr if g.player)
+check(all(g.player for g in ordr[:npl]) and not any(g.player for g in ordr[npl:]), "플레이어블이 전부 맨 위: %s" % [(g.name, g.player) for g in ordr])
+# 직접 표시가 자동 추정보다 우선
+mk = {SK_EN and S.norm_key(SK_EN): True, S.norm_key(SK_PL): False}
+m2 = {g.name: g for g in S.build_groups(PR, "", None, mk)}
+check(m2["Wolf"].player and m2["Wolf"].player_manual is True and not m2["Hero"].player and m2["Hero"].player_manual is False, "직접 표시/해제가 우선")
+check(S.build_groups(PR, "", None, mk)[0].name == "Wolf" or S.build_groups(PR, "", None, mk)[0].player, "직접 표시한 캐릭터가 위로")
+check("플레이어블" in S.summarize(S.build_groups(PR)), "요약에 플레이어블 수")
+# 표시는 저장·불러오기 후에도 남는다
+with tempfile.TemporaryDirectory() as _d:
+    _ix = S.SkelIndex(os.path.join(_d, "i.json"))
+    _ix.marks[S.norm_key(SK_EN)] = True
+    _ix.save()
+    check(S.SkelIndex.load(_ix.path).marks == {S.norm_key(SK_EN): True}, "플레이어블 표시 저장/불러오기")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

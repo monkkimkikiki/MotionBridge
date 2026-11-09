@@ -20,6 +20,7 @@ from ..core.skelgraph import Group, Rec
 from .viewer import ASSET_MIME
 
 ROLE = Qt.ItemDataRole.UserRole
+PLAYER_MARK = "🎮 [플레이어블]  "      # 플레이어블 캐릭터 이름 앞에 붙는 표시 (목록 맨 위에 모아 보여 준다)
 MAX_FIRST = 4000        # 한 번의 검색에서 파일 안을 열어 볼 최대 개수 (넘으면 알리고 앞부분만)
 ANIM_ALL = r"(?i)(anim|/A[SM]?_[^/]*$)"   # 애니메이션 후보 (폴더 이름에 anim 이 없어도 A_/AS_/AM_ 이름은 포함)
 RIG_ALL = r"(?i)(anim|/A[SM]?_[^/]*$|/SKM?_[^/]*$|skeleton|skeletal|/SKEL_|character|/char[a-z]*/|mesh)"   # 자동 찾기: 애니메이션 + 메쉬/스켈레톤 후보
@@ -52,7 +53,7 @@ class _DragTree(QTreeWidget):
             while stack:
                 x = stack.pop(0)
                 d = x.data(0, ROLE)
-                if d and (not kind or d[0] == kind) and d[1] not in paths:
+                if d and d[0] != "group" and (not kind or d[0] == kind) and d[1] not in paths:
                     kind = kind or d[0]
                     paths.append(d[1])
                 for i in range(x.childCount()):
@@ -122,6 +123,10 @@ class CharAssetPanel(QWidget):
         h.addWidget(self.btn_send)
         v.addLayout(h)
         h = QHBoxLayout()
+        self.btn_player = QPushButton("🎮  플레이어블 표시/해제")
+        self.btn_player.setToolTip("고른 캐릭터를 '플레이어블 캐릭터' 로 직접 표시하거나(맨 위로 올라갑니다) 해제합니다. 이름으로 잘못 짐작한 것을 바로잡을 때 쓰세요. 한 번 정하면 기억합니다.")
+        self.btn_player.clicked.connect(lambda *_a: self.toggle_player())
+        h.addWidget(self.btn_player)
         self.btn_clear = QPushButton("검사 기록 지우기")
         self.btn_clear.clicked.connect(lambda *_a: self.clear_index())
         h.addWidget(self.btn_clear)
@@ -236,7 +241,7 @@ class CharAssetPanel(QWidget):
 
     # ------------------------------------------------------------------ 보이기
     def _show(self, idx: skelgraph.SkelIndex, q: str, touch: Optional[Set[str]], extra: str = "") -> None:
-        groups = skelgraph.build_groups(idx.all(), q, touch)
+        groups = skelgraph.build_groups(idx.all(), q, touch, idx.marks)
         self.groups = groups
         self.tree.clear()
         for g in groups:
@@ -254,8 +259,14 @@ class CharAssetPanel(QWidget):
         self.status.setText(msg)
 
     def _group_item(self, g: Group) -> QTreeWidgetItem:
-        top = QTreeWidgetItem(["%s   (메쉬 %d · 애니메이션 %d)" % (g.name, len(g.meshes), len(g.anims))])
-        top.setToolTip(0, "스켈레톤: " + (g.skeleton_path or g.skeleton))
+        top = QTreeWidgetItem(["%s%s   (메쉬 %d · 애니메이션 %d)" % (PLAYER_MARK if g.player else "", g.name, len(g.meshes), len(g.anims))])
+        top.setData(0, ROLE, ("group", g.skeleton))
+        tip = "스켈레톤: " + (g.skeleton_path or g.skeleton)
+        if g.player:
+            tip = "🎮 플레이어블 캐릭터 — %s\n(아니면 [🎮 플레이어블 표시/해제] 로 바로잡을 수 있습니다)\n" % g.player_why + tip
+        elif g.player_why:
+            tip += "\n플레이어블 아님 — " + g.player_why
+        top.setToolTip(0, tip)
         top.setExpanded(True)
         m = QTreeWidgetItem(["메쉬 (%d)" % len(g.meshes) + ("" if g.meshes else " — 이 검사 기록에 메쉬 없음")])
         for r in g.meshes:
@@ -285,6 +296,33 @@ class CharAssetPanel(QWidget):
                 rj.addChild(it)
             top.addChild(rj)
         return top
+
+    def toggle_player(self) -> None:
+        """고른 캐릭터를 플레이어블로 표시/해제 (자동 추정을 사람이 바로잡는다). 여러 개를 골랐으면 첫 캐릭터 기준으로 한꺼번에 바꾼다."""
+        sel = list(self.tree.selectedItems())
+        keys: List[str] = []
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            stack = [top]
+            hit = False
+            while stack and not hit:
+                x = stack.pop()
+                hit = any(x is s for s in sel)
+                for j in range(x.childCount()):
+                    stack.append(x.child(j))
+            d = top.data(0, ROLE)
+            if hit and d and d[0] == "group" and d[1] not in keys:
+                keys.append(d[1])
+        if not keys:
+            self.status.setText("플레이어블로 표시할 캐릭터를 목록에서 먼저 고르세요.")
+            return
+        idx = self._index()
+        cur = {g.skeleton: g.player for g in self.groups}
+        new = not cur.get(keys[0], False)
+        for k in keys:
+            idx.marks[k] = new
+        idx.save()
+        self._show(idx, self.query.text().strip(), None, extra=" (플레이어블 %s %d명)" % ("표시" if new else "해제", len(keys)))
 
     # ------------------------------------------------------------------ 선택 읽기
     def _leaf_paths(self, kind: str) -> List[str]:

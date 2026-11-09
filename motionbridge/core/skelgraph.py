@@ -120,6 +120,51 @@ class Group:
     anims: List[Rec] = field(default_factory=list)        # 재생 가능한 것만
     rejected: List[Tuple[Rec, str]] = field(default_factory=list)  # (애니, 이유) — 재생 불가라 뺀 것
     statics: List[Rec] = field(default_factory=list)
+    player: bool = False         # 플레이어블 캐릭터인가 (직접 표시했거나, 이름/경로로 추정)
+    player_why: str = ""         # 그렇게 본 이유 (화면 툴팁에 보여 준다)
+    player_manual: Optional[bool] = None   # 사람이 직접 정했으면 True/False, 자동 판정이면 None
+
+
+# 플레이어 쪽 / 몬스터 쪽 이름 조각. 폴더·파일 이름을 '_ . - /' 와 숫자로 쪼갠 토막이 아래 낱말과 같을 때만 센다 (예: 'Player_Hero' 의 player, hero).
+_PLAYER_WORDS = {"player", "players", "playable", "pc", "pcs", "hero", "heroes", "protagonist", "mainchar", "maincharacter",
+                 "playerchar", "playercharacter", "playerpawn", "pcharacter"}
+_MONSTER_WORDS = {"monster", "monsters", "enemy", "enemies", "boss", "bosses", "npc", "npcs", "creature", "creatures", "mob", "mobs",
+                  "beast", "beasts", "minion", "minions", "foe", "foes", "animal", "animals", "elite", "miniboss"}
+
+
+def _words(path: str) -> List[str]:
+    base = re.sub(r"\.[A-Za-z0-9]+$", "", path or "")
+    out: List[str] = []
+    for tok in re.split(r"[/\\_.\-\s]+", base):
+        for part in re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", tok).split("_"):      # 'PlayerKnight' -> player, knight
+            part = re.sub(r"\d+$", "", part).lower()                                # 'Player01' -> 'player'
+            if part:
+                out.append(part)
+    return out
+
+
+def player_guess(g: Group) -> Tuple[bool, str]:
+    """이름·폴더만 보고 플레이어블 캐릭터인지 추정한다 (확실하지 않으면 False). (결과, 이유).
+
+    메쉬·스켈레톤 경로에 player/pc/hero/protagonist 같은 말이 있고 monster/enemy/boss/npc 같은 말이 없으면 플레이어블.
+    메쉬가 없을 때는 애니메이션 경로의 절반 넘게가 그렇고 몬스터 말이 없으면 플레이어블로 본다.
+    """
+    own = [g.skeleton_path] + [r.path for r in g.meshes] + [r.path for r in g.skeleton_assets]
+    own = [p for p in own if p]
+    pl = sorted({w for p in own for w in _words(p) if w in _PLAYER_WORDS})
+    mo = sorted({w for p in own for w in _words(p) if w in _MONSTER_WORDS})
+    if pl and not mo:
+        return True, "경로·이름에 '%s' 가 있음" % "', '".join(pl)
+    if pl and mo:
+        return False, "플레이어('%s')와 몬스터('%s') 말이 섞여 있어 자동으로는 정하지 않음" % ("', '".join(pl), "', '".join(mo))
+    if mo:
+        return False, "경로·이름에 '%s' 가 있음 (몬스터 쪽)" % "', '".join(mo)
+    if g.anims:
+        hit = sum(1 for r in g.anims if any(w in _PLAYER_WORDS for w in _words(r.path)))
+        bad = sum(1 for r in g.anims if any(w in _MONSTER_WORDS for w in _words(r.path)))
+        if hit * 2 > len(g.anims) and not bad:
+            return True, "애니메이션 경로 %d/%d 개에 player 계열 이름이 있음" % (hit, len(g.anims))
+    return False, ""
 
 
 def _clean_name(s: str) -> str:
@@ -138,10 +183,12 @@ def guess_group_name(g: Group) -> str:
     return _clean_name(os.path.splitext(base)[0]) or g.skeleton
 
 
-def build_groups(records: Iterable[Rec], query: str = "", touch=None) -> List[Group]:
+def build_groups(records: Iterable[Rec], query: str = "", touch=None, marks: Optional[Dict[str, bool]] = None) -> List[Group]:
     """records -> 스켈레톤별 그룹. query(쉼표 = 모두 포함, 대소문자 무시)가 있으면 그 말이 이름/경로에 든 그룹만.
 
     touch: 이번 검색에 걸린 에셋 경로 집합. 주면 '걸린 파일이 하나라도 든 그룹'도 보인다 (검색어가 애니메이션 이름에만 있어도 그 캐릭터가 나오게).
+    marks: 스켈레톤 키 -> True/False. 사람이 직접 '플레이어블이다/아니다' 로 정한 것 (자동 추정보다 우선).
+    플레이어블 캐릭터는 항상 맨 위로 올린다.
     """
     groups: Dict[str, Group] = {}
     by_key: Dict[str, Rec] = {}
@@ -191,7 +238,16 @@ def build_groups(records: Iterable[Rec], query: str = "", touch=None) -> List[Gr
                 continue
         if g.meshes or g.anims or g.skeleton_assets:
             out.append(g)
-    out.sort(key=lambda g: (-(len(g.meshes) > 0), -len(g.anims), g.name.lower()))
+    marks = marks or {}
+    for g in out:
+        m = marks.get(g.skeleton)
+        if m is None:
+            g.player, g.player_why = player_guess(g)
+            g.player_manual = None
+        else:
+            g.player, g.player_manual = bool(m), bool(m)
+            g.player_why = "직접 표시함" if m else "직접 '플레이어블 아님' 으로 정함"
+    out.sort(key=lambda g: (-int(g.player), -(len(g.meshes) > 0), -len(g.anims), g.name.lower()))
     return out
 
 
@@ -209,7 +265,8 @@ def anims_for_mesh(records: Iterable[Rec], mesh_path: str) -> Tuple[List[Rec], O
 def summarize(groups: List[Group]) -> str:
     n_a = sum(len(g.anims) for g in groups)
     n_r = sum(len(g.rejected) for g in groups)
-    return "캐릭터 %d명 · 재생 가능한 애니메이션 %d개%s" % (len(groups), n_a, (" (재생 불가라 뺀 것 %d개)" % n_r) if n_r else "")
+    n_p = sum(1 for g in groups if g.player)
+    return "캐릭터 %d명%s · 재생 가능한 애니메이션 %d개%s" % (len(groups), (" (🎮 플레이어블 %d명)" % n_p) if n_p else "", n_a, (" (재생 불가라 뺀 것 %d개)" % n_r) if n_r else "")
 
 
 # ---------------------------------------------------------------- 캐시
@@ -222,6 +279,7 @@ class SkelIndex:
         self.unreadable: Dict[str, str] = {}
         self.seen: set = set()                 # 검사를 마친 에셋 경로 (알아볼 개체가 없던 파일 포함)
         self.rechecked: set = set()            # 스켈레톤 연결이 비어 있어서 지금 도우미로 다시 읽어 본 파일 (한 번만 다시 읽는다)
+        self.marks: Dict[str, bool] = {}       # 스켈레톤 키 -> 사람이 직접 정한 '플레이어블 여부' (검사 기록을 지워도 남긴다)
 
     def add(self, r: Rec) -> None:
         if r.kind == "unreadable":
@@ -264,7 +322,7 @@ class SkelIndex:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump({"v": 1, "recs": [r.to_json() for r in self.all()], "unreadable": self.unreadable, "seen": sorted(self.seen),
-                       "rechecked": sorted(self.rechecked)}, f, ensure_ascii=False)
+                       "rechecked": sorted(self.rechecked), "marks": self.marks}, f, ensure_ascii=False)
 
     @staticmethod
     def load(path: str) -> "SkelIndex":
@@ -277,6 +335,7 @@ class SkelIndex:
             idx.unreadable.update(d.get("unreadable", {}))
             idx.seen.update(d.get("seen", []))
             idx.rechecked.update(d.get("rechecked", []))
+            idx.marks.update({str(k): bool(v) for k, v in (d.get("marks") or {}).items()})
         except (OSError, ValueError):
             pass
         return idx

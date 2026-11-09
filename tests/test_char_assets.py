@@ -113,6 +113,40 @@ def main():
         mw.set_extract_list([P + "A_Slash.uasset"], "anim")
         check(mw.ex_list.all_paths() == [P + "A_Slash.uasset"] and mw.ex_kind.currentData() == "anim", "추출 목록으로 보내기")
 
+        # 플레이어블 캐릭터: 아이콘 + 맨 위 + 직접 표시/해제
+        pn.clear_index()
+        SKP = "/Game/Characters/Player/SKEL_Hero.SKEL_Hero"
+        SKM = "/Game/Characters/Monster/SKEL_Ogre.SKEL_Ogre"
+        pidx = pn._index()
+        for r in [S.Rec("Proj/Content/Characters/Monster/SK_Ogre.uasset", "mesh", "SK_Ogre", SKM, bones=60),
+                  S.Rec("Proj/Content/Characters/Monster/A_Roar.uasset", "anim", "A_Roar", SKM, frames=30, length=1.0, tracks=60),
+                  S.Rec("Proj/Content/Characters/Monster/A_Walk.uasset", "anim", "A_Walk", SKM, frames=30, length=1.0, tracks=60),
+                  S.Rec("Proj/Content/Characters/Player/SK_Hero.uasset", "mesh", "SK_Hero", SKP, bones=70)]:
+            pidx.add(r)
+        pn.query.setText("")
+        pn._show(pidx, "", None)
+        t0, t1 = pn.tree.topLevelItem(0).text(0), pn.tree.topLevelItem(1).text(0)
+        check(t0.startswith(C.PLAYER_MARK) and "Hero" in t0 and not t1.startswith(C.PLAYER_MARK), "플레이어블은 아이콘이 붙고 맨 위(애니가 적어도): %s / %s" % (t0, t1))
+        check("플레이어블" in pn.tree.topLevelItem(0).tip, "툴팁에 이유")
+        # 몬스터를 직접 플레이어블로 표시
+        pn.tree.setCurrentItem(pn.tree.topLevelItem(1))
+        pn.toggle_player()
+        tt = [pn.tree.topLevelItem(i).text(0) for i in range(pn.tree.topLevelItemCount())]
+        check(all(x.startswith(C.PLAYER_MARK) for x in tt), "직접 표시: 둘 다 플레이어블 %s" % tt)
+        check(S.norm_key(SKM) in pidx.marks and pidx.marks[S.norm_key(SKM)] is True, "표시를 색인에 저장")
+        # 하위 항목(메쉬)을 골라도 해제된다
+        sub = pn.tree.topLevelItem(0).child(0).child(0)
+        pn.tree.setCurrentItem(sub)
+        pn.toggle_player()
+        tt = [pn.tree.topLevelItem(i).text(0) for i in range(pn.tree.topLevelItemCount())]
+        check(sum(1 for x in tt if x.startswith(C.PLAYER_MARK)) == 1, "하위 항목을 골라도 그 캐릭터가 해제: %s" % tt)
+        pn.tree.clear()
+        pn.toggle_player()
+        check("먼저 고르세요" in pn.status.text(), "선택 없으면 안내")
+        # 검사 기록을 지워도 직접 정한 표시는 남는다
+        pn.clear_index()
+        check(S.norm_key(SKM) in pn._index().marks, "검사 기록 지워도 표시 유지")
+
         # 기록 지우기
         pn.clear_index()
         check(not pn._index().all() and pn.tree.topLevelItemCount() == 0, "검사 기록 지우기")
