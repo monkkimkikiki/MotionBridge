@@ -3,12 +3,12 @@
 설정·본별 보정·레이어·IK 구간은 모션마다 따로 저장되므로 하나를 고치다가 다른 모션으로 넘어가도 작업이 그대로 남는다 (core/pipeline.py 의 클립별 설정)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
-from ..core.loader import FILE_FILTER
 from .widgets import CollapsibleBox
 
-TITLE = "모션 목록 — 리타겟 중인 애니메이션"
+TITLE = "모션 목록 — 뷰포트에 연 애니메이션"
 
 
 class ClipPanel(QWidget):
@@ -16,6 +16,7 @@ class ClipPanel(QWidget):
         super().__init__()
         self.app = app
         self._busy = False
+        self._checked: set = set()        # 체크한 모션 (애니메이션 객체의 id — 번호가 밀려도 따라간다)
         v = QVBoxLayout(self)
         v.setContentsMargins(4, 4, 4, 4)
         head = QLabel("🎞 " + TITLE)
@@ -23,18 +24,26 @@ class ClipPanel(QWidget):
         head.setWordWrap(True)
         v.addWidget(head)
         self.lst = QListWidget()
-        self.lst.setToolTip("눌러서 그 모션으로 넘어갑니다. 설정·본 보정·레이어·IK 구간은 모션마다 따로 저장돼서, 다른 모션을 보고 돌아와도 하던 작업이 그대로예요.\n"
+        self.lst.setToolTip("뷰포트에 연 모션이 자동으로 여기에 올라옵니다. 눌러서 그 모션으로 넘어갑니다. 앞의 체크박스를 켠 모션은 내보내기 때 한꺼번에 내보내집니다.\n"
+                            "눌러서 그 모션으로 넘어갑니다. 설정·본 보정·레이어·IK 구간은 모션마다 따로 저장돼서, 다른 모션을 보고 돌아와도 하던 작업이 그대로예요.\n"
                             "✎ = 손댄 모션 (본 보정·레이어·IK 구간·프레임 편집이 있음)")
         self.lst.currentRowChanged.connect(self._row)
+        self.lst.itemChanged.connect(self._item_changed)
         v.addWidget(self.lst, 1)
+        r1 = QHBoxLayout()
+        self.b_all = QPushButton("☑ 전체 체크")
+        self.b_all.setToolTip("목록의 모든 모션을 체크합니다 (내보내기 때 전부 내보내집니다)")
+        self.b_all.clicked.connect(lambda _c=False: self.set_all_checked(True))
+        self.b_none = QPushButton("☐ 전체 해제")
+        self.b_none.setToolTip("체크를 모두 끕니다 (체크가 하나도 없으면 내보내기는 지금 보는 모션만 내보냅니다)")
+        self.b_none.clicked.connect(lambda _c=False: self.set_all_checked(False))
+        r1.addWidget(self.b_all, 1)
+        r1.addWidget(self.b_none, 1)
+        v.addLayout(r1)
         r0 = QHBoxLayout()
-        self.b_add = QPushButton("＋ 모션 추가…")
-        self.b_add.setToolTip("모션 파일(PSA·FBX·GLB·BVH)을 골라 목록에 더합니다. 같은 캐릭터 뼈대의 것만 들어갑니다.\n추출 탭에서 애니메이션을 추출하면 자동으로 여기에 더해져요.")
-        self.b_add.clicked.connect(lambda _c=False: self.add_files())
-        self.b_rm = QPushButton("－ 선택한 모션 빼기")
-        self.b_rm.setToolTip("지금 고른 모션을 목록에서 뺍니다 (그 모션의 설정·보정·레이어·IK 구간도 함께 사라져요. 파일은 지워지지 않습니다)")
+        self.b_rm = QPushButton("－ 선택한 모션 지우기")
+        self.b_rm.setToolTip("지금 고른 모션을 목록에서 지웁니다 (그 모션의 설정·보정·레이어·IK 구간도 함께 사라져요. 파일은 지워지지 않습니다)")
         self.b_rm.clicked.connect(lambda _c=False: self.remove_current())
-        r0.addWidget(self.b_add, 1)
         r0.addWidget(self.b_rm, 1)
         v.addLayout(r0)
         self.count = QLabel("")
@@ -89,11 +98,15 @@ class ClipPanel(QWidget):
             for i, a in enumerate(anims):
                 mark = "✎ " if pr.clip_touched(i) else "   "
                 it = QListWidgetItem("%s%d. %s  (%d프레임)" % (mark, i + 1, a.name, a.n_frames))
-                it.setToolTip("%s — %d프레임, %.0ffps" % (a.name, a.n_frames, a.fps))
+                it.setToolTip("%s — %d프레임, %.0ffps\n체크하면 내보내기 때 함께 내보냅니다" % (a.name, a.n_frames, a.fps))
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setCheckState(Qt.CheckState.Checked if id(a) in self._checked else Qt.CheckState.Unchecked)
                 self.lst.addItem(it)
             if anims:
                 self.lst.setCurrentRow(min(max(pr.clip, 0), len(anims) - 1))
-            self.count.setText("모션 %d개" % len(anims) if anims else "소스 모션을 열면 여기에 목록이 나옵니다")
+            alive = {id(a) for a in anims}
+            self._checked &= alive                       # 지워졌거나 새로 연 소스의 옛 체크는 버린다
+            self._set_count(len(anims))
             cur = self.src.currentData()
             self.src.clear()
             for i, a in enumerate(anims):
@@ -102,14 +115,49 @@ class ClipPanel(QWidget):
             j = self.src.findData(cur) if cur is not None else -1
             if j >= 0:
                 self.src.setCurrentIndex(j)
-            can = len(anims) > 1
-            self.b_rm.setEnabled(can)
-            self.b_in.setEnabled(can and self.src.count() > 0)
+            self.b_rm.setEnabled(bool(anims))
+            self.b_all.setEnabled(bool(anims))
+            self.b_none.setEnabled(bool(self._checked))
+            self.b_in.setEnabled(len(anims) > 1 and self.src.count() > 0)
             h = pr.import_history() if anims else []
             self.b_out.setEnabled(bool(h))
             self.hist.setText("") if not h else self.hist.setText("가져온 기록 (마지막이 위):\n" + "\n".join("· " + x for x in reversed(h)))
         finally:
             self._busy = False
+        self._notify()
+
+    # ---- 체크 (내보내기 대상)
+    def _set_count(self, n: int) -> None:
+        k = len(self._checked)
+        self.count.setText(("모션 %d개 · 체크 %d개" % (n, k)) if n else "소스 모션을 열면 여기에 자동으로 올라옵니다")
+
+    def _notify(self) -> None:
+        f = getattr(self.app, "_update_clip_export_hint", None)
+        if f is not None:
+            f()
+
+    def _item_changed(self, it=None) -> None:
+        if self._busy:
+            return
+        anims = self.app.pr.src.animations if self.app.pr.src is not None else []
+        on = set()
+        for i in range(min(self.lst.count(), len(anims))):
+            if self.lst.item(i).checkState() == Qt.CheckState.Checked:
+                on.add(id(anims[i]))
+        self._checked = on
+        self._set_count(len(anims))
+        self.b_none.setEnabled(bool(on))
+        self._notify()
+
+    def checked_clips(self) -> list:
+        """체크한 모션의 클립 번호들 (목록 순서)."""
+        anims = self.app.pr.src.animations if self.app.pr.src is not None else []
+        return [i for i, a in enumerate(anims) if id(a) in self._checked]
+
+    def set_all_checked(self, on: bool) -> None:
+        anims = self.app.pr.src.animations if self.app.pr.src is not None else []
+        self._checked = {id(a) for a in anims} if on else set()
+        self.refresh()
 
     def select(self, i: int) -> None:
         """다른 곳(콤보박스·되돌리기)에서 클립이 바뀌었을 때 목록 줄만 맞춘다."""
@@ -160,21 +208,21 @@ class ClipPanel(QWidget):
         self.refresh()
         a.statusBar().showMessage(msg)
 
-    # ---- 목록 편집: 모션 더하기 / 빼기
-    def add_files(self) -> None:
-        a = self.app
-        paths, _ = QFileDialog.getOpenFileNames(a, "모션 추가", a._open_start_dir("anim"), FILE_FILTER)
-        if paths:
-            self.add_paths(list(paths), select_first=True)
-
+    # ---- 목록 편집: 뷰포트로 연 모션은 자동으로 더해진다 / 지우기
     def add_paths(self, paths, select_first: bool = False) -> int:
-        """파일들을 목록에 더한다 (추출 직후에도 쓴다). 돌려주는 값: 새로 더해진 모션 수."""
+        """파일들을 목록에 더한다 (뷰포트로 열 때·추출 직후에 쓴다). 돌려주는 값: 새로 더해진 모션 수."""
         a = self.app
         try:
             added, skipped = a.pr.add_motions(list(paths))
         except Exception as e:  # noqa: BLE001
             a.statusBar().showMessage("모션 추가 실패: %s" % e)
             return 0
+        self.added_ui(added, skipped, select_first)
+        return len(added)
+
+    def added_ui(self, added, skipped, select_first: bool = False) -> None:
+        """add_motions 가 끝난 뒤 화면을 맞춘다 (일하는 스레드에서 add_motions 만 하고 이쪽은 화면 스레드에서 부른다)."""
+        a = self.app
         if a.pr.src is not None and added and added[0] == 0:
             a._after_load("source")                     # 목록이 비어 있었으면 첫 모션이 소스가 됨
         else:
@@ -186,22 +234,24 @@ class ClipPanel(QWidget):
         if skipped:
             msg += " · 건너뜀 %d개: %s" % (len(skipped), "; ".join(skipped[:2]))
         a.statusBar().showMessage(msg)
-        return len(added)
 
     def remove_current(self) -> None:
         a = self.app
         pr = a.pr
-        if pr.src is None or len(pr.src.animations) <= 1:
-            a.statusBar().showMessage("마지막 모션은 목록에서 뺄 수 없습니다 (소스 빼기를 쓰세요)")
+        if pr.src is None:
             return
         ci = self.lst.currentRow()
         if ci < 0:
             return
         nm = pr.src.animations[ci].name
         if pr.clip_touched(ci):
-            r = QMessageBox.question(a, "모션 빼기", "'%s' 에는 손댄 작업(본 보정·레이어·IK 구간·프레임 편집)이 있습니다.\n목록에서 빼면 그 작업도 사라집니다. 뺄까요?" % nm)
+            r = QMessageBox.question(a, "모션 지우기", "'%s' 에는 손댄 작업(본 보정·레이어·IK 구간·프레임 편집)이 있습니다.\n목록에서 지우면 그 작업도 사라집니다. 지울까요?" % nm)
             if r != QMessageBox.StandardButton.Yes:
                 return
+        if len(pr.src.animations) <= 1:                  # 마지막 하나를 지우면 소스 모션을 빼는 것과 같다
+            a.unload_source()
+            self.refresh()
+            return
         try:
             pr.remove_clip(ci)
         except ValueError as e:
@@ -214,5 +264,5 @@ class ClipPanel(QWidget):
         a.recompute(reframe=True)
         a.history.reset(a._edit_state())
         self.refresh()
-        a.statusBar().showMessage("목록에서 뺐습니다: " + nm)
+        a.statusBar().showMessage("목록에서 지웠습니다: " + nm)
 

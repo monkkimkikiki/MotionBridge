@@ -762,9 +762,10 @@ class MainWindow(QMainWindow):
         b = QPushButton("찾아보기…")
         b.clicked.connect(self._pick_game)
         h.addWidget(b)
-        b = QPushButton("검사")
-        b.clicked.connect(self._scan_game)
-        h.addWidget(b)
+        self.ex_scan_btn = QPushButton("검사")
+        self.ex_scan_btn.clicked.connect(self._scan_game)
+        h.addWidget(self.ex_scan_btn)
+        self.ex_game.textChanged.connect(lambda *_a: self._update_scan_gate())
         v.addLayout(h)
         h = QHBoxLayout()
         h.addWidget(QLabel("게임 이름"))
@@ -773,12 +774,13 @@ class MainWindow(QMainWindow):
         self.ex_gname.setToolTip("추출 결과는 '출력 폴더 / 게임 이름 / 캐릭터 이름 / Animations 또는 Models' 에 정리됩니다")
         h.addWidget(self.ex_gname, 1)
         v.addLayout(h)
-        self.ex_summary = QLabel("게임 설치 폴더를 고르고 [검사]를 누르면 암호화 여부를 확인합니다.")
+        self.ex_summary = QLabel("① 게임 설치 폴더를 고르고 ② 주황색 [검사]를 먼저 누르세요. 암호화 여부를 확인하고, 그 뒤에 아래 설정이 켜집니다.")
         self.ex_summary.setWordWrap(True)
         v.addWidget(self.ex_summary)
         lay.addWidget(g)
 
         g = CollapsibleBox("2) 추출 설정")
+        self._scan_gated = [g]
         f = QFormLayout(g)
         self.ex_aes = QLineEdit()
         self.ex_aes.setPlaceholderText("검사 후, 암호화된 게임일 때만 입력")
@@ -810,6 +812,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(g)
 
         g = CollapsibleBox("3) 에셋 찾기 / 추출")
+        self._scan_gated.append(g)
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         h.addWidget(QLabel("종류"))
@@ -896,7 +899,7 @@ class MainWindow(QMainWindow):
         h.addWidget(b)
         v.addLayout(h)
         self.ex_exist = self._make_exist_combo()
-        self.ex_exist.setToolTip("추출한 파일이 이미 있을 때의 처리입니다. 기본은 이전 파일을 지우지 않고 '이름_old_날짜' 로 보관한 뒤 새 파일을 원래 이름으로 저장합니다.")
+        self.ex_exist.setToolTip("추출한 파일이 이미 있을 때의 처리입니다. 기본은 같은 이름의 파일을 덮어씁니다 (이름_old_날짜 같은 중복 파일을 만들지 않습니다).")
         v.addWidget(self.ex_exist)
         lb = QLabel(safesave.EXPLAIN[safesave.DEFAULT])
         lb.setWordWrap(True)
@@ -911,6 +914,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(g)
 
         g = CollapsibleBox("3-2) 에셋 찾기 · 캐릭터/스켈레톤 보기 (재생 가능한 애니메이션만)")
+        self._scan_gated.append(g)
         v = QVBoxLayout(g)
         self.char_panel = CharAssetPanel(self)
         v.addWidget(self.char_panel)
@@ -954,6 +958,7 @@ class MainWindow(QMainWindow):
         self.ex_out.textChanged.connect(self._update_dir_label)
         self._update_dir_label()
         lay.addStretch(1)
+        self._update_scan_gate()
         return sc
 
     # ---- 추출 탭 동작
@@ -1104,6 +1109,34 @@ class MainWindow(QMainWindow):
             self.ex_helper_label.setText("찾지 못했습니다. tools/mbextract 를 빌드하거나 경로를 지정하세요 (README 참고).")
             self.ex_helper_label.setStyleSheet("color:#e0a050")
 
+    SCAN_BTN_TODO = ("QPushButton{background:#ff7a00;color:white;font-weight:bold;font-size:14px;"
+                     "padding:6px 18px;border:2px solid #ffb066;border-radius:6px;}"
+                     "QPushButton:hover{background:#ff9230;}")
+    SCAN_BTN_DONE = ("QPushButton{background:#2e8b57;color:white;font-weight:bold;padding:4px 12px;"
+                     "border-radius:6px;}QPushButton:hover{background:#3aa66a;}")
+
+    def _scan_ok(self) -> bool:
+        """현재 게임 폴더 칸의 경로가 이미 검사를 마친 폴더인가."""
+        sc = self.__dict__.get("scan")
+        return bool(sc is not None and sc.found and sc.root == self.ex_game.text().strip())
+
+    def _update_scan_gate(self) -> None:
+        """검사를 마치기 전에는 2)·3) 설정과 에셋 찾기를 잠그고, [검사] 버튼을 눈에 띄게 칠한다."""
+        ok = self._scan_ok()
+        for box in self.__dict__.get("_scan_gated", []):
+            box.setEnabled(ok)
+            box.setToolTip("" if ok else "먼저 위의 [검사] 버튼을 눌러야 쓸 수 있습니다.")
+        b = self.__dict__.get("ex_scan_btn")
+        if b is not None:
+            if ok:
+                b.setText("✔ 검사 완료 (다시 검사)")
+                b.setStyleSheet(self.SCAN_BTN_DONE)
+                b.setToolTip("이 게임 폴더는 검사를 마쳤습니다. 폴더가 바뀌었으면 다시 누르세요.")
+            else:
+                b.setText("▶ 검사 (먼저 누르세요)")
+                b.setStyleSheet(self.SCAN_BTN_TODO)
+                b.setToolTip("게임 폴더를 검사해야 아래 설정과 추출이 켜집니다.")
+
     def _scan_game(self) -> None:
         path = self.ex_game.text().strip()
         if not path:
@@ -1123,6 +1156,7 @@ class MainWindow(QMainWindow):
                 self.ex_gname.setText(auto)  # 직접 고친 이름은 덮어쓰지 않는다
             self.cfg["game_name_auto"] = auto
             bridge.save_config(self.cfg)
+        self._update_scan_gate()
 
     def _extract_args(self):
         """추출 호출에 필요한 값을 모은다. 조건이 안 맞으면 안내창을 띄우고 None."""
@@ -1153,20 +1187,20 @@ class MainWindow(QMainWindow):
     # ---- 같은 이름의 파일이 이미 있을 때 (추출·내보내기 공통 설정)
     def _make_exist_combo(self) -> QComboBox:
         cb = QComboBox()
-        for k in (safesave.KEEP_OLD, safesave.NEW_NAME, safesave.OVERWRITE):
+        for k in safesave.CHOICES:
             cb.addItem(safesave.LABELS[k], k)
-        cb.setCurrentIndex(max(cb.findData(safesave.norm(self.cfg.get("on_exist"))), 0))
+        cb.setCurrentIndex(max(cb.findData(safesave.choice(self.cfg.get("on_exist"))), 0))
         cb.currentIndexChanged.connect(lambda *_a, _cb=cb: self._exist_changed(_cb))
         self.__dict__.setdefault("_exist_combos", []).append(cb)
         return cb
 
     def _exist_policy(self) -> str:
         cbs = self.__dict__.get("_exist_combos") or []
-        return safesave.norm(cbs[0].currentData() if cbs else self.cfg.get("on_exist"))
+        return safesave.choice(cbs[0].currentData() if cbs else self.cfg.get("on_exist"))
 
     def _exist_changed(self, src=None) -> None:
         cbs = self.__dict__.get("_exist_combos", [])
-        pol = safesave.norm((src or cbs[0]).currentData())      # 바꾼 콤보의 값이 기준
+        pol = safesave.choice((src or cbs[0]).currentData())      # 바꾼 콤보의 값이 기준
         for cb in cbs:                                          # 다른 쪽도 같이 (하나의 설정)
             if cb is not src and cb.currentData() != pol:
                 cb.blockSignals(True)
@@ -1300,7 +1334,7 @@ class MainWindow(QMainWindow):
         msg = "추출 완료: %d개 — 위 '출력 폴더' 링크를 누르면 폴더가 열립니다" % len(files)
         kept = list(getattr(getattr(self, "_last_layout", None), "backups", []) or [])
         if kept:
-            msg += " · 같은 이름의 이전 파일 %d개를 '_old_날짜' 로 보관했습니다" % len(kept)
+            msg += " · 같은 이름의 이전 파일 %d개를 보관했습니다" % len(kept)
         # 방금 추출한 모션/메시를 바로 화면에 보여준다 (여러 개면 첫 번째. 나머지는 아래 목록에서 더블클릭)
         psa = next((f for f in files if f.lower().endswith(".psa")), None)
         glb = next((f for f in files if f.lower().endswith(".glb") and "_static" not in f), None) or next((f for f in files if f.lower().endswith(".glb")), None)
@@ -1338,7 +1372,38 @@ class MainWindow(QMainWindow):
 
     def _open_path(self, path: str) -> None:
         self._remember_dir(path)
-        self.run_async(lambda w: self.pr.load_source(path), lambda m: self._after_load("source"), "소스 읽는 중")
+        self._add_source_files([path])
+
+    def _add_source_files(self, paths) -> None:
+        """뷰포트에 소스 모션으로 여는 파일은 전부 왼쪽 모션 목록에 자동으로 더한다 (이미 열린 모션은 그대로 두고 뒤에 붙인다).
+        지금 소스와 뼈대가 다른 캐릭터의 모션이면, 목록을 비우고 새로 열지 묻는다."""
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+
+        def done(res):
+            added, skipped = res
+            diff = [x for x in skipped if "스켈레톤이 달라" in x]
+            if diff and not added and self.pr.src is not None:
+                r = QMessageBox.question(self, "다른 캐릭터의 모션", "지금 목록의 모션과 뼈대가 다른 캐릭터의 모션입니다.\n(%s)\n\n지금 목록을 비우고 이 모션으로 새로 열까요?\n(지금 모션들의 보정 작업은 사라집니다)" % diff[0][:80])
+                if r == QMessageBox.StandardButton.Yes:
+                    self.pr.unload_source()
+                    self._after_unload("source")
+                    self._add_source_files(paths)
+                    return
+            if not added and self.pr.src is not None:          # 이미 목록에 있는 모션이면 새로 더하지 않고 그 모션으로 간다
+                hit = next((self.pr.clip_of_path(p) for p in paths if self.pr.clip_of_path(p) is not None), None)
+                if hit is not None:
+                    self.clip_combo.setCurrentIndex(hit)
+                    self.clip_panel.refresh()
+                    self.statusBar().showMessage("이미 모션 목록에 있는 모션이라 그 모션으로 이동했습니다")
+                    return
+            bad = [x for x in skipped if "이미 목록에 있습니다" not in x]
+            if not added and bad and not diff:
+                QMessageBox.warning(self, "소스 모션 열기", "열지 못했습니다:\n" + "\n".join(bad)[:700])
+            self.clip_panel.added_ui(added, skipped, select_first=True)
+
+        self.run_async(lambda w: self.pr.add_motions(paths), done, "소스 읽는 중")
 
     # ------------------------------------------------------------------ 탭 1
     def _tab_files(self) -> QWidget:
@@ -1819,6 +1884,11 @@ class MainWindow(QMainWindow):
         self.rb_clip_cur.setChecked(True)
         v.addWidget(self.rb_clip_cur)
         v.addWidget(self.rb_clip_all)
+        self.clip_hint = QLabel("")
+        self.clip_hint.setWordWrap(True)
+        self.clip_hint.setStyleSheet("color:#ffdc50;font-weight:700")
+        self.clip_hint.setToolTip("왼쪽 '모션 목록'에서 모션 앞의 체크박스를 켜면, 체크한 모션이 전부 내보내집니다 (위 선택보다 우선).")
+        v.addWidget(self.clip_hint)
         lay.addWidget(g)
 
         self.btn_export = QPushButton("내보내기")
@@ -1978,10 +2048,10 @@ class MainWindow(QMainWindow):
         return d if d and os.path.isdir(d) else self.cfg.get("last_dir", "")
 
     def open_source(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "소스 모션 열기", self._open_start_dir("anim"), FILE_FILTER)
-        if path:
-            self._remember_dir(path)
-            self.run_async(lambda w: self.pr.load_source(path), lambda m: self._after_load("source"), "소스 읽는 중")
+        paths, _ = QFileDialog.getOpenFileNames(self, "소스 모션 열기 (여러 개 가능 — 열면 왼쪽 모션 목록에 자동으로 더해집니다)", self._open_start_dir("anim"), FILE_FILTER)
+        if paths:
+            self._remember_dir(paths[0])
+            self._add_source_files(list(paths))
 
     def open_target(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "타깃 모델 열기", self._open_start_dir("mesh"), FILE_FILTER)
@@ -3007,6 +3077,23 @@ class MainWindow(QMainWindow):
         if ok and name.strip():
             self.do_export(name.strip())
 
+    def _export_clips(self) -> list:
+        """내보낼 클립 번호들: 왼쪽 모션 목록에서 체크한 모션이 있으면 그것 전부, 없으면 라디오 선택(현재 클립 / 모든 클립)."""
+        n_clips = len(self.pr.src.animations) if self.pr.src is not None else 0
+        cp = self.__dict__.get("clip_panel")
+        checked = cp.checked_clips() if cp is not None else []
+        if checked:
+            return [i for i in checked if i < n_clips]
+        return list(range(n_clips)) if self.rb_clip_all.isChecked() else [self.pr.clip]
+
+    def _update_clip_export_hint(self) -> None:
+        lb = self.__dict__.get("clip_hint")
+        if lb is None:
+            return
+        cp = self.__dict__.get("clip_panel")
+        n = len(cp.checked_clips()) if cp is not None else 0
+        lb.setText(("☑ 모션 목록에서 체크한 %d개를 내보냅니다 (아래 선택보다 우선)" % n) if n else "")
+
     def do_export(self, name: str = "") -> None:
         if self.pr.src is None:
             QMessageBox.warning(self, "내보내기", "먼저 소스 모션을 여세요.")
@@ -3035,8 +3122,7 @@ class MainWindow(QMainWindow):
         self.cfg["export_organize"] = bool(self.cb_organize.isChecked())
         self.cfg["export_char"] = self.char_edit.text().strip()
         bridge.save_config(self.cfg)
-        n_clips = len(self.pr.src.animations)
-        clips = list(range(n_clips)) if self.rb_clip_all.isChecked() else [self.pr.clip]
+        clips = self._export_clips()
         opt = ExportOptions(
             out_dir=out, presets=presets or ["blender"], formats=fmts or ["bvh"], include_skeleton=skel, what=what, clips=clips,
             include_mesh=self.cb_mesh.isChecked(), write_skeleton_json=self.cb_skel_json.isChecked(), blender=self.pr.blender,

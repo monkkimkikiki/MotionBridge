@@ -107,6 +107,12 @@ class QWidget(Stub):
     def isEnabled(self):
         return self._enabled
 
+    def setStyleSheet(self, v):
+        self._style = str(v)
+
+    def styleSheet(self):
+        return self.__dict__.get("_style", "")
+
     def setVisible(self, v):
         self._visible = bool(v)
 
@@ -307,6 +313,20 @@ class _Item(Stub):
 
     _hidden = False
     _owner = None
+    _check = None
+    _flags = None
+
+    def setCheckState(self, v):
+        self._check = v
+
+    def checkState(self):
+        return self._check
+
+    def flags(self):
+        return self._flags if self._flags is not None else _Enum("flags")
+
+    def setFlags(self, v):
+        self._flags = v
 
     def setHidden(self, h):
         self._hidden = bool(h)

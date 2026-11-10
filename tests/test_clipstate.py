@@ -129,7 +129,7 @@ def test_add_remove_motions():
         assert add == [0] and not skip and pr.src is not None
         add2, skip2 = pr.add_motions([src2])
         n = len(pr.src.animations)
-        assert add2 == [1] and not skip2 and n == 2 and pr.src.animations[1].name == os.path.splitext(os.path.basename(src2))[0], (add2, skip2)
+        assert add2 == [1] and not skip2 and n == 2 and pr.src.animations[1].name == "walk_b", (add2, skip2, [a.name for a in pr.src.animations])   # 이름이 겹치지 않으면 파일 안의 이름 그대로
         add3, skip3 = pr.add_motions([src2, src])           # 이미 있는 파일은 건너뜀
         assert add3 == [] and len(skip3) == 2 and "이미" in skip3[0]
         add4, skip4 = pr.add_motions([os.path.join(d, "없는파일.glb")])
@@ -145,7 +145,7 @@ def test_add_remove_motions():
         pr.clip = 2
         pr.settings.root_yaw_deg = 22.0
         name = pr.remove_clip(0)
-        assert len(pr.src.animations) == 2 and pr.src.animations[0].name == os.path.splitext(os.path.basename(src2))[0] and name
+        assert len(pr.src.animations) == 2 and pr.src.animations[0].name == "walk_b" and name
         assert pr.clip == 1 and pr.settings.root_yaw_deg == 22.0, "보던 클립은 번호만 당겨짐"
         pr.clip = 0
         assert pr.settings.root_yaw_deg == 11.0 and pr.layer_stack().total_keys() == 1 and pr.settings.ik_ranges.get(0), "작업이 한 칸 앞으로"

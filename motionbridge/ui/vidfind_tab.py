@@ -1988,15 +1988,16 @@ class VidFindTab(QWidget):
             if not psa:
                 raise RuntimeError("애니메이션을 뽑지 못했습니다. " + " / ".join(win._ex_skips[:3]))
             w.progress.emit(0, 1, "모션 읽는 중")
-            m, skipped = win.pr.load_source_many(psa)
-            return files, len(m.animations), skipped
+            added, skipped = win.pr.add_motions(psa)      # 지금 목록에 이어 붙인다 (소스를 갈아엎지 않음)
+            return files, added, skipped
 
         def done(res):
-            files, n, skipped = res
+            files, added, skipped = res
+            n = len(added)
             self.last_files = list(files)
             win.ex_files.set_paths(files)
-            win._after_load("source")  # 탭은 옮기지 않는다 (이 탭에 그대로 머물며 더 고를 수 있게)
-            msg = "소스 모션 %d개를 뷰포트로 열었습니다 — 오른쪽 '클립' 목록에서 바꿔 볼 수 있습니다" % n
+            win.clip_panel.added_ui(added, skipped, select_first=True)  # 탭은 옮기지 않는다 (이 탭에 그대로 머물며 더 고를 수 있게)
+            msg = "소스 모션 %d개를 뷰포트로 열었습니다 — 왼쪽 '모션 목록'에 올라갔습니다" % n
             if skipped:
                 msg += " (건너뜀 %d: %s)" % (len(skipped), skipped[0][:80])
                 QMessageBox.information(self, "뷰포트로 열기", "일부는 열지 못했습니다:\n" + "\n".join(skipped)[:700])

@@ -25,7 +25,7 @@ def test_full_flow():
         bridge.CONFIG_PATH = os.path.join(d, "cfg.json")
         mw = A.MainWindow()
         # 열기
-        QFileDialog.open_ret = (src, "")
+        QFileDialog.open_names_ret = ([src], "")        # 소스 열기는 여러 개 선택 가능 — 열면 모션 목록에 자동으로 올라간다
         mw.open_source()
         assert mw.pr.src is not None and mw.clip_combo.count() == 1
         assert mw.map_table.rowCount() > 20
@@ -257,7 +257,7 @@ def test_full_flow():
         assert mw.pr.tgt is not None and mw.pr.result is not None and mw.btn_unload_tgt.isEnabled(), "다시 열 수 있음"
         mw.unload_source()
         assert mw.pr.src is None and mw.pr.tgt is not None and mw.pr.result is None and mw.clip_combo.count() == 0
-        QFileDialog.open_ret = (src, "")
+        QFileDialog.open_names_ret = ([src], "")        # 소스 열기는 여러 개 선택 가능 — 열면 모션 목록에 자동으로 올라간다
         mw.open_source()
         assert mw.pr.src is not None and mw.pr.result is not None
         mw._reset_settings()
@@ -647,25 +647,25 @@ def test_full_flow():
         T_ = mw.pr.anim.n_frames
         mw.frame_slider.setValue(2)
         mw.viewport.frame = 2
-        ik.toggle(True)
+        ik.mark(True)
         assert ik._pending is not None and "여기까지" in ik.b_on.text() and "여기서부터" in ik.b_off.text(), "첫 번째 누름 = 시작만 찍음"
         assert not mw.pr.settings.ik_ranges, "아직 구간 없음"
         mw.frame_slider.setValue(6)
         mw.viewport.frame = 6
-        ik.toggle(True)
+        ik.mark(True)
         assert ik._pending is None and mw.pr.settings.ik_ranges[mw.pr.clip][lab] == [[2, 6, True]], mw.pr.settings.ik_ranges
         # 끝 프레임이 시작보다 앞이어도 순서를 바로잡고, 다른 버튼을 누르면 새로 시작 / 취소
         mw.frame_slider.setValue(8)
         mw.viewport.frame = 8
-        ik.toggle(False)
-        ik.toggle(True)
+        ik.mark(False)
+        ik.mark(True)
         assert ik._pending[0] is True, "다른 쪽 버튼 = 새로 시작"
         ik.cancel()
         assert ik._pending is None
-        ik.toggle(False)
+        ik.mark(False)
         mw.frame_slider.setValue(4)
         mw.viewport.frame = 4
-        ik.toggle(False)
+        ik.mark(False)
         assert mw.pr.settings.ik_ranges[mw.pr.clip][lab][-1][2] is False
         mw.recompute()
         pl = [p for c, p in zip(mw.pr.result.chains, mw.pr.result.plans) if c.label == lab][0]
@@ -764,7 +764,7 @@ def test_full_flow():
         assert QMessageBox.calls and "Blender" in QMessageBox.calls[-1][2]
         # 소스만 열린 상태에서 리타겟 내보내기 -> 경고
         mw2 = A.MainWindow()
-        QFileDialog.open_ret = (src, "")
+        QFileDialog.open_names_ret = ([src], "")
         mw2.open_source()
         assert mw2.pr.result is None and mw2.vd is not None and mw2.vd.ghost_pos is not None
         QMessageBox.calls.clear()
@@ -830,7 +830,7 @@ def test_worker_failure():
     mw.run_async(lambda w: 3, lambda r: None, "시험5")
     assert mw._busy_dlg is None, "취소 못 하는 작업엔 진행 창 없음"
     # 존재하지 않는 파일
-    QFileDialog.open_ret = ("/nonexistent/x.glb", "")
+    QFileDialog.open_names_ret = (["/nonexistent/x.glb"], "")
     QMessageBox.calls.clear()
     mw.open_source()
     assert QMessageBox.calls and mw._worker is None
@@ -857,7 +857,7 @@ def test_undo_shortcuts_meshmode():
         # 모든 메뉴 동작이 실제 메서드로 연결되어 있다
         for key, (qa, sc, action, text) in mw._actions.items():
             assert hasattr(mw, action.partition(":")[0]), (key, action)
-        QFileDialog.open_ret = (src, "")
+        QFileDialog.open_names_ret = ([src], "")        # 소스 열기는 여러 개 선택 가능 — 열면 모션 목록에 자동으로 올라간다
         mw.open_source()
         QFileDialog.open_ret = (tgt, "")
         mw.open_target()
@@ -967,6 +967,9 @@ def test_extract_tab():
         GS.build(game_enc, True)
         mw = A.MainWindow()
         assert mw.tabs is not None and mw.ex_helper_label.text().replace("\u200b", "") == fb
+        # 검사 전에는 2)·3) 설정이 잠기고 [검사] 버튼이 눈에 띄는 색으로 안내한다
+        assert mw._scan_gated and all(not b.isEnabled() for b in mw._scan_gated)
+        assert "먼저 누르세요" in mw.ex_scan_btn.text() and "ff7a00" in mw.ex_scan_btn.styleSheet()
         # 검사 전에는 추출 불가
         QMessageBox.calls.clear()
         mw._search_anims()
@@ -976,6 +979,14 @@ def test_extract_tab():
         mw._pick_game()
         assert mw.scan.found and not mw.scan.encrypted and not mw.ex_aes.isEnabled()
         assert "바로 추출" in mw.ex_summary.text()
+        assert all(b.isEnabled() for b in mw._scan_gated)  # 검사를 마치면 열린다
+        assert "검사 완료" in mw.ex_scan_btn.text() and "2e8b57" in mw.ex_scan_btn.styleSheet()
+        mw.ex_game.setText(game_enc)                       # 다른 폴더로 바꾸면 다시 잠긴다
+        mw._update_scan_gate()
+        assert all(not b.isEnabled() for b in mw._scan_gated) and "먼저 누르세요" in mw.ex_scan_btn.text()
+        mw.ex_game.setText(game_ok)
+        mw._update_scan_gate()
+        assert all(b.isEnabled() for b in mw._scan_gated)
         mw.ex_filter.setText("(?i)AS_")
         mw._search_anims()
         assert mw.ex_list.count() == 2 and mw.ex_count.text().startswith("2개")
@@ -1017,7 +1028,9 @@ def test_extract_tab():
         # 추출 결과를 소스 모션으로
         mw.ex_files.selectAll()
         mw._open_extracted()
-        assert mw.pr.src is not None and mw.pr.src.path.endswith(".psa") and mw.clip_combo.count() == 1
+        # 이미 목록에 올라가 있는 모션이므로 중복으로 더하지 않고 그 모션으로 이동한다
+        assert mw.pr.src is not None and mw.pr.src.path.endswith(".psa") and mw.clip_combo.count() == 2
+        assert mw.pr.clip_of_path(mw.ex_files.first_path()) == mw.pr.clip
         # 암호화된 게임: 키 없이는 도우미를 부르지 않는다
         log = os.environ["FAKE_LOG"]
         n_before = len(open(log).read().splitlines())
@@ -1160,13 +1173,86 @@ def test_extract_list_drag():
     print("extract list drag OK")
 
 
+def test_collapsible_subclasses_keep_base_api():
+    """CollapsibleBox 를 상속한 패널이 접기/펴기용 이름(toggle 등)을 다른 뜻으로 덮어쓰면 제목 줄을 눌러도 안 열린다 (IK 구간 패널이 그랬음)."""
+    import inspect
+    from motionbridge.ui import widgets as W
+    from motionbridge.ui.curve_editor import CurveEditor
+    from motionbridge.ui.ik_panel import IKRangePanel
+    from motionbridge.ui.layer_panel import LayerPanel
+    base = W.CollapsibleBox
+    names = [n for n, f in vars(base).items() if callable(f) and not n.startswith("__")]
+    for cls in (IKRangePanel, LayerPanel, CurveEditor, W.EditPanel):
+        for n in names:
+            mine, theirs = cls.__dict__.get(n), base.__dict__.get(n)
+            if mine is None or not callable(mine):
+                continue
+            assert inspect.signature(mine) == inspect.signature(theirs), "%s.%s 가 CollapsibleBox.%s 와 인자가 다릅니다 (접기/펴기가 깨집니다)" % (cls.__name__, n, n)
+    assert "toggle" not in IKRangePanel.__dict__, "IKRangePanel.toggle 은 CollapsibleBox.toggle() 을 가립니다 — mark() 를 쓰세요"
+    # (실제로 접고 펴지는지는 진짜 Qt 점검(real_qt_smoke)이 마우스 클릭으로 확인한다)
+    mw = A.MainWindow()
+    assert callable(mw.ik_panel.mark) and inspect.signature(type(mw.ik_panel).toggle) == inspect.signature(base.toggle)
+    print("collapsible subclass api OK")
+
+
+def test_clip_checks_export():
+    """모션 목록: 뷰포트로 연 파일이 자동으로 올라오고, 체크한 모션이 내보내기 대상이 된다."""
+    with tempfile.TemporaryDirectory() as d:
+        src, src2, tgt, _, _ = TP.make_inputs(d)
+        from motionbridge.core import bridge
+        bridge.CONFIG_PATH = os.path.join(d, "cfg.json")
+        mw = A.MainWindow()
+        cp = mw.clip_panel
+        assert not hasattr(cp, "b_add") or not isinstance(cp.__dict__.get("b_add"), type(cp.b_rm)), "파일 고르기 버튼은 없다"
+        QFileDialog.open_names_ret = ([src], "")
+        mw.open_source()
+        QFileDialog.open_names_ret = ([src2], "")           # 두 번째 소스도 목록에 자동으로 더해진다 (소스를 갈아엎지 않음)
+        mw.open_source()
+        n = len(mw.pr.src.animations)
+        assert n >= 2 and cp.lst.count() == n, (n, cp.lst.count())
+        # 체크 전: 라디오 선택대로 (현재 클립만)
+        mw.pr.clip = 0
+        assert cp.checked_clips() == [] and mw._export_clips() == [0] and mw.clip_hint.text() == ""
+        # 모션 앞 체크박스 -> 체크한 것 전부
+        Qt = A.Qt
+        for i in (0, n - 1):
+            cp.lst.item(i).setCheckState(Qt.CheckState.Checked)
+        cp._item_changed()
+        assert cp.checked_clips() == [0, n - 1] and mw._export_clips() == [0, n - 1]
+        assert "2개" in mw.clip_hint.text() and "2개" in cp.count.text()
+        cp.refresh()                                          # 다시 그려도 체크 유지
+        assert cp.checked_clips() == [0, n - 1]
+        cp.set_all_checked(True)
+        assert cp.checked_clips() == list(range(n))
+        cp.set_all_checked(False)
+        assert cp.checked_clips() == [] and mw._export_clips() == [mw.pr.clip]
+        # 지우기: 체크 상태는 모션을 따라가고, 마지막 하나를 지우면 소스를 뺀다
+        cp.set_all_checked(True)
+        cp.lst.setCurrentRow(0)
+        cp.remove_current()
+        assert len(mw.pr.src.animations) == n - 1 and len(cp.checked_clips()) == n - 1
+        while mw.pr.src is not None:
+            cp.lst.setCurrentRow(0)
+            cp.remove_current()
+        assert mw.clip_combo.count() == 0 and cp.lst.count() == 0
+    print("clip checks export OK")
+
+
 def test_exist_policy_ui():
     from motionbridge.core import safesave
     mw = A.MainWindow()
-    # 기본값은 '이전 파일 보관' — 두 탭의 콤보가 같은 설정
-    assert mw._exist_policy() == safesave.KEEP_OLD
-    assert mw.ex_exist.currentData() == mw.out_exist.currentData() == safesave.KEEP_OLD
-    assert "보관" in mw.btn_export._text
+    # 기본값은 '덮어쓰기' (_old_ 중복 파일을 만들지 않음) — 두 탭의 콤보가 같은 설정
+    assert mw._exist_policy() == safesave.OVERWRITE
+    assert mw.ex_exist.currentData() == mw.out_exist.currentData() == safesave.OVERWRITE
+    assert "덮어쓰기" in mw.btn_export._text
+    assert mw.ex_exist.count() == 2 and mw.ex_exist.findData(safesave.KEEP_OLD) < 0
+    # 예전 설정 파일에 keep_old 가 저장돼 있어도 덮어쓰기로 읽는다
+    mw.cfg["on_exist"] = safesave.KEEP_OLD
+    assert mw._exist_policy() == safesave.OVERWRITE
+    # 내보내기 탭에서 새 이름으로 바꾸면 추출 탭도 따라간다
+    mw.out_exist.setCurrentIndex(mw.out_exist.findData(safesave.NEW_NAME))
+    assert mw._exist_policy() == safesave.NEW_NAME and mw.ex_exist.currentData() == safesave.NEW_NAME
+    assert "새 이름" in mw.btn_export._text
     # 내보내기 탭에서 덮어쓰기로 바꾸면 추출 탭도 따라가고 버튼/설명이 바뀐다
     mw.out_exist.setCurrentIndex(mw.out_exist.findData(safesave.OVERWRITE))
     assert mw._exist_policy() == safesave.OVERWRITE and mw.ex_exist.currentData() == safesave.OVERWRITE
@@ -1191,6 +1277,8 @@ if __name__ == "__main__":
     test_worker_failure()
     test_undo_shortcuts_meshmode()
     test_extract_tab()
+    test_collapsible_subclasses_keep_base_api()
+    test_clip_checks_export()
     test_exist_policy_ui()
     test_extract_list_drag()
     print("test_ui_logic ALL OK")

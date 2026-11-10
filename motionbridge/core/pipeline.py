@@ -135,8 +135,9 @@ class Project:
             if not m.animations:
                 skipped.append("%s: 애니메이션이 없습니다" % nm)
                 continue
-            if len(m.animations) == 1:
-                m.animations[0].name = os.path.splitext(nm)[0]
+            have = {a.name for a in self.src.animations} if self.src is not None else set()
+            if len(m.animations) == 1 and (pth.lower().endswith(".psa") or m.animations[0].name in have):
+                m.animations[0].name = os.path.splitext(nm)[0]   # PSA 는 파일 이름이 곧 모션 이름, 다른 형식은 이름이 겹칠 때만 파일 이름으로
             if self.src is None:
                 self.src = m
                 self.src_slots = auto_map(m.skeleton)
@@ -155,6 +156,14 @@ class Project:
                 added.append(i)
                 known[i] = key
         return added, skipped
+
+    def clip_of_path(self, path: str) -> Optional[int]:
+        """이 파일에서 온 모션의 목록 번호 (목록에 없으면 None)."""
+        key = os.path.normcase(os.path.abspath(path))
+        for i, p in (getattr(self, "_clip_paths", None) or {}).items():
+            if p == key and self.src is not None and i < len(self.src.animations):
+                return i
+        return None
 
     def remove_clip(self, ci: int) -> str:
         """모션 목록에서 클립 ci 를 뺀다. 그 클립의 설정·레이어·편집·IK 구간도 함께 사라지고, 뒤 번호는 앞으로 당겨진다. 마지막 하나는 뺄 수 없다."""

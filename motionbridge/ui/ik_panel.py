@@ -32,9 +32,9 @@ class IKRangePanel(CollapsibleBox):
         self._pending = None                 # (켬 여부, 시작 프레임 0부터, 체인 라벨) — 첫 번째 누름 뒤 끝 프레임을 기다리는 중
         r = QHBoxLayout()
         self.b_on = QPushButton("")
-        self.b_on.clicked.connect(lambda _c=False: self.toggle(True))
+        self.b_on.clicked.connect(lambda _c=False: self.mark(True))
         self.b_off = QPushButton("")
-        self.b_off.clicked.connect(lambda _c=False: self.toggle(False))
+        self.b_off.clicked.connect(lambda _c=False: self.mark(False))
         r.addWidget(self.b_on)
         r.addWidget(self.b_off)
         self.b_cancel = QPushButton("취소")
@@ -160,8 +160,9 @@ class IKRangePanel(CollapsibleBox):
                                + ("" if on else " (공중에 뜬 발인데 땅에 붙을 때)"))
         self.b_cancel.setEnabled(pend is not None)
 
-    def toggle(self, on: bool) -> None:
-        """한 번 누르면 지금 프레임이 시작, 같은 버튼을 한 번 더 누르면 지금 프레임이 끝이 되어 구간이 지정된다."""
+    def mark(self, on: bool) -> None:
+        """(이름 주의: toggle 은 CollapsibleBox 의 접기/펴기 이름이라 쓰면 제목 줄을 눌러도 안 열린다)
+        한 번 누르면 지금 프레임이 시작, 같은 버튼을 한 번 더 누르면 지금 프레임이 끝이 되어 구간이 지정된다."""
         lab, T = self._label(), self._T()
         if lab is None or T <= 0:
             self.app.statusBar().showMessage("먼저 소스 모션·타깃 모델을 열고 대상 부위를 고르세요")

@@ -43,7 +43,9 @@ with tempfile.TemporaryDirectory() as d:
     w(f, "new")
     _, bk2 = S.claim(f, S.KEEP_OLD, now=0)    # 같은 초에 또 해도 겹치지 않는다
     check(bk2 != bk and r(bk2) == "new" and r(bk) == "old", "같은 시각이어도 보관 이름이 겹치지 않음")
-    check(S.norm("엉뚱") == S.KEEP_OLD and S.norm(None) == S.KEEP_OLD, "모르는 값은 기본(이전 파일 보관)")
+    check(S.norm("엉뚱") == S.OVERWRITE and S.norm(None) == S.OVERWRITE, "모르는 값은 기본(덮어쓰기: _old_ 파일을 만들지 않음)")
+    check(S.choice(S.KEEP_OLD) == S.OVERWRITE and S.choice(S.NEW_NAME) == S.NEW_NAME and S.choice("keep_old") == S.OVERWRITE, "예전에 저장된 keep_old 는 화면에서 덮어쓰기로")
+    check(S.KEEP_OLD not in S.CHOICES, "이전 파일 보관은 화면 선택지에서 뺌")
 
 with tempfile.TemporaryDirectory() as d:
     # 추출 이동(_move_into): 정책별

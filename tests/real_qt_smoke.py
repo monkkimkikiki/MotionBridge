@@ -248,16 +248,18 @@ with tempfile.TemporaryDirectory() as d:
     ikp.set_collapsed(False, save=False)
     app.processEvents()
     check(ikp.isVisible() and ikp.b_on.isVisible() and ikp.lst.isVisible(), "IK 구간 패널: 펼치면 안의 위젯이 보임 (패널 %s, 버튼 %s)" % (ikp.isVisible(), ikp.b_on.isVisible()))
-    ikp.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, 20, 4, LB, LB, _Qt.KeyboardModifier.NoModifier))
+    from PySide6.QtCore import QPoint as _QP
+    from PySide6.QtTest import QTest as _QT
+    _QT.mouseClick(ikp, _Qt.MouseButton.LeftButton, _Qt.KeyboardModifier.NoModifier, _QP(20, 6))   # 진짜 마우스 클릭 경로로
     app.processEvents()
     check(ikp.is_collapsed() and not ikp.b_on.isVisible(), "IK 구간 패널: 제목 줄을 누르면 접힘")
-    ikp.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, 20, 4, LB, LB, _Qt.KeyboardModifier.NoModifier))
+    _QT.mouseClick(ikp, _Qt.MouseButton.LeftButton, _Qt.KeyboardModifier.NoModifier, _QP(20, 6))
     app.processEvents()
     check(not ikp.is_collapsed() and ikp.b_on.isVisible() and ikp.height() > 80, "IK 구간 패널: 다시 누르면 펴짐 (높이 %d)" % ikp.height())
     check(ikp.chain.count() >= 1 and "IK" in ikp.b_on.text(), "IK 구간 패널: 대상 목록/버튼 글자 (%s)" % ikp.b_on.text())
-    ikp.toggle(True)
+    ikp.mark(True)
     mw.frame_slider.setValue(min(5, mw.pr.anim.n_frames - 1))
-    ikp.toggle(True)
+    ikp.mark(True)
     app.processEvents()
     check(ikp._pending is None, "IK 구간 패널: 두 번 눌러 구간 지정")
     ikp.clear_chain()

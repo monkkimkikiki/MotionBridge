@@ -1,8 +1,8 @@
 """같은 이름의 파일이 이미 있을 때 어떻게 저장할지: 덮어쓰기 / 이전 파일 보관 / 새 파일을 다른 이름으로.
 
-- keep_old (기본): 이미 있는 파일을 `이름_old_YYYYMMDD-HHMMSS.확장자` 로 바꿔 두고, 새 파일이 원래 이름을 쓴다. 이전 결과가 사라지지 않는다.
+- keep_old (화면에서는 더 이상 고르지 않음): 이미 있는 파일을 `이름_old_YYYYMMDD-HHMMSS.확장자` 로 바꿔 두고, 새 파일이 원래 이름을 쓴다. 이전 결과가 사라지지 않는다.
 - new_name: 이미 있는 파일은 그대로 두고, 새 파일은 `이름_2`, `이름_3` … 으로 저장한다.
-- overwrite: 이미 있는 파일을 지우고 덮어쓴다 (예전 동작).
+- overwrite (기본): 이미 있는 파일을 지우고 덮어쓴다 — `_old_` 중복 파일이 쌓이지 않는다.
 Qt 에 의존하지 않는다.
 """
 from __future__ import annotations
@@ -12,7 +12,8 @@ import time
 from typing import Optional, Tuple
 
 OVERWRITE, KEEP_OLD, NEW_NAME = "overwrite", "keep_old", "new_name"
-DEFAULT = KEEP_OLD
+DEFAULT = OVERWRITE
+CHOICES = (OVERWRITE, NEW_NAME)      # 화면에서 고를 수 있는 것 (이전 파일 보관 `_old_날짜` 파일은 만들지 않는다)
 LABELS = {
     KEEP_OLD: "이미 있으면 이전 파일을 다른 이름(_old_날짜)으로 보관하고 새로 저장",
     NEW_NAME: "이미 있으면 새 파일을 다른 이름(_2, _3 …)으로 저장",
@@ -28,6 +29,11 @@ EXPLAIN = {
 
 def norm(policy: Optional[str]) -> str:
     return policy if policy in LABELS else DEFAULT
+
+
+def choice(policy: Optional[str]) -> str:
+    """화면에서 쓰는 값: 예전에 저장돼 있던 keep_old 는 덮어쓰기로 바꾼다 (이전 파일 보관은 화면에서 뺐다)."""
+    return policy if policy in CHOICES else DEFAULT
 
 
 def next_free(path: str) -> str:

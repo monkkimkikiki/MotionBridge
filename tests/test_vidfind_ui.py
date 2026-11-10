@@ -623,7 +623,7 @@ def main():
         check(mw.ex_files.count() == 2, "추출 목록에도 올라감")
         # 더블클릭 = 그 하나만
         vt._anim_double_clicked(vt.anim_list.item(2))
-        check(len(mw.pr.src.animations) == 1 and exported[-1] == [vt.anim_list.item(2).data(A.Qt.ItemDataRole.UserRole)], "더블클릭은 하나만 열기")
+        check(len(mw.pr.src.animations) == 3 and exported[-1] == [vt.anim_list.item(2).data(A.Qt.ItemDataRole.UserRole)], "더블클릭은 그 하나만 뽑아 모션 목록 뒤에 더함")
 
         # 메시 더블클릭 = 추출 단계 없이 리깅된 GLB 를 뽑아 바로 타깃으로
         import shutil
