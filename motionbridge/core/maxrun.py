@@ -73,6 +73,19 @@ def read_log(path: str) -> str:
     return raw.decode("utf-8", "replace")
 
 
+def make_wrapper(script: str, quit_after: bool) -> str:
+    """자동 실행 전용 임시 .ms: 메시지 창을 끄고(mbAutoOverride) 본 스크립트를 실행한다. 3ds Max 를 직접 띄운 경우에만 끝나고 종료.
+
+    내보낸 *_retarget.ms 자체에는 이 설정이 없다 — 사용자가 그 파일을 열린 3ds Max 에서 손으로 실행해도 3ds Max 가 꺼지지 않는다."""
+    import tempfile
+    p = script.replace("\\", "/").replace('"', "")
+    fd, path = tempfile.mkstemp(prefix="mb_auto_", suffix=".ms")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\r\n") as f:
+        f.write("global mbAutoOverride = true\nglobal mbQuitOverride = %s\nfileIn \"%s\"\nmbAutoOverride = false\nmbQuitOverride = false\n"
+                % ("true" if quit_after else "false", p))
+    return path
+
+
 def run(exe: str, script: str, log: str, timeout: float = 900.0, runner: Callable = subprocess.run) -> Dict[str, object]:
     """3ds Max 로 script 를 실행. 반환: {"ok", "saved", "warnings", "log", "error"}. 로그는 실행 전에 지운다."""
     out: Dict[str, object] = {"ok": False, "saved": [], "warnings": [], "log": "", "error": ""}

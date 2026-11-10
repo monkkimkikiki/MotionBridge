@@ -70,7 +70,7 @@ def test_script_and_auto():
         assert "__" not in ms.replace("__init__", "") or True
         for ph in ("__AUTO__", "__LOG__", "__DATAABS__", "__BASEABS__", "__QUIT__", "__TEMPLATE__", "__DATA__", "__AUTOHEAD__"):
             assert ph not in ms, ph
-        assert 'local tmplFile = "C:/작업/skinned.max"' in ms and "global mbAuto = false" in ms
+        assert 'local tmplFile = "C:/작업/skinned.max"' in ms and "global mbAuto = (mbAutoOverride == true)" in ms and "mbQuitAfter = (mbQuitOverride == true)" in ms
         TB._lint_scope(ms)
         # 3ds Max 2026 실측으로 얻은 규칙: node.rotation = quat 는 어긋나므로 변환 행렬로 넣고, angleaxis 대신 직접 만든 행렬을 쓴다
         assert "nodes[i].transform = tmk" in ms and "(nodes[i].rotation =" not in ms, "회전은 transform 행렬로 넣는다"
@@ -81,17 +81,34 @@ def test_script_and_auto():
         auto = {"log": os.path.join(d, "L.log"), "quit": True}
         f2, _ = maxbones.export_bones(d, "a", skel, anim, pr.tgt_slots, F, 100.0, tpl, auto)
         ms2 = open(f2[0], encoding="utf-8").read()
-        assert "global mbAuto = true" in ms2 and "global mbQuitAfter = true" in ms2 and "a_retarget" in ms2
+        assert "global mbQuitAfter = (mbQuitOverride == true)" in ms2 and "a_retarget" in ms2 and "quitMax" in ms2 and "mbAuto = true" not in ms2
         assert os.path.join(d, "a_retarget.mbbones").replace("\\", "/") in ms2
         # Biped 스크립트도 같은 자동 실행 장치를 가진다 (checkForSave 는 자동일 때 건너뜀)
         fb, _ = biped.export_biped(d, "b", skel, anim, pr.tgt_slots, F, 100.0, tpl, auto)
         msb = open(fb[0], encoding="utf-8").read()
-        assert "global mbAuto = true" in msb and "if not mbAuto do ( if not (checkForSave())" in msb and "SAVED: " in msb
+        assert "global mbAuto = (mbAutoOverride == true)" in msb and "if not mbAuto do ( if not (checkForSave())" in msb and "SAVED: " in msb
         assert "messageBox msg" not in msb.split("fn mbRun")[1], "mbRun 안에서는 mbSay 만 쓴다"
         TB._lint_scope(msb)
         assert "angleaxis" not in msb.replace("MaxScript 의 (angleaxis ...)", ""), "angleaxis as matrix3 는 3ds Max 에서 방향이 거꾸로 나왔다(실측)"
         assert "회전 점검" in msb and "local gz = undefined" in msb, "월드 회전 전체 점검 + 발 관절을 바닥으로 한 골반 높이 비율"
     print("maxbones script OK")
+
+
+def test_wrapper_only_quits_when_asked():
+    """내보낸 .ms 는 손으로 실행해도 3ds Max 를 끄지 않는다. 종료·메시지창 끄기는 자동 실행용 임시 파일만 정한다 (실제 Max 2026 에서도 확인)."""
+    import os as _os
+    from motionbridge.core import maxrun, biped
+    ms = biped.fill_script(biped.SCRIPT, "a.mbbip", "C:/t.max", {"log": "C:/L.log", "data": "C:/a.mbbip", "base": "a"})
+    assert "global mbQuitAfter = (mbQuitOverride == true)" in ms and "mbQuitOverride = true" not in ms and "mbAutoOverride = true" not in ms
+    w1, w2 = maxrun.make_wrapper("C:\\x\\a_retarget.ms", True), maxrun.make_wrapper("C:\\x\\a_retarget.ms", False)
+    try:
+        t1, t2 = open(w1, encoding="utf-8").read(), open(w2, encoding="utf-8").read()
+        assert "mbAutoOverride = true" in t1 and "mbQuitOverride = true" in t1 and 'fileIn "C:/x/a_retarget.ms"' in t1
+        assert "mbQuitOverride = true" not in t2 and "mbQuitOverride = false" in t2
+    finally:
+        _os.remove(w1)
+        _os.remove(w2)
+    print("wrapper OK")
 
 
 def test_maxrun():
@@ -141,7 +158,7 @@ def test_pipeline_auto_with_fake_max():
         pr = TB._project(d)
         fake = os.path.join(d, "3dsmaxbatch.exe")
         # 인자로 받은 .ms 에서 로그 경로를 읽어 SAVED 줄을 쓰고, 그 .max 파일도 만든다
-        open(fake, "w").write('#!/bin/sh\nLOG=$(grep -m1 "global mbLogFile" "$1" | sed \'s/.*= "//; s/".*//\')\n'
+        open(fake, "w").write('#!/bin/sh\nMS=$(grep -m1 "^fileIn" "$1" | sed \'s|fileIn "||; s|".*||\')\nLOG=$(grep -m1 "global mbLogFile" "$MS" | sed \'s/.*= "//; s/".*//\')\n'
                               'OUT="$(dirname "$LOG")/fake_retarget.max"\n: > "$OUT"\necho "SAVED: $OUT" >> "$LOG"\n')
         os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
         tpl = os.path.join(d, "skinned.max")
@@ -184,6 +201,7 @@ def test_read_log_cp949(tmp_path=None):
 if __name__ == "__main__":
     test_compute_and_data()
     test_script_and_auto()
+    test_wrapper_only_quits_when_asked()
     test_maxrun()
     test_read_log_cp949()
     test_pipeline_auto_with_fake_max()

@@ -159,11 +159,13 @@ def write_data(path: str, d: dict) -> None:
 
 # ---------------------------------------------------------------------------------------------------- MaxScript
 AUTO_HEADER = r'''-- 자동 실행(MotionBridge 가 3ds Max 를 직접 띄울 때): 메시지 창 없이 로그 파일에 기록하고, 경로를 스크립트에 박아 둔다
-global mbAuto = __AUTO__
+global mbAutoOverride      -- MotionBridge 가 3ds Max 를 직접 띄울 때만 임시 실행 파일이 true 로 정한다. 손으로 실행하면 정해지지 않아 메시지 창이 뜨고, 끝나도 3ds Max 가 꺼지지 않는다
+global mbQuitOverride
+global mbAuto = (mbAutoOverride == true)
 global mbLogFile = "__LOG__"
 global mbDataAbs = "__DATAABS__"
 global mbBaseAbs = "__BASEABS__"
-global mbQuitAfter = __QUIT__
+global mbQuitAfter = (mbQuitOverride == true)
 fn mbSay msg =
 (
 	local lf = undefined
@@ -568,11 +570,10 @@ def maxstr(p: str) -> str:
 
 
 def fill_script(text: str, data_name: str, template: str = "", auto: Optional[dict] = None) -> str:
-    """스크립트 틀의 자리표시자를 채운다. auto = {"log","data","base","quit"} 이면 자동 실행용(메시지 창 없음, 경로를 박음)."""
+    """스크립트 틀의 자리표시자를 채운다. auto = {"log","data","base"} 이면 경로를 박는다(자동 실행용). 메시지 창 끄기/종료는 스크립트가 아니라 maxrun.make_wrapper 가 만든 임시 실행 파일이 정한다."""
     a = auto or {}
-    return (text.replace("__AUTO__", "true" if auto else "false").replace("__LOG__", maxstr(a.get("log", "")))
+    return (text.replace("__LOG__", maxstr(a.get("log", "")))
             .replace("__DATAABS__", maxstr(a.get("data", ""))).replace("__BASEABS__", a.get("base", ""))
-            .replace("__QUIT__", "true" if a.get("quit") else "false")
             .replace("__DATA__", data_name).replace("__TEMPLATE__", maxstr(template)))
 
 

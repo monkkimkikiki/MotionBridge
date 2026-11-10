@@ -1547,7 +1547,7 @@ class MainWindow(QMainWindow):
         i = self.max_method.findData(self.cfg.get("max_method", "biped"))
         self.max_method.setCurrentIndex(max(i, 0))
         self.max_method.setToolTip("스키닝된 .max 를 골랐을 때 모션을 넣는 방식을 검수자가 정합니다.\n"
-                                   "· Biped: .max 안의 Biped 에 키를 넣습니다 (본 이름과 무관, 부위로 찾음).\n"
+                                   "· Biped (권장): .max 안의 Biped 에 키를 넣습니다 (본 이름과 무관, 부위로 찾음). 작업용 모션은 Biped 에 키가 찍혀야 해서 이쪽을 씁니다.\n"
                                    "· 일반 본: Biped 가 아닌 평범한 본/관절 계층. 타깃 모델의 본 이름과 같은 이름의 본(대소문자·공백·_·네임스페이스 무시)에 회전 키를 넣고,\n"
                                    "  골반/루트처럼 위치가 움직이는 본에는 위치 키도 넣습니다.")
         h3.addWidget(self.max_method)

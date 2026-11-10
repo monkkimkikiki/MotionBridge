@@ -466,7 +466,14 @@ class Project:
                 out += files
                 warns += w
                 if auto is not None:
-                    r = maxrun.run(exe, files[0], auto["log"], opt.max_timeout)
+                    wrapper = maxrun.make_wrapper(files[0], bool(auto["quit"]))
+                    try:
+                        r = maxrun.run(exe, wrapper, auto["log"], opt.max_timeout)
+                    finally:
+                        try:
+                            os.remove(wrapper)
+                        except OSError:
+                            pass
                     out += [p for p in r["saved"] if os.path.exists(p)]
                     if r["ok"]:
                         warns.append("3ds Max 자동 적용 완료 (%s): %s" % ("일반 본" if opt.max_method == "bones" else "Biped", ", ".join(os.path.basename(p) for p in r["saved"])))
