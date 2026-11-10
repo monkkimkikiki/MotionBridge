@@ -31,6 +31,7 @@ from ..core.mapping import FINGERS, SLOT_ORDER, slot_label
 from ..core.pipeline import ExportOptions, Project
 from . import gizmo_math as GZ
 from .help_text import EXTRACT_HELP, FIRST_STEPS
+from .curve_editor import CurveEditor
 from .layer_panel import LayerPanel
 from .viewer import MESH_MODES, Viewport
 from .retimebar import RetimeBar
@@ -566,6 +567,8 @@ class MainWindow(QMainWindow):
         rl.addLayout(tl)
         self.retime_bar = RetimeBar(self)
         rl.addWidget(self.retime_bar)
+        self.curve_editor = CurveEditor(self)
+        rl.addWidget(self.curve_editor)
         split.addWidget(right)
         # 기본 비율: 왼쪽(탭) 47% : 오른쪽(뷰포트) 53%. 창 크기를 바꿔도 이 비율을 유지하고, 경계를 끌어 바꾸면 그 비율을 기억한다.
         self._split = split
@@ -2450,6 +2453,8 @@ class MainWindow(QMainWindow):
             for k in range(self.bone_tree.topLevelItemCount()):
                 self._tree_select(self.bone_tree.topLevelItem(k), j)
         self._update_bone_sel_label()
+        if getattr(self, "curve_editor", None) is not None:
+            self.curve_editor.refresh()
         self.viewport.update()
 
     def _tree_select(self, it, j: int) -> bool:
@@ -2605,6 +2610,8 @@ class MainWindow(QMainWindow):
         self.frame_slider.blockSignals(False)
         self.viewport.set_data(self.pr, self.vd, reframe=reframe)
         self._frame_changed(self.frame_slider.value())
+        if getattr(self, "curve_editor", None) is not None:
+            self.curve_editor.refresh()
         if live:
             return
         self._update_guide()
@@ -2672,6 +2679,8 @@ class MainWindow(QMainWindow):
         self.viewport.set_frame(f)
         if getattr(self, "retime_bar", None) is not None:
             self.retime_bar.set_frame(f)
+        if getattr(self, "curve_editor", None) is not None:
+            self.curve_editor.set_frame(f)
         self.frame_label.setText("%d / %d  (%.2fs)" % (f + 1, n, f / fps if fps else 0.0))
 
     def _toggle_play(self, on: bool) -> None:

@@ -18,7 +18,7 @@ MIN_WEIGHT = 0.05
 def editable(layer: Optional[Layer]) -> Optional[str]:
     """편집할 수 없는 이유 (편집 가능하면 None)."""
     if layer is None:
-        return "편집할 보정 레이어가 없습니다. '새 레이어'를 먼저 만드세요."
+        return "지금은 레이어가 적용되지 않은 상태(원본)이거나 레이어가 없습니다. 목록에서 레이어를 고르거나 '＋ 새 레이어'를 누르세요."
     if layer.mute:
         return "레이어 '%s' 이(가) 꺼져 있습니다. 켜야 눈에 보이게 고칠 수 있어요." % layer.name
     if layer.weight < MIN_WEIGHT:

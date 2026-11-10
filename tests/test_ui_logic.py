@@ -378,6 +378,77 @@ def test_full_flow():
         mw.undo()                                    # 실행 취소: 레이어 키가 사라진다
         assert not (mw.pr.layers.get(mw.pr.clip) and mw.pr.layers[mw.pr.clip].total_keys()), "실행 취소로 키 제거"
         mw.layer_panel.rec.setChecked(False)
+        # 레이어 스택: 줄을 고르면 그 상태(원본 <-> 레이어까지 적용)가 되고, 합치면 같은 모양이 한 층으로 남는다
+        lp = mw.layer_panel
+        yax = np.array([0.0, 1.0, 0.0])
+        mw.pr.layers = {}
+        mw.recompute()
+        base_rot = mw.pr.result.anim.rot.copy()
+        lp.add_layer()
+        lp.layer().set_key(jt, 3, rot=_Q.from_axis_angle(yax, np.radians(30.0)))
+        lp.add_layer()
+        lp.layer().set_key(jt, 3, rot=_Q.from_axis_angle(yax, np.radians(20.0)))
+        lp.layer().set_key(jt, 6, rot=_Q.from_axis_angle(yax, np.radians(-15.0)))
+        st = mw.pr.layer_stack()
+        assert st.top == 2 and len(st) == 2
+        mw.recompute()
+        r2 = mw.pr.result.anim.rot.copy()
+        lp._row_changed(0)
+        mw.recompute()
+        assert st.top == 0 and len(st) == 2 and mw.pr.result.base_anim is None and np.allclose(mw.pr.result.anim.rot, base_rot), "원본 상태 = 레이어 없는 결과"
+        assert lp.lst.count() == 3, "원본 줄 + 레이어 2줄"
+        lp._row_changed(1)
+        mw.recompute()
+        r1 = mw.pr.result.anim.rot.copy()
+        assert st.top == 1 and not np.allclose(r1, base_rot) and not np.allclose(r1, r2), "1번 레이어까지만 적용"
+        lp._row_changed(2)
+        mw.recompute()
+        assert np.allclose(mw.pr.result.anim.rot, r2), "다시 위로 고르면 되돌아옴 (숨긴 레이어는 지워지지 않음)"
+        lp.merge_all()
+        mw.recompute()
+        assert len(st) == 1 and st.top == 1 and np.allclose(mw.pr.result.anim.rot, r2, atol=2e-3), "합친 뒤에도 같은 모양"
+        lp.add_layer()
+        lp.merge_down()
+        assert len(st) == 1, "아래와 합치기"
+        # 곡선 그래프: 키를 위아래로 끌면 그 프레임의 최종 값이 따라온다 / 더블클릭 = 키 추가 / 우클릭 = 삭제 / 원본 상태에서는 편집 불가
+        mw._bone_picked(jt)
+        mw.recompute()
+        ce = mw.curve_editor
+        cv = ce.canvas
+        cv._size = (400, 200)
+        ce.refresh()
+        assert cv.T == mw.pr.result.anim.n_frames and cv.layer is lp.layer() and cv.key_frames, (cv.T, cv.key_frames)
+        f0, v0, (ch0, _f) = cv.key_points()[0]
+        gm = cv.geom()
+        x, y = float(gm.x_of(f0)), float(gm.y_of(v0))
+        cv.press_at(x, y)
+        assert cv._mode == "key"
+        cv.drag_to(x, y - 25)
+        want = float(gm.v_of(y - 25))
+        assert mw._live_pending, "그래프 끌기 -> 실시간 갱신 예약"
+        mw._live_fire()
+        assert abs(float(cv.final[ch0][f0]) - want) < 0.6, (float(cv.final[ch0][f0]), want)
+        cv.release()
+        n_keys = len(lp.layer().frames(jt))
+        cv.press_at(float(gm.x_of(8)), 40.0, double=True)
+        assert 8 in lp.layer().frames(jt) and len(lp.layer().frames(jt)) == n_keys + 1, "더블클릭 = 키 추가"
+        mw.recompute()
+        ce.refresh()
+        gm = cv.geom()
+        pt = [q for q in cv.key_points() if q[0] == 8][0]
+        cv.press_at(float(gm.x_of(8)), float(gm.y_of(pt[1])), right=True)
+        assert 8 not in lp.layer().frames(jt), "우클릭 = 키 삭제"
+        lp._row_changed(0)
+        mw.recompute()
+        ce.refresh()
+        assert cv.layer is None
+        cv.press_at(float(cv.geom().x_of(8)), 40.0, double=True)
+        assert cv.msg and not lp.stack().total_keys() == 0, "원본 상태에서는 키를 못 만들고 이유를 알려 준다"
+        msg0 = lp._msg
+        lp.auto_flatten()
+        assert lp._msg and len(st) >= 1, "자동 평탄화 호출 (결과 문장은 항상 있음)"
+        mw.pr.layers = {}
+        mw.recompute()
         # 끄는 동안 실시간 갱신: 가벼운 계산을 바로 하고(품질 분석 생략), 손을 놓으면 전체 계산이 이어진다
         mw.pr.issues = ["old"]
         mw._bone_dragged(jt, qy)
