@@ -42,7 +42,8 @@ from .mocap_tab import MocapTab
 from .char_assets import CharAssetPanel
 from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
-from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
+from .clip_panel import ClipPanel
+from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -100,6 +101,16 @@ class MainWindow(QMainWindow):
         self.status_progress.setMaximumWidth(220)
         self.status_progress.setVisible(False)
         self.statusBar().addPermanentWidget(self.status_progress)
+        # 휠 잠금: 숫자칸·슬라이더·콤보 위 휠이 값을 바꾸지 않게 (기본 켜짐, Ctrl+L)
+        self.wheel_guard = WheelGuard(bool(self.cfg.get("wheel_lock", True)), self)
+        _app = QApplication.instance()
+        if _app is not None:
+            _app.installEventFilter(self.wheel_guard)
+        self.wheel_cb = QCheckBox("🔒 휠 잠금")
+        self.wheel_cb.setToolTip("켜 두면 숫자칸·슬라이더·목록 위에서 마우스 휠을 굴려도 값이 바뀌지 않고 패널만 스크롤됩니다. (단축키 Ctrl+L)\n3D 뷰와 곡선 그래프의 휠 확대는 그대로 됩니다.")
+        self.wheel_cb.setChecked(self.wheel_guard.lock)
+        self.wheel_cb.toggled.connect(lambda on: self.set_wheel_lock(on))
+        self.statusBar().addPermanentWidget(self.wheel_cb)
         self._zombies: list = []  # 취소했지만 아직 끝나지 않은 작업 스레드 (끝날 때까지 붙들어 둔다)
 
     # ================================================================== AnimRef 연결
@@ -205,6 +216,7 @@ class MainWindow(QMainWindow):
         spec += [("보기", k, n, a, sc) for k, n, a, sc in mesh_items]
         spec += [
             ("보기", "mesh_cycle", "메시 보기 방식 순환", "mesh_cycle", ("M",)),
+            ("보기", "wheel_lock", "휠 잠금 켜기/끄기 (숫자칸·슬라이더가 휠로 안 바뀜)", "toggle_wheel_lock", ("Ctrl+L",)),
             ("탭", "tab0", "0. 게임에서 추출", "goto_tab:0", ("Ctrl+1",)),
             ("탭", "tab1", "1. 파일·매핑", "goto_tab:1", ("Ctrl+2",)),
             ("탭", "tab2", "2. 리타겟 조절", "goto_tab:2", ("Ctrl+3",)),
@@ -314,10 +326,16 @@ class MainWindow(QMainWindow):
         """실행 취소 기록 한 칸: 설정 + 본 매핑 + 클립별 프레임 편집(조각 목록; 손대지 않은 것은 뺀다)."""
         edits = {ci: copy.deepcopy(e.pieces) for ci, e in self.pr.edits.items() if not e.is_untouched()}
         layers = {ci: st.snapshot() for ci, st in self.pr.layers.items() if len(st)}
-        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots), "edits": edits, "layers": layers}
+        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots), "edits": edits, "layers": layers,
+                "clip": self.pr.clip, "others": {ci: copy.deepcopy(st) for ci, st in self.pr._stash.items()}}
 
     def _apply_edit_state(self, st: dict) -> None:
         self.pr.settings = copy.deepcopy(st["settings"])
+        if "clip" in st:                              # 클립별 설정까지 함께 되돌림 (다른 클립에서 한 일이라도 그 클립 설정으로)
+            self.pr._clip = int(st["clip"])
+            self.pr._stash = {ci: copy.deepcopy(o) for ci, o in st.get("others", {}).items()}
+            for o in self.pr._stash.values():
+                o.ik_ranges = self.pr.settings.ik_ranges
         self.pr.src_slots = dict(st["src"])
         self.pr.tgt_slots = dict(st["tgt"])
         self.pr.layers = {ci: LayerStack.from_snapshot(sn) for ci, sn in st.get("layers", {}).items()}
@@ -334,6 +352,7 @@ class MainWindow(QMainWindow):
             self.retime_bar.clear_marks()  # 조각이 바뀌었으니 구간 선택은 풀어 둔다
         self._syncing = True
         self._sync_settings_ui()
+        self._select_clip_widgets()
         self._syncing = False
         if self.pr.src is not None or self.pr.tgt is not None:
             self._fill_mapping()
@@ -362,6 +381,7 @@ class MainWindow(QMainWindow):
     def _timer_fire(self) -> None:
         self.history.commit(self._edit_state())  # 조절이 잠깐 멈추면 한 단계로 확정
         self.recompute()
+        self._refresh_clip_list()                # ✎ 표시 갱신
 
     def undo(self) -> None:
         st = self.history.undo(self._edit_state())
@@ -403,7 +423,17 @@ class MainWindow(QMainWindow):
         self.animref = AnimRefTab(self)
         self.tabs.setMinimumWidth(500)
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
-        split.addWidget(self.tabs)
+        # 왼쪽 끝: 리타겟 중인 모션 목록 (눌러서 오가며 작업 / 다른 모션 세팅 가져오기) + 그 오른쪽에 기존 탭
+        self.clip_panel = ClipPanel(self)
+        self.clip_panel.setMinimumWidth(170)
+        self.clip_panel.setMaximumWidth(300)
+        left = QWidget()
+        ll = QHBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(0)
+        ll.addWidget(self.clip_panel)
+        ll.addWidget(self.tabs, 1)
+        split.addWidget(left)
 
         right = QWidget()
         self.right_box = right
@@ -486,10 +516,18 @@ class MainWindow(QMainWindow):
         rl.addLayout(opts)
         # ---- 본 편집: 파츠를 목록에서 고르거나 뷰포트에서 클릭해 고르고, 끌어서 돌린다 (값은 '본별 회전 보정'에 그대로 기록)
         bl = QHBoxLayout()
-        self.cb_bone_edit = QCheckBox("🦴 본 편집")
+        self.cb_bone_edit = QPushButton("🦴 본 편집  OFF")
         self.cb_bone_edit.setToolTip("켜면 뷰포트에서 본(점)을 클릭해 고르고, 3ds Max 처럼 Q 선택 / W 이동 / E 회전 / R 크기 키로 도구를 바꿔 직접 고칩니다.\n"
                                      "하위 본 전체가 같이 움직이고, 값은 [리타겟]의 '본별 보정'(회전·위치·크기)에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
                                      "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.")
+        self.cb_bone_edit.setCheckable(True)
+        self.cb_bone_edit.setMinimumHeight(34)
+        self.cb_bone_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cb_bone_edit.setStyleSheet(
+            "QPushButton{font-size:14px;font-weight:700;padding:6px 16px;border:2px solid #4a5570;border-radius:8px;background:#222836;color:#aab3c8}"
+            "QPushButton:hover{border-color:#8fb0ff;color:#ffffff}"
+            "QPushButton:checked{background:#2f7d4a;border-color:#7ff0a0;color:#ffffff}"
+            "QPushButton:checked:hover{background:#38905a}")
         self.cb_bone_edit.toggled.connect(self._bone_edit_toggled)
         bl.addWidget(self.cb_bone_edit)
         self.tool_buttons: Dict[str, QPushButton] = {}
@@ -1902,6 +1940,7 @@ class MainWindow(QMainWindow):
         if which == "source":
             self._exported = False
             self.clip_combo.clear()
+            self._refresh_clip_list()
         else:
             self.rot_combo.clear()
             self.com_combo.clear()
@@ -1917,6 +1956,7 @@ class MainWindow(QMainWindow):
             self.clip_combo.clear()
             for i, a in enumerate(self.pr.src.animations):
                 self.clip_combo.addItem("%d: %s (%d프레임, %.0ffps)" % (i, a.name, a.n_frames, a.fps))
+            self._refresh_clip_list()
         else:
             self._fill_joint_combos()
             self._sync_settings_ui()
@@ -2332,6 +2372,10 @@ class MainWindow(QMainWindow):
 
     # ---- 뷰포트 본 편집 (파츠 목록 / 클릭 선택 / 끌어서 회전)
     def _bone_edit_toggled(self, on: bool) -> None:
+        try:
+            self.cb_bone_edit.setText("🦴 본 편집  ON" if on else "🦴 본 편집  OFF")
+        except Exception:  # noqa: BLE001
+            pass
         self.viewport.bone_edit = bool(on)
         self.bone_tree.setVisible(bool(on))
         self._bone_sig = None
@@ -2379,6 +2423,22 @@ class MainWindow(QMainWindow):
                 osopen.open_in_explorer(out)
             else:
                 self.statusBar().showMessage("출력 폴더가 아직 없습니다")
+
+    # ---- 휠 잠금
+    def set_wheel_lock(self, on: bool) -> None:
+        self.wheel_guard.lock = bool(on)
+        self.cfg["wheel_lock"] = bool(on)
+        cb = getattr(self, "wheel_cb", None)
+        if cb is not None and cb.isChecked() != bool(on):
+            cb.setChecked(bool(on))
+        self.statusBar().showMessage("휠 잠금 %s — 숫자칸·슬라이더 위에서 휠을 굴려도 %s" % (("켜짐", "값이 바뀌지 않습니다") if on else ("꺼짐", "값이 바뀝니다")))
+        try:
+            bridge.save_config(self.cfg)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def toggle_wheel_lock(self) -> None:
+        self.set_wheel_lock(not self.wheel_guard.lock)
 
     def toggle_guide(self) -> None:
         self.set_guide_visible(not self.guide_box.isVisible())
@@ -2723,10 +2783,32 @@ class MainWindow(QMainWindow):
     def _issue_clicked(self, item) -> None:
         self.frame_slider.setValue(int(item.data(Qt.ItemDataRole.UserRole)))
 
+    def _refresh_clip_list(self) -> None:
+        cp = getattr(self, "clip_panel", None)
+        if cp is not None:
+            cp.refresh()
+
+    def _select_clip_widgets(self) -> None:
+        """pr.clip 에 맞춰 콤보박스·목록 줄을 맞춘다 (시그널 없이)."""
+        prev = self._syncing
+        self._syncing = True
+        try:
+            if self.pr.src is not None and 0 <= self.pr.clip < self.clip_combo.count():
+                self.clip_combo.setCurrentIndex(self.pr.clip)
+        finally:
+            self._syncing = prev
+        cp = getattr(self, "clip_panel", None)
+        if cp is not None:
+            cp.refresh()
+
     def _clip_changed(self, i: int) -> None:
         if self._syncing or i < 0 or self.pr.src is None:
             return
         self.pr.clip = i
+        self._syncing = True
+        self._sync_settings_ui()                      # 설정은 클립마다 따로라 화면의 값도 그 클립 것으로
+        self._select_clip_widgets()
+        self._syncing = False
         self.recompute(reframe=False)
 
     # ---- 타임라인

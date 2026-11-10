@@ -514,6 +514,51 @@ def test_full_flow():
         mw._bone_reset_selected()
         mw.pr.layers = {}
         mw.recompute()
+        # 휠 잠금 토글 / 본 편집 버튼
+        assert mw.wheel_guard.lock is True
+        mw.toggle_wheel_lock()
+        assert mw.wheel_guard.lock is False and mw.cfg["wheel_lock"] is False
+        mw.set_wheel_lock(True)
+        assert mw.wheel_guard.lock is True and mw.wheel_cb.isChecked()
+        mw.cb_bone_edit.setChecked(True)
+        assert "ON" in mw.cb_bone_edit.text()
+        mw.cb_bone_edit.setChecked(False)
+        assert "OFF" in mw.cb_bone_edit.text()
+        # 왼쪽 모션 목록: 클립을 눌러 오가면 설정이 클립마다 따로 남고, 다른 모션 세팅을 가져왔다 뺄 수 있다
+        import copy as _copy
+        n0 = len(mw.pr.src.animations)
+        mw.pr.clip = 0
+        mw.pr.reset_clip_settings()
+        extra = _copy.deepcopy(mw.pr.src.animations[0])
+        extra.name = "second"
+        mw.pr.src.animations.append(extra)
+        mw._after_load("source")
+        cp = mw.clip_panel
+        assert cp.lst.count() == n0 + 1 and mw.clip_combo.count() == n0 + 1, (cp.lst.count(), mw.clip_combo.count())
+        mw.pr.settings.root_yaw_deg = 25.0
+        cp.lst.setCurrentRow(1)
+        assert mw.pr.clip == 1 and mw.clip_combo.currentIndex() == 1, "목록을 누르면 클립이 바뀜"
+        assert mw.pr.settings.root_yaw_deg == 25.0, "처음 여는 모션은 보던 설정으로 시작"
+        mw._set("root_yaw_deg", 70.0)
+        mw.clip_combo.setCurrentIndex(0)
+        assert mw.pr.clip == 0 and cp.lst.currentRow() == 0 and mw.pr.settings.root_yaw_deg == 25.0, "돌아오면 그 모션 설정이 그대로"
+        assert mw._fields["root_yaw_deg"][0].spin.value() == 25.0, "화면의 값도 그 모션 것"
+        cp.lst.setCurrentRow(1)
+        assert cp.src.count() == n0 and cp.b_in.isEnabled() and not cp.b_out.isEnabled()
+        for k, cb in cp.checks.items():
+            cb.setChecked(k == "settings")
+        mw.pr.settings.root_yaw_deg = 70.0
+        cp.src.setCurrentIndex(0)
+        cp.do_import()
+        assert mw.pr.settings.root_yaw_deg == 25.0 and cp.b_out.isEnabled() and "가져온 기록" in cp.hist.text(), "가져오기"
+        assert mw._fields["root_yaw_deg"][0].spin.value() == 25.0
+        cp.do_undo()
+        assert mw.pr.settings.root_yaw_deg == 70.0 and not cp.b_out.isEnabled(), "빼기 = 가져오기 전으로"
+        mw.undo()                                              # 실행 취소도 클립 설정까지 함께 되돌림 (오류 없이)
+        mw.pr.src.animations.pop()
+        mw.pr.reset_clip_settings()
+        mw._after_load("source")
+        assert cp.lst.count() == n0
         # IK 구간 직접 지정 패널: 켜기/끄기 구간이 설정에 들어가고, 지우면 자동 판정으로 돌아간다
         ik = mw.ik_panel
         mw.pr.layers = {}

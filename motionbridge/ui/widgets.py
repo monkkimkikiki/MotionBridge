@@ -4,8 +4,8 @@ from __future__ import annotations
 import threading
 import traceback
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import QMenu
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtWidgets import QAbstractSlider, QAbstractSpinBox, QApplication, QMenu
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QProgressBar, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -596,3 +596,33 @@ class BusyDialog(QDialog):
             ev.ignore()
         else:
             ev.accept()
+
+
+class WheelGuard(QObject):
+    """마우스 휠 잠금 — 켜 두면 숫자칸·슬라이더·콤보박스 위에서 휠을 굴려도 값이 바뀌지 않고, 휠이 그대로 바깥 패널 스크롤이 된다.
+    (패널을 스크롤하다 배율 같은 값이 실수로 바뀌는 것을 막는다. 값은 클릭해서 입력하거나 슬라이더를 끌어서 바꾼다.)
+    위젯에 setProperty('wheelOk', True) 를 주면 그 위젯은 잠금에서 빼 준다."""
+
+    def __init__(self, lock: bool = True, parent=None) -> None:
+        super().__init__(parent)
+        self.lock = bool(lock)
+
+    def watched(self, obj) -> bool:
+        if isinstance(obj, (QAbstractSpinBox, QAbstractSlider, QComboBox)):
+            try:
+                return not bool(obj.property("wheelOk"))
+            except Exception:  # noqa: BLE001
+                return True
+        return False
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
+        try:
+            if self.lock and ev.type() == QEvent.Type.Wheel and self.watched(obj):
+                ev.ignore()
+                par = obj.parentWidget()
+                if par is not None:
+                    QApplication.sendEvent(par, ev)      # 바깥 스크롤 패널이 받아 스크롤
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False

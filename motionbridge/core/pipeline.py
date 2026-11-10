@@ -1,6 +1,7 @@
 """UI 와 CLI 가 함께 쓰는 작업 단위: 소스/타깃 불러오기, 매핑, 리타겟 실행, 프로필 저장, 내보내기."""
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import os
@@ -76,7 +77,9 @@ class Project:
         self.tgt_slots: Dict[str, int] = {}
         self.settings = RetargetSettings()
         self.use_chain: Dict[str, bool] = {"L": True, "R": True}
-        self.clip = 0
+        self._clip = 0
+        self._stash: Dict[int, RetargetSettings] = {}      # 지금 보는 클립이 아닌 클립들의 리타겟 설정 (클립마다 따로 가진다)
+        self._import_undo: Dict[int, List[dict]] = {}      # 클립별 '다른 모션 세팅 가져오기' 되돌리기 기록
         self.result: Optional[RetargetResult] = None
         self.issues: List[Issue] = []
         self.blender: Optional[str] = None
@@ -88,6 +91,133 @@ class Project:
         self._base_cache = None   # (입력 키, 레이어 적용 전 리타겟 결과)
         self.rig_note = ""   # 같은 스켈레톤으로 못 알아본 이유 (이름은 거의 같은데 모양이 안 맞을 때 화면에 알린다)
 
+    # ------------------------------------------------------------------ 클립별 설정
+    # 리타겟 설정(스케일·IK·발·다듬기·본별 보정 등)은 클립마다 따로 가진다. 처음 여는 클립은 그때 보고 있던 설정을 복사해 시작하고(예전처럼 같은 값),
+    # 그 뒤로는 서로 영향을 주지 않는다. 다른 클립 설정은 import_clip_state 로 필요한 부분만 가져온다.
+    @property
+    def clip(self) -> int:
+        return self._clip
+
+    @clip.setter
+    def clip(self, v: int) -> None:
+        v = int(v)
+        if v == self._clip:
+            return
+        old = self.settings
+        self._stash[self._clip] = old
+        nxt = self._stash.pop(v, None)
+        if nxt is None:
+            nxt = copy.deepcopy(old)
+        nxt.ik_ranges = old.ik_ranges             # IK 구간은 이미 '클립 번호 → 구간' 모양이라 한 곳에 모아 둔다
+        self.settings = nxt
+        self._clip = v
+
+    def settings_of(self, ci: int) -> Optional[RetargetSettings]:
+        """클립 ci 의 리타겟 설정 (아직 한 번도 열지 않은 클립이면 None)."""
+        if ci == self._clip:
+            return self.settings
+        return self._stash.get(ci)
+
+    def reset_clip_settings(self) -> None:
+        self._stash = {}
+        self._import_undo = {}
+        self._clip = 0
+
+    def _each_settings(self):
+        yield self.settings
+        for st in self._stash.values():
+            yield st
+
+    def clip_touched(self, ci: int) -> bool:
+        """그 클립에 사용자가 손댄 것(본별 보정·레이어·IK 구간·프레임 편집)이 있는가 — 목록 표시용."""
+        st = self.settings_of(ci)
+        if st is not None and (st.rot_offsets or st.pos_offsets or st.scale_offsets):
+            return True
+        ls = self.layers.get(ci)
+        if ls is not None and len(ls) and ls.total_keys():
+            return True
+        if self.settings.ik_ranges.get(ci):
+            return True
+        e = self.edits.get(ci)
+        return bool(e is not None and not e.is_untouched())
+
+    IMPORT_PARTS = (("settings", "리타겟 기본 설정 (스케일·IK·발·다듬기 등)"), ("offsets", "본별 보정 (회전·위치·크기)"),
+                    ("layers", "보정 레이어"), ("ik", "IK 구간 직접 지정"))
+
+    def _state_snapshot(self) -> dict:
+        ci = self._clip
+        ls = self.layers.get(ci)
+        return {"settings": copy.deepcopy(self.settings), "layers": ls.snapshot() if ls is not None else None,
+                "ik": copy.deepcopy(self.settings.ik_ranges.get(ci))}
+
+    def import_clip_state(self, from_clip: int, parts: Sequence[str]) -> str:
+        """다른 클립(from_clip)의 세팅 중 parts("settings"/"offsets"/"layers"/"ik")를 지금 클립으로 가져온다. 되돌리기용 기록을 남기고 요약을 돌려준다."""
+        if self.src is None or not (0 <= from_clip < len(self.src.animations)) or from_clip == self._clip:
+            raise ValueError("가져올 다른 모션을 고르세요.")
+        parts = [p for p in parts if p in dict(self.IMPORT_PARTS)]
+        if not parts:
+            raise ValueError("가져올 항목을 하나 이상 고르세요.")
+        src_st = self.settings_of(from_clip)
+        got: List[str] = []
+        snap = self._state_snapshot()
+        cur = self.settings
+        if "settings" in parts and src_st is not None:
+            keep = {"rot_offsets", "pos_offsets", "scale_offsets", "com_joint", "ik_ranges"}
+            for f in dataclasses.fields(RetargetSettings):
+                if f.name not in keep:
+                    setattr(cur, f.name, copy.deepcopy(getattr(src_st, f.name)))
+            got.append("기본 설정")
+        if "offsets" in parts and src_st is not None:
+            cur.rot_offsets = copy.deepcopy(src_st.rot_offsets)
+            cur.pos_offsets = copy.deepcopy(src_st.pos_offsets)
+            cur.scale_offsets = copy.deepcopy(src_st.scale_offsets)
+            cur.com_joint = src_st.com_joint
+            got.append("본별 보정")
+        if "layers" in parts:
+            ls = self.layers.get(from_clip)
+            if ls is not None and len(ls):
+                self.layers[self._clip] = LayerStack.from_snapshot(ls.snapshot())
+                got.append("보정 레이어 %d개" % len(ls))
+            else:
+                self.layers.pop(self._clip, None)
+                got.append("보정 레이어(없음 → 비움)")
+        if "ik" in parts:
+            r = self.settings.ik_ranges.get(from_clip)
+            if r:
+                self.settings.ik_ranges[self._clip] = copy.deepcopy(r)
+                got.append("IK 구간")
+            else:
+                self.settings.ik_ranges.pop(self._clip, None)
+                got.append("IK 구간(없음 → 비움)")
+        name = self.src.animations[from_clip].name
+        snap["note"] = "'%s' 에서 가져옴: %s" % (name, ", ".join(got))
+        self._import_undo.setdefault(self._clip, []).append(snap)
+        self.result = None
+        return snap["note"]
+
+    def import_history(self, ci: Optional[int] = None) -> List[str]:
+        return [h["note"] for h in self._import_undo.get(self._clip if ci is None else ci, [])]
+
+    def undo_import(self) -> Optional[str]:
+        """마지막으로 가져온 것을 빼고 가져오기 전 상태로 되돌린다. 되돌릴 것이 없으면 None."""
+        hist = self._import_undo.get(self._clip) or []
+        if not hist:
+            return None
+        h = hist.pop()
+        ik = self.settings.ik_ranges
+        h["settings"].ik_ranges = ik
+        self.settings = h["settings"]
+        if h["layers"] is not None:
+            self.layers[self._clip] = LayerStack.from_snapshot(h["layers"])
+        else:
+            self.layers.pop(self._clip, None)
+        if h["ik"]:
+            ik[self._clip] = h["ik"]
+        else:
+            ik.pop(self._clip, None)
+        self.result = None
+        return h["note"]
+
     # ------------------------------------------------------------------ 불러오기
     def load_source(self, path: str) -> Model:
         m = load_model(path, self.blender)
@@ -95,7 +225,7 @@ class Project:
             raise ValueError("이 파일에는 애니메이션이 없습니다: " + path)
         self.src = m
         self.src_slots = auto_map(m.skeleton)
-        self.clip = 0
+        self.reset_clip_settings()
         self.edits = {}
         self.layers = {}
         self.result = None
@@ -132,7 +262,7 @@ class Project:
             raise ValueError("열 수 있는 모션이 없습니다.\n" + "\n".join(skipped))
         self.src = base
         self.src_slots = auto_map(base.skeleton)
-        self.clip = 0
+        self.reset_clip_settings()
         self.edits = {}
         self.layers = {}
         self.result = None
@@ -143,10 +273,12 @@ class Project:
         m = load_model(path, self.blender)
         self.tgt = m
         self.tgt_slots = auto_map(m.skeleton)
-        self.settings.rot_offsets = {}
-        self.settings.pos_offsets = {}
-        self.settings.scale_offsets = {}
-        self.settings.com_joint = -1
+        for _st in self._each_settings():
+            _st.rot_offsets = {}
+            _st.pos_offsets = {}
+            _st.scale_offsets = {}
+            _st.com_joint = -1
+        self._import_undo = {}
         self.result = None
         self.log += m.notes
         return m
@@ -154,16 +286,18 @@ class Project:
     def unload_target(self) -> None:
         """타깃 모델을 뺀다 (소스 모션은 그대로)."""
         self.tgt, self.tgt_slots = None, {}
-        self.settings.rot_offsets = {}
-        self.settings.pos_offsets = {}
-        self.settings.scale_offsets = {}
-        self.settings.com_joint = -1
+        for _st in self._each_settings():
+            _st.rot_offsets = {}
+            _st.pos_offsets = {}
+            _st.scale_offsets = {}
+            _st.com_joint = -1
+        self._import_undo = {}
         self.result, self.issues = None, []
 
     def unload_source(self) -> None:
         """소스 모션을 뺀다 (타깃 모델은 그대로)."""
         self.src, self.src_slots = None, {}
-        self.clip = 0
+        self.reset_clip_settings()
         self.edits = {}
         self.layers = {}
         self.result, self.issues = None, []

@@ -389,6 +389,7 @@ class QListWidget(QWidget):
     def clear(self):
         self._items = []
         self._sel = []
+        self._row = -1
 
     def count(self):
         return len(self._items)
@@ -407,6 +408,16 @@ class QListWidget(QWidget):
 
     def selectItems(self, idx):
         self._sel = [self._items[i] for i in idx]
+
+    def setCurrentRow(self, r):
+        r = int(r) if 0 <= int(r) < len(self._items) else -1
+        old = getattr(self, "_row", -1)
+        self._row = r
+        if r != old:
+            self.currentRowChanged.emit(r)
+
+    def currentRow(self):
+        return getattr(self, "_row", -1)
 
 
 class QTreeWidgetItem:

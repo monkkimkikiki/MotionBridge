@@ -241,6 +241,56 @@ with tempfile.TemporaryDirectory() as d:
     span0 = ce.canvas.view[1] - ce.canvas.view[0]
     ce.canvas.wheelEvent(wev2)
     check(ce.canvas.view[1] - ce.canvas.view[0] < span0, "곡선 그래프: 휠로 가로 확대")
+    # 왼쪽 모션 목록: 클립을 눌러 오가기 / 다른 모션 세팅 가져오기 / 빼기 (진짜 Qt 위젯)
+    import copy as _cp
+    cpn = mw.clip_panel
+    n_clip0 = len(mw.pr.src.animations)
+    ex_ = _cp.deepcopy(mw.pr.src.animations[0])
+    ex_.name = "스모크 두번째"
+    mw.pr.src.animations.append(ex_)
+    mw._after_load("source")
+    app.processEvents()
+    check(cpn.lst.count() == n_clip0 + 1 and cpn.lst.item(n_clip0).text().find("스모크 두번째") >= 0, "모션 목록: 줄 %d개" % cpn.lst.count())
+    mw.pr.settings.root_yaw_deg = 12.0
+    cpn.lst.setCurrentRow(n_clip0)
+    app.processEvents()
+    check(mw.pr.clip == n_clip0 and mw.clip_combo.currentIndex() == n_clip0, "모션 목록: 줄을 누르면 그 모션으로")
+    mw._set("root_yaw_deg", 55.0)
+    cpn.lst.setCurrentRow(0)
+    app.processEvents()
+    check(mw.pr.clip == 0 and abs(mw.pr.settings.root_yaw_deg - 12.0) < 1e-9, "모션마다 설정이 따로 남음 (%s)" % mw.pr.settings.root_yaw_deg)
+    cpn.lst.setCurrentRow(n_clip0)
+    app.processEvents()
+    for k_, cb_ in cpn.checks.items():
+        cb_.setChecked(k_ == "settings")
+    cpn.src.setCurrentIndex(cpn.src.findData(0))
+    cpn.do_import()
+    app.processEvents()
+    check(abs(mw.pr.settings.root_yaw_deg - 12.0) < 1e-9 and cpn.b_out.isEnabled(), "다른 모션 세팅 가져오기")
+    cpn.do_undo()
+    app.processEvents()
+    check(abs(mw.pr.settings.root_yaw_deg - 55.0) < 1e-9 and not cpn.b_out.isEnabled(), "빼기: 가져오기 전으로")
+    mw.pr.src.animations.pop()
+    mw.pr.reset_clip_settings()
+    mw._after_load("source")
+    app.processEvents()
+    # 휠 잠금: 숫자칸 위 휠은 값이 안 바뀌고 (잠금 켜짐), 끄면 바뀐다. 본 편집은 눌리는 버튼
+    from PySide6.QtWidgets import QApplication as _QA2
+    check(mw.wheel_guard.lock and mw.wheel_cb.isChecked(), "휠 잠금 기본 켜짐")
+    nf_ = mw._fields["ik_knee_stable"][0]
+    nf_.show()
+    v0_ = nf_.spin.value()
+    wv_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    _QA2.sendEvent(nf_.spin, wv_)
+    app.processEvents()
+    check(nf_.spin.value() == v0_, "휠 잠금 켜짐: 숫자칸이 휠로 안 바뀜 (%s)" % nf_.spin.value())
+    mw.toggle_wheel_lock()
+    check(not mw.wheel_guard.lock and not mw.wheel_cb.isChecked(), "Ctrl+L 동작: 잠금 해제")
+    mw.set_wheel_lock(True)
+    check(mw.cb_bone_edit.isCheckable() and "OFF" in mw.cb_bone_edit.text(), "본 편집은 눌리는 버튼")
+    mw.cb_bone_edit.setChecked(True)
+    check("ON" in mw.cb_bone_edit.text(), "본 편집 켜면 글자가 ON")
+    mw.cb_bone_edit.setChecked(False)
     pts = ce.canvas.key_points()
     if pts:
         f_, v_, _id = pts[0]
