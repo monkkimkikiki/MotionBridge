@@ -477,8 +477,10 @@ class AssetIndex:
         return (1.0, "플레이어 공용 (%s)" % ", ".join(sorted(hit))) if hit else (0.0, "")
 
     def rank_anims(self, mesh_path: str, label: Optional[str] = None, hits: Optional[int] = None, limit: int = 80,
-                   min_char: float = 0.3, player: Optional[bool] = None) -> List[AnimCandidate]:
-        """player=None 이면 메시 경로로 자동 판단, True/False 는 강제."""
+                   min_char: float = 0.3, player: Optional[bool] = None, owned: Optional[Iterable[str]] = None) -> List[AnimCandidate]:
+        """player=None 이면 메시 경로로 자동 판단, True/False 는 강제.
+        owned: 이 캐릭터 폴더에 속한 애니메이션 경로들 (캐릭터 카탈로그가 알려 줌). 있으면 이름이 안 닮았어도 빠짐없이 넣고 맨 앞에 둔다."""
+        own = set(owned) if owned else set()
         m = self.mesh(mesh_path) or MeshEntry.of(mesh_path)
         if player is None:
             player = is_player_path(mesh_path)
@@ -486,14 +488,14 @@ class AssetIndex:
         out: List[AnimCandidate] = []
         for a in self.anims:
             cs, why = self.player_score(a) if player else self.char_score(m, a)
-            if cs < min_char:
+            if cs < min_char and a not in own:
                 continue
             reasons = [why] if why else []
             total = cs
             if cat:
                 scores = category_scores(a)
                 top = max(scores.values()) if scores else 0.0
-                own = max(scores, key=scores.get) if scores else None
+                own_cat = max(scores, key=scores.get) if scores else None
                 ls = 0.0
                 if scores.get(cat, 0.0) >= top and top > 0:  # 동점이면 둘 다 본래 분류로 본다
                     ls = 1.0
@@ -507,7 +509,7 @@ class AssetIndex:
                 elif ls > 0:
                     reasons.append("분류 '%s' 단어가 섞임" % CATEGORY_NAME[cat])
                 elif ls < 0:
-                    reasons.append("다른 분류('%s')로 보임" % CATEGORY_NAME[own])
+                    reasons.append("다른 분류('%s')로 보임" % CATEGORY_NAME[own_cat])
             if hits:
                 n = hit_count(a)
                 if n is not None:
@@ -516,9 +518,11 @@ class AssetIndex:
                         reasons.append("%d타 일치" % hits)
                     else:
                         total -= 0.08
+            if a in own:
+                reasons.insert(0, "같은 캐릭터 폴더")
             out.append(AnimCandidate(a, round(total, 3), ", ".join(reasons)))
-        out.sort(key=lambda c: (-c.score, c.path.lower()))
-        return out[:limit]
+        out.sort(key=lambda c: (c.path not in own, -c.score, c.path.lower()))     # 같은 캐릭터 폴더의 것이 먼저
+        return out[:max(limit, len(own))]
 
     # ------------------------------------------------------------------ 캐시
     def to_json(self, game_key: str = "") -> dict:

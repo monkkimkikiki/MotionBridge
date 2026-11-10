@@ -51,6 +51,9 @@ def norm_text(s: str) -> str:
     return _norm(re.sub(r"^\s*the\s+", "", (s or "").lower()))
 
 
+MIN_CHARS = 8      # 카탈로그가 이보다 작으면(= 이 게임의 폴더 규칙을 못 읽은 것) 쓰지 않고 예전 방식으로 간다
+
+
 @dataclass
 class Character:
     id: str                       # 폴더 이름 (예: 'Swordman', 'Brigands/BrigBase')

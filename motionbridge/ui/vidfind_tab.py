@@ -834,6 +834,17 @@ class VidFindTab(QWidget):
         self._charcat_memo = (key, cat)
         return cat
 
+    def _owned_anims(self, idx: assetidx.AssetIndex, mesh_path: str):
+        """캐릭터 카탈로그에서 이 메시가 어느 캐릭터인지 알면, 그 캐릭터 폴더의 애니메이션 경로들 (모르면 None -> 예전처럼 이름 유사도만)."""
+        try:
+            cat = self._catalog(idx)
+            if len(cat.all()) < charcatalog.MIN_CHARS:
+                return None
+            ch = cat.of_path(mesh_path)
+        except Exception:  # noqa: BLE001 - 카탈로그가 안 만들어져도 찾기는 계속
+            return None
+        return list(ch.anims) if ch is not None and ch.anims else None
+
     def _vocab(self, idx: assetidx.AssetIndex, limit: int, pat: str, style: str = "raw"):
         """AI에게 알려줄 이름 목록과 안내 문구.
         style: 'lines' = 캐릭터 카탈로그 줄('<ID> = <게임 속 이름> [종류]', 결과의 ids 가 True) / 'names' = 카탈로그의 대표 메시 이름 / 'raw' = 예전 방식(메시 이름 알파벳순).
@@ -846,7 +857,7 @@ class VidFindTab(QWidget):
             except Exception as e:  # noqa: BLE001 - 카탈로그가 안 만들어져도 예전 방식으로 계속
                 chars, cat = [], None
                 notes.append("캐릭터 카탈로그를 만들지 못해 예전 방식으로 진행합니다: %s" % e)
-            if cat is not None and len(chars) >= 8:
+            if cat is not None and len(chars) >= charcatalog.MIN_CHARS:
                 if pat:
                     try:
                         chars = [c for c in chars if assetidx.filter_paths(c.meshes, pat)]
@@ -1200,7 +1211,18 @@ class VidFindTab(QWidget):
 
         def job(w):
             w.progress.emit(0, 1, "이름으로 찾는 중")
-            return gamenames.find_meshes(name, idx, book, prov, desc)
+            try:                                   # 1) 캐릭터 카탈로그: 게임 속 이름(영/한)이 정확히 맞으면 그 캐릭터 폴더의 메시를 바로 (AI·비슷한 이름 후보 없이)
+                cat = self._catalog(idx)
+                hit = cat.find(name, 1) if len(cat.all()) >= charcatalog.MIN_CHARS else []
+            except Exception:  # noqa: BLE001
+                hit = []
+            if hit and hit[0].score >= 0.85 and hit[0].char.meshes:
+                ch = hit[0].char
+                body = ch.body_mesh()
+                order = ([body] if body else []) + [m for m in sorted(ch.meshes) if m != body]
+                cands = [assetidx.MeshCandidate(m, assetidx.mesh_name(m), 1.0 if m == body else 0.9, "게임 속 이름 → %s (캐릭터 폴더)" % ch.display()) for m in order]
+                return cands, ["캐릭터 '%s': 메시 %d개 · 애니메이션 %d개 (같은 폴더)" % (ch.display(), len(ch.meshes), len(ch.anims))]
+            return gamenames.find_meshes(name, idx, book, prov, desc)   # 2) 카탈로그에 없으면 예전 방식(글자 사전 + 비슷한 이름 + AI)
 
         def done(res):
             cands, notes = res
@@ -1504,7 +1526,7 @@ class VidFindTab(QWidget):
             nm = m.name if m else assetidx.mesh_name(p)
             if force or assetidx.is_player_path(p):
                 players.append(nm)
-            cands = idx.rank_anims(p, label, hits, 60, player=force)
+            cands = idx.rank_anims(p, label, hits, 60, player=force, owned=None if (force or assetidx.is_player_path(p)) else self._owned_anims(idx, p))
             cands, st, dropped = self._refine(p, cands)
             n_drop += dropped
             skel_state[st] = skel_state.get(st, 0) + 1
@@ -1562,7 +1584,7 @@ class VidFindTab(QWidget):
         hits = int(self.hits.value()) or None
         todo = set(meshes)
         for p in meshes:
-            todo.update(c.path for c in idx.rank_anims(p, label, hits, 60, player=None))
+            todo.update(c.path for c in idx.rank_anims(p, label, hits, 60, player=None, owned=self._owned_anims(idx, p)))
         todo = [p for p in sorted(todo) if skelgraph.worth_inspecting(p)]
 
         def job(w):
