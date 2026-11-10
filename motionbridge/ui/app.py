@@ -1525,7 +1525,7 @@ class MainWindow(QMainWindow):
         h2 = QHBoxLayout()
         h2.addWidget(QLabel("스키닝된 .max (선택)"))
         self.biped_tpl = QLineEdit(self.cfg.get("biped_template", ""))
-        self.biped_tpl.setPlaceholderText("비워 두면 새 Biped 를 만들어 .bip 만 저장 · 스키닝된 .max 를 고르면 그 안의 Biped 에 모션을 적용해 같은 폴더에 *_retarget.max 로 저장")
+        self.biped_tpl.setPlaceholderText("비워 두면 새 Biped 를 만들어 .bip 만 저장 · 스키닝된 .max 를 고르고 추출하면 고른 방식(Biped/일반 본)으로 모션을 적용해 같은 폴더에 *_retarget.max 로 저장")
         self.biped_tpl.setToolTip("3ds Max Biped 형식으로 내보낼 때만 쓰입니다.\n"
                                   "· 비워 둘 때: 3ds Max 에서 *_retarget.ms 를 실행하면 새 Biped 를 만들고 모션을 넣어 같은 폴더에 *_retarget.bip 로 저장합니다.\n"
                                   "· 스키닝된 .max 를 고를 때: *_retarget.ms 를 실행하면 그 파일을 열어 안의 Biped(bip > refbone 구조)에 모션을 적용하고,\n"
@@ -1536,6 +1536,33 @@ class MainWindow(QMainWindow):
         b2.clicked.connect(self._pick_biped_template)
         h2.addWidget(b2)
         lay.addLayout(h2)
+        h3 = QHBoxLayout()
+        h3.addWidget(QLabel("적용 방식"))
+        self.max_method = QComboBox()
+        self.max_method.addItem("Biped (bip > refbone 구조에 키)", "biped")
+        self.max_method.addItem("일반 본 (Maya 식 관절 — 이름이 같은 본에 키)", "bones")
+        i = self.max_method.findData(self.cfg.get("max_method", "biped"))
+        self.max_method.setCurrentIndex(max(i, 0))
+        self.max_method.setToolTip("스키닝된 .max 를 골랐을 때 모션을 넣는 방식을 검수자가 정합니다.\n"
+                                   "· Biped: .max 안의 Biped 에 키를 넣습니다 (본 이름과 무관, 부위로 찾음).\n"
+                                   "· 일반 본: Biped 가 아닌 평범한 본/관절 계층. 타깃 모델의 본 이름과 같은 이름의 본(대소문자·공백·_·네임스페이스 무시)에 회전 키를 넣고,\n"
+                                   "  골반/루트처럼 위치가 움직이는 본에는 위치 키도 넣습니다.")
+        h3.addWidget(self.max_method)
+        self.cb_max_auto = QCheckBox("내보낸 뒤 3ds Max 를 실행해 자동 적용")
+        self.cb_max_auto.setChecked(bool(self.cfg.get("max_auto", True)))
+        self.cb_max_auto.setToolTip("켜면 추출(내보내기) 직후 3ds Max 를 화면 없이 실행해 .max 에 모션을 적용하고 *_retarget.max 로 저장합니다.\n"
+                                    "끄면 *_retarget.ms 만 만들고, 3ds Max 에서 직접 실행합니다. 3ds Max 가 설치된 Windows 에서만 동작합니다.")
+        h3.addWidget(self.cb_max_auto)
+        lay.addLayout(h3)
+        h4 = QHBoxLayout()
+        h4.addWidget(QLabel("3ds Max 경로"))
+        self.max_exe = QLineEdit(self.cfg.get("max_exe", ""))
+        self.max_exe.setPlaceholderText("비워 두면 설치된 3ds Max(3dsmaxbatch.exe)를 자동으로 찾습니다")
+        h4.addWidget(self.max_exe, 1)
+        b4 = QPushButton("찾아보기…")
+        b4.clicked.connect(self._pick_max_exe)
+        h4.addWidget(b4)
+        lay.addLayout(h4)
         self.blender_label = QLabel("")
         self.blender_label.setWordWrap(True)
         lay.addWidget(self.blender_label)
@@ -2487,6 +2514,11 @@ class MainWindow(QMainWindow):
         if f:
             self.biped_tpl.setText(f)
 
+    def _pick_max_exe(self) -> None:
+        f, _x = QFileDialog.getOpenFileName(self, "3ds Max 실행 파일 (3dsmaxbatch.exe 또는 3dsmax.exe)", self.max_exe.text() or "C:/Program Files/Autodesk", "실행 파일 (*.exe);;모든 파일 (*)")
+        if f:
+            self.max_exe.setText(f)
+
     def _pick_out(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "출력 폴더", self.out_edit.text())
         if d:
@@ -2511,6 +2543,9 @@ class MainWindow(QMainWindow):
             return
         presets = [k for k, cb in self.cb_preset.items() if cb.isChecked()]
         fmts = [k for k, cb in self.cb_fmt.items() if cb.isChecked()]
+        tpl_max = self.biped_tpl.text().strip()
+        if tpl_max and "bip" not in fmts:
+            fmts.append("bip")   # 스키닝된 .max 를 골랐으면 그 파일에 모션을 적용하는 단계를 함께 한다 (검수자가 고른 방식으로)
         skel = self.cb_skeleton.isChecked()
         needs_preset = any(k in ("bvh", "fbx") for k in fmts)
         if skel and (not fmts or (needs_preset and not presets)):
@@ -2533,8 +2568,12 @@ class MainWindow(QMainWindow):
             include_mesh=self.cb_mesh.isChecked(), write_skeleton_json=self.cb_skel_json.isChecked(), blender=self.pr.blender,
             edit=self._export_edit(), organize=bool(self.cb_organize.isChecked()), char_name=self.char_edit.text().strip(),
             on_exist=self._exist_policy(), name=name if isinstance(name, str) else "", biped_template=self.biped_tpl.text().strip(),
+            max_method=self.max_method.currentData() or "biped", max_auto=bool(self.cb_max_auto.isChecked()), max_exe=self.max_exe.text().strip(),
         )
         self.cfg["biped_template"] = self.biped_tpl.text().strip()
+        self.cfg["max_method"] = opt.max_method
+        self.cfg["max_auto"] = opt.max_auto
+        self.cfg["max_exe"] = opt.max_exe
         self.edit_panel.save()
         self.rt_edit.save()
         bridge.save_config(self.cfg)

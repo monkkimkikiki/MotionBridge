@@ -158,6 +158,26 @@ def write_data(path: str, d: dict) -> None:
 
 
 # ---------------------------------------------------------------------------------------------------- MaxScript
+AUTO_HEADER = r'''-- 자동 실행(MotionBridge 가 3ds Max 를 직접 띄울 때): 메시지 창 없이 로그 파일에 기록하고, 경로를 스크립트에 박아 둔다
+global mbAuto = __AUTO__
+global mbLogFile = "__LOG__"
+global mbDataAbs = "__DATAABS__"
+global mbBaseAbs = "__BASEABS__"
+global mbQuitAfter = __QUIT__
+fn mbSay msg =
+(
+	local lf = undefined
+	format "%\n" msg
+	if mbLogFile != "" do
+	(
+		try ( lf = openFile mbLogFile mode:"a" ) catch ()
+		if lf == undefined do ( try ( lf = createFile mbLogFile ) catch () )
+		if lf != undefined do ( format "%\n" msg to:lf ; close lf )
+	)
+	if not mbAuto do messageBox msg title:"MotionBridge"
+)
+'''
+
 SCRIPT = r'''-- MotionBridge -> 3ds Max Biped  (자동 생성 파일, 리타깃 결과)
 -- 사용법: 3ds Max 에서 [Scripting > Run Script...] 로 이 파일을 실행하세요.
 --   * 같은 폴더의 "__DATA__" 를 읽어서 Biped 에 리타깃한 모션 키를 넣고 .bip 로 저장합니다 (저장 위치를 묻지 않습니다).
@@ -166,6 +186,7 @@ SCRIPT = r'''-- MotionBridge -> 3ds Max Biped  (자동 생성 파일, 리타깃 
 --   * 템플릿이 없으면 새 Biped 를 만들어 이 스크립트와 같은 폴더에 .bip 로 저장합니다.
 --   * 오류가 나면 [MAXScript Listener] 창(F11)의 내용을 알려 주세요.
 
+__AUTOHEAD__
 -- 주의: MaxScript 는 함수 안에서 바깥 함수의 지역변수/지역함수를 쓸 수 없어서(컴파일 오류), 도우미 함수는 모두 여기(최상위)에 두고 필요한 값은 인자로 받는다.
 fn mbTryGetNode b arr link = ( local n = undefined ; try ( n = biped.getNode b arr link:link ) catch () ; if n == undefined do ( try ( n = biped.getNode b.transform.controller arr link:link ) catch () ) ; n )
 
@@ -215,8 +236,9 @@ fn mbUniqueStem dir base exts =
 fn mbRun =
 (
 	local dataFile = (getFilenamePath (getThisScriptFilename())) + "__DATA__"
-	if not (doesFileExist dataFile) do dataFile = getOpenFileName caption:"__DATA__ 파일을 고르세요" types:"MotionBridge Biped data (*.mbbip)|*.mbbip"
-	if dataFile == undefined or not (doesFileExist dataFile) do ( messageBox "데이터 파일(__DATA__)을 찾지 못했습니다. 이 스크립트와 같은 폴더에 두세요." ; return undefined )
+	if mbDataAbs != "" do dataFile = mbDataAbs
+	if not (doesFileExist dataFile) and not mbAuto do dataFile = getOpenFileName caption:"__DATA__ 파일을 고르세요" types:"MotionBridge Biped data (*.mbbip)|*.mbbip"
+	if dataFile == undefined or not (doesFileExist dataFile) do ( mbSay "데이터 파일(__DATA__)을 찾지 못했습니다. 이 스크립트와 같은 폴더에 두세요." ; return undefined )
 
 	-- ---------------------------------------------------------------- 데이터 읽기
 	local f = openFile dataFile mode:"r"
@@ -254,17 +276,17 @@ fn mbRun =
 	)
 	close f
 	local nParts = pSlot.count
-	if lines.count < 1 or nParts < 1 do ( messageBox "데이터 파일이 비어 있습니다." ; return undefined )
+	if lines.count < 1 or nParts < 1 do ( mbSay "데이터 파일이 비어 있습니다." ; return undefined )
 
 	-- 템플릿 모드(__TEMPLATE__ 가 비어 있지 않을 때): 스키닝된 .max 를 열어 그 안의 Biped 에 키를 굽고 .max 로 저장한다 (Biped 를 새로 만들지 않음)
 	local tmplFile = "__TEMPLATE__"
 	local scriptFile = getThisScriptFilename()
 	local scriptDir = if scriptFile != undefined then (getFilenamePath scriptFile) else (getFilenamePath dataFile)
-	local baseName = if scriptFile != undefined then (getFilenameFile scriptFile) else (clipName + "_retarget")
+	local baseName = if mbBaseAbs != "" then mbBaseAbs else if scriptFile != undefined then (getFilenameFile scriptFile) else (clipName + "_retarget")
 	local outBip = undefined, outMax = undefined
 	if tmplFile != "" then
 	(
-		if not (doesFileExist tmplFile) do ( messageBox ("템플릿 .max 파일을 찾지 못했습니다:\n" + tmplFile) ; return undefined )
+		if not (doesFileExist tmplFile) do ( mbSay ("템플릿 .max 파일을 찾지 못했습니다:\n" + tmplFile) ; return undefined )
 		local tdir = getFilenamePath tmplFile
 		local stem = mbUniqueStem tdir baseName #(".max", ".bip")
 		outMax = tdir + stem + ".max"
@@ -283,15 +305,15 @@ fn mbRun =
 	local bip = undefined
 	if tmplFile != "" then
 	(
-		if not (checkForSave()) do return undefined      -- 지금 장면에 저장 안 한 변경이 있으면 먼저 물어본다
+		if not mbAuto do ( if not (checkForSave()) do return undefined )      -- 지금 장면에 저장 안 한 변경이 있으면 먼저 물어본다 (자동 실행은 묻지 않음)
 		loadMaxFile tmplFile quiet:true useFileUnits:true
 		U = units.decodeValue "1.0m"
 		-- Biped 의 중심(COM, Bip01): 컨트롤러가 Vertical_Horizontal_Turn 인 노드
 		for o in objects where bip == undefined do ( try ( if classof o.controller == Vertical_Horizontal_Turn do bip = o ) catch () )
-		if bip == undefined do ( messageBox "템플릿 .max 안에서 Biped 를 찾지 못했습니다." ; return undefined )
+		if bip == undefined do ( mbSay "템플릿 .max 안에서 Biped 를 찾지 못했습니다." ; return undefined )
 	)
 	else bip = mbMakeBiped (heightM * U) 0 spineN fingN toesN
-	if bip == undefined do ( messageBox "Biped 를 만들지 못했습니다." ; return undefined )
+	if bip == undefined do ( mbSay "Biped 를 만들지 못했습니다." ; return undefined )
 	local ctrl = bip.transform.controller
 	ctrl.figureMode = true
 
@@ -458,10 +480,12 @@ fn mbRun =
 	-- ---------------------------------------------------------------- 저장
 	local saved = false
 	try ( biped.saveBipFile ctrl outBip ; saved = true ) catch ( append msgs ("저장 실패: " + (getCurrentException())) )
+	if saved do mbSay ("SAVED: " + outBip)
 	local savedMax = false
 	if outMax != undefined do
 	(
 		try ( saveMaxFile outMax quiet:true ; savedMax = true ) catch ( append msgs (".max 저장 실패: " + (getCurrentException())) )
+		if savedMax do mbSay ("SAVED: " + outMax)
 	)
 	local secs = (timeStamp() - t0) / 1000.0
 	local msg = "MotionBridge: Biped 모션 " + (nFrames as string) + "프레임 적용 (" + (secs as string) + "초)\n"
@@ -473,27 +497,45 @@ fn mbRun =
 	msg += "Biped 키 " + (heightM as string) + "m · 골반 높이 비율 " + (r as string) + "\n"
 	if failed.count > 0 do msg += "키를 넣지 못한 부위: " + (failed as string) + "\n"
 	for l in msgs do msg += l + "\n"
-	format "%\n" msg
-	messageBox msg title:"MotionBridge"
+	mbSay msg
 )
 mbRun()
+if mbQuitAfter do quitMax #noPrompt
 '''
 
 
-def write_script(path: str, data_name: str, template: str = "") -> None:
-    tpl = (template or "").replace("\\", "/").replace('"', "")      # MaxScript 문자열: 슬래시 경로
+SCRIPT = SCRIPT.replace("__AUTOHEAD__\n", AUTO_HEADER)
+
+
+def maxstr(p: str) -> str:
+    """MaxScript 문자열 안에 넣을 경로: 슬래시, 따옴표 제거."""
+    return (p or "").replace("\\", "/").replace('"', "")
+
+
+def fill_script(text: str, data_name: str, template: str = "", auto: Optional[dict] = None) -> str:
+    """스크립트 틀의 자리표시자를 채운다. auto = {"log","data","base","quit"} 이면 자동 실행용(메시지 창 없음, 경로를 박음)."""
+    a = auto or {}
+    return (text.replace("__AUTO__", "true" if auto else "false").replace("__LOG__", maxstr(a.get("log", "")))
+            .replace("__DATAABS__", maxstr(a.get("data", ""))).replace("__BASEABS__", a.get("base", ""))
+            .replace("__QUIT__", "true" if a.get("quit") else "false")
+            .replace("__DATA__", data_name).replace("__TEMPLATE__", maxstr(template)))
+
+
+def write_script(path: str, data_name: str, template: str = "", auto: Optional[dict] = None) -> None:
     with open(path, "w", encoding="utf-8", newline="\r\n") as f:
-        f.write(SCRIPT.replace("__DATA__", data_name).replace("__TEMPLATE__", tpl))
+        f.write(fill_script(SCRIPT, data_name, template, auto))
 
 
 def export_biped(out_dir: str, base: str, skel: Skeleton, anim: Animation, slots: Dict[str, int], frame_to_canon: np.ndarray,
-                 units_per_meter: float, template: str = "") -> Tuple[List[str], List[str]]:
-    """(만든 파일 목록, 경고 목록)"""
+                 units_per_meter: float, template: str = "", auto: Optional[dict] = None) -> Tuple[List[str], List[str]]:
+    """(만든 파일 목록, 경고 목록). auto 는 fill_script 참고(경로 키는 여기서 채운다)."""
     d = compute(skel, anim, slots, frame_to_canon, units_per_meter)
     ms = os.path.join(out_dir, base + "_retarget.ms")
     data = os.path.join(out_dir, base + "_retarget.mbbip")
     write_data(data, d)
-    write_script(ms, os.path.basename(data), template)
+    if auto is not None:
+        auto = dict(auto, data=data, base=base + "_retarget")
+    write_script(ms, os.path.basename(data), template, auto)
     warns = []
     missing = [s for s in ("Hips", "Spine", "Head", "L_UpperArm", "R_UpperArm", "L_UpLeg", "R_UpLeg") if s not in slots]
     if missing:

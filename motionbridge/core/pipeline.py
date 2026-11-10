@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import animops, bridge, biped, frameedit, layout, safesave, export as X
+from . import animops, bridge, biped, frameedit, layout, maxbones, maxrun, safesave, export as X
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -40,6 +40,10 @@ class ExportOptions:
     organize: bool = False  # True: out_dir / 캐릭터 / Animations(모션 파일) · Models(메시·본 구조) 로 나눠 담는다
     char_name: str = ""     # organize 일 때 캐릭터 폴더 이름 (비우면 소스 경로/클립 이름에서 자동)
     biped_template: str = ""      # Biped(.ms) 내보내기: 스키닝된 템플릿 .max (있으면 Biped 를 새로 만들지 않고 이 파일 안의 Biped 에 키를 굽는다)
+    max_method: str = "biped"     # 스키닝된 .max 에 모션을 넣는 방식: biped (Biped 에 키) | bones (이름이 같은 일반 본/Maya 식 관절에 키)
+    max_auto: bool = False        # True: 내보낸 뒤 3ds Max 를 직접 실행해 .max 에 모션을 적용·저장 (False: .ms 만 만들고 사용자가 실행)
+    max_exe: str = ""             # 3ds Max 실행 파일(3dsmaxbatch.exe / 3dsmax.exe) 또는 설치 폴더. 비우면 자동으로 찾는다
+    max_timeout: float = 900.0    # 자동 실행 제한 시간(초)
     on_exist: str = "overwrite"   # 같은 이름의 파일이 이미 있을 때: overwrite | keep_old | new_name (core.safesave)
     name: str = ""                # 다른 이름으로 저장: 파일 이름(확장자 제외). 클립이 여러 개면 '이름_클립이름'
 
@@ -430,12 +434,34 @@ class Project:
         fmts = [f.lower() for f in opt.formats]
         if keys is not None and "bip" in fmts:
             warns.append("Biped 스크립트는 프레임마다 키를 찍는 방식이라 키 수는 줄지 않고, 정리(압축)된 모션으로 나갑니다.")
-        if "bip" in fmts:  # 3ds Max Biped: 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
+        if "bip" in fmts:  # 3ds Max (Biped 또는 일반 본): 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
             slots = self.tgt_slots if opt.what == "retargeted" else self.src_slots
+            auto = {"log": os.path.join(adir, base + "_retarget_max.log"), "quit": False} if opt.max_auto and opt.biped_template else None
+            exe = ""
+            if auto is not None:
+                exe = maxrun.find_max(opt.max_exe)
+                if not exe:
+                    auto = None
+                    warns.append("3ds Max(3dsmaxbatch.exe / 3dsmax.exe)를 찾지 못해 자동 적용을 건너뜁니다. '3ds Max 경로 지정…' 을 하거나, 만들어진 *_retarget.ms 를 3ds Max 에서 직접 실행하세요.")
+                else:
+                    auto["quit"] = not maxrun.is_batch(exe)
             try:
-                files, w = biped.export_biped(adir, base, skel, anim, slots, F, upm, opt.biped_template)
+                if opt.max_method == "bones":
+                    files, w = maxbones.export_bones(adir, base, skel, anim, slots, F, upm, opt.biped_template, auto)
+                else:
+                    files, w = biped.export_biped(adir, base, skel, anim, slots, F, upm, opt.biped_template, auto)
                 out += files
                 warns += w
+                if auto is not None:
+                    r = maxrun.run(exe, files[0], auto["log"], opt.max_timeout)
+                    out += [p for p in r["saved"] if os.path.exists(p)]
+                    if r["ok"]:
+                        warns.append("3ds Max 자동 적용 완료 (%s): %s" % ("일반 본" if opt.max_method == "bones" else "Biped", ", ".join(os.path.basename(p) for p in r["saved"])))
+                        warns += r["warnings"]
+                    else:
+                        warns.append("3ds Max 자동 적용 실패: %s  (*_retarget.ms 를 3ds Max 에서 직접 실행하면 같은 일을 합니다)" % r["error"])
+                    if os.path.exists(auto["log"]):
+                        out.append(auto["log"])
             except ValueError as e:
                 warns.append(str(e))
         for preset_key in opt.presets:
