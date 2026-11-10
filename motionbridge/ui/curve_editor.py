@@ -3,7 +3,7 @@
 · 굵은 선 = 지금 상태의 최종 곡선, 흐린 선 = 맨 위 레이어를 적용하기 전(아래 상태) 곡선, 노란 띠 = IK 접지 구간
 · 네모 = 맨 위(편집 중) 레이어의 키: 위아래로 끌면 그 프레임의 최종 값이 끈 값이 되도록 키를 고침 / 빈 곳 더블클릭 = 그 프레임에 키 추가 / 키 우클릭 = 삭제
 · 곡선 위를 잡고 위아래로 끌면 그 프레임에 키가 생기며 바로 따라옴 (클릭만 하면 프레임 이동)
-· Shift+끌기 = 프레임 구간 선택(파란 띠) -> 아래 버튼: 지우고 블렌드 / 일직선으로 / 떨림 정리
+· Shift+끌기 = 프레임 구간 선택(파란 띠) -> 아래 버튼: 지우고 블렌드 / 일직선으로(평평하게) / 시작-끝 이어서 / 떨림 정리
 · 빈 곳 클릭·끌기 = 프레임 이동, 휠 = 가로 확대/축소 (Shift+휠 = 세로), '보기 맞춤' = 전체 보기
 계산은 core/curves.py, 좌표는 ui/graph_math.py 에 있고 이 파일은 그리기와 마우스 연결만 한다."""
 from __future__ import annotations
@@ -317,7 +317,8 @@ class CurveEditor(CollapsibleBox):
         self.btns = {}
         for mode, text, tip in (
             ("blend", "🧽 지우고 블렌드", "고른 구간의 값을 지우고, 구간 바로 앞·뒤 프레임 값을 이어서 자연스럽게 채웁니다 (맥스에서 키를 지웠을 때와 같아요)"),
-            ("line", "📏 일직선으로", "고른 구간의 시작·끝 값은 두고, 그 사이를 일직선으로 잇습니다 (흔들리는 구간 정리)"),
+            ("flat", "📏 일직선으로", "고른 구간 전체를 한 값으로 평평하게(가로 직선) 만듭니다. 어떤 값에 맞출지는 오른쪽 '기준'에서 고르세요"),
+            ("line", "↘ 시작-끝 이어서", "고른 구간의 시작·끝 값은 두고 그 사이를 대각선으로 잇습니다 (시작과 끝 값이 다르면 비스듬해져요)"),
             ("smooth", "〰 떨림 정리", "고른 구간의 잔 떨림을 부드럽게 펴고, 앞뒤는 원래 값으로 서서히 이어 붙입니다"),
         ):
             bt = QPushButton(text)
@@ -325,6 +326,13 @@ class CurveEditor(CollapsibleBox):
             bt.clicked.connect(lambda _c=False, m=mode: self.range_do(m))
             rb.addWidget(bt)
             self.btns[mode] = bt
+        rb.addWidget(QLabel("기준"))
+        self.anchor = QComboBox()
+        self.anchor.addItem("구간 시작 값", "start")
+        self.anchor.addItem("구간 평균 값", "mean")
+        self.anchor.setToolTip("📏 일직선으로 가 구간을 맞출 값: 구간 시작 프레임 값(앞에서 이어짐) / 구간 평균 값")
+        self.anchor.currentIndexChanged.connect(self._anchor_changed)
+        rb.addWidget(self.anchor)
         rb.addStretch(1)
         v.addLayout(rb)
         self.range_lbl = QLabel("고칠 구간: 그래프에서 Shift 를 누른 채 끌어 고르세요 (고른 본에만 적용)")
@@ -376,6 +384,11 @@ class CurveEditor(CollapsibleBox):
         lp.rng_a.setValue(int(a) + 1)
         lp.rng_b.setValue(int(b) + 1)
         self.range_lbl.setText("고칠 구간: %d ~ %d 프레임 (%d개)" % (a + 1, b + 1, b - a + 1))
+
+    def _anchor_changed(self, *_a) -> None:
+        lp = self.app.layer_panel
+        if lp.flat_anchor.currentIndex() != self.anchor.currentIndex():
+            lp.flat_anchor.setCurrentIndex(self.anchor.currentIndex())
 
     def range_do(self, mode: str) -> None:
         """고른 구간(없으면 레이어 패널의 시작·끝 칸)에 지우고 블렌드/일직선/떨림 정리를 적용."""

@@ -469,8 +469,10 @@ def test_full_flow():
         assert "6" in ce.range_lbl.text() and "10" in ce.range_lbl.text()
         lp.layer().fade = 0
         keys_before = {f: k for f, k in lp.layer().keys.get(jt, {}).items()}
-        ce.range_do("line")
+        ce.range_do("flat")
         assert "일직선" in lp._msg, lp._msg
+        ce.range_do("line")
+        assert "이어서" in lp._msg, lp._msg
         mw.recompute()
         ce.refresh()
         lp.layer().keys[jt] = keys_before
@@ -524,6 +526,67 @@ def test_full_flow():
         assert "ON" in mw.cb_bone_edit.text()
         mw.cb_bone_edit.setChecked(False)
         assert "OFF" in mw.cb_bone_edit.text()
+        # Ctrl+클릭: 다른 본에 지금 프레임 키만 찍는다 (레이어가 없으면 만들고, 선택은 그대로)
+        mw.pr.layers = {}
+        mw.recompute()
+        sel0 = mw.viewport.selected_joint
+        jo = next(j for j in mw.pr.tgt_slots.values() if j != jt)
+        mw.frame_slider.setValue(4)
+        mw.viewport.frame = 4
+        mw._bone_ctrl_clicked(jo)
+        assert len(mw.pr.layer_stack()) == 1 and mw.pr.layer_stack().current().frames(jo) == [4], "Ctrl+클릭 = 그 본 키"
+        assert mw.viewport.selected_joint == sel0, "선택은 그대로"
+        mw.pr.layers = {}
+        mw.recompute()
+        # 바이패드식 위치 편집: 발을 옮기면 허벅지·정강이가 돌아 따라오고(길이 유지), '이 본만 움직이기' 면 그 본만 위치 키가 생긴다
+        mw.pr.layers = {}
+        mw.pr.settings.rot_offsets.clear()
+        mw.pr.settings.pos_offsets.clear()
+        mw.recompute()
+        lay_ = mw.layer_panel
+        lay_.add_layer()
+        lay_.layer().fade = 0
+        mw.frame_slider.setValue(6)
+        mw.viewport.frame = 6
+        from motionbridge.core import posik as _pk
+        foot = mw.pr.tgt_slots["L_Foot"]
+        up_, lo_, end_, _nm = _pk.end_chain(mw.pr.tgt_slots, foot)
+        P0 = np.array(mw.vd.tgt_pos[6], dtype=float)
+        len1, len2 = np.linalg.norm(P0[up_] - P0[lo_]), np.linalg.norm(P0[lo_] - P0[end_])
+        d_ = (P0[up_] - P0[end_]) * 0.12
+        assert not mw.cb_pos_only.isChecked(), "기본은 IK 방식"
+        mw._bone_drag_started()
+        mw._bone_moved(foot, d_)
+        mw.recompute()
+        P1 = np.array(mw.vd.tgt_pos[6], dtype=float)
+        assert np.linalg.norm(P1[end_] - (P0[end_] + d_)) < 0.02 * (len1 + len2), "발이 끈 곳으로 따라옴"
+        assert abs(np.linalg.norm(P1[up_] - P1[lo_]) - len1) < 1e-4 * (1 + len1) and abs(np.linalg.norm(P1[lo_] - P1[end_]) - len2) < 1e-4 * (1 + len2), "뼈 길이 유지"
+        assert lay_.layer().frames(up_) == [6] and lay_.layer().frames(lo_) == [6] and not lay_.layer().frames(foot), "위/가운데 본 회전 키, 발 위치 키는 없음"
+        # 이 본만 움직이기: 발에 위치 키만 생기고 위쪽 본은 그대로
+        mw.pr.layers = {}
+        mw.recompute()
+        lay_.add_layer()
+        lay_.layer().fade = 0
+        mw.cb_pos_only.setChecked(True)
+        mw._bone_drag_started()
+        mw._bone_moved(foot, d_)
+        assert lay_.layer().frames(foot) == [6] and not lay_.layer().frames(up_) and not lay_.layer().frames(lo_), "이 본만"
+        mw.cb_pos_only.setChecked(False)
+        # 손·발 끝이 아닌 본은 항상 그 본만
+        mw.pr.layers = {}
+        mw.recompute()
+        lay_.add_layer()
+        mw._bone_moved(mw.pr.tgt_slots["Hips"], np.array([0.0, 0.01, 0.0]))
+        assert lay_.layer().frames(mw.pr.tgt_slots["Hips"]) == [6]
+        mw.pr.layers = {}
+        mw.recompute()
+        # 에셋 찾기 검색칸: '\\' 만 남은 예전 값은 버린다
+        from motionbridge.ui.char_assets import CharAssetPanel
+        mw.cfg["char_query"] = "\\"
+        assert CharAssetPanel(mw).query.text() == "" and mw.cfg["char_query"] == ""
+        mw.cfg["char_query"] = "swordman"
+        assert CharAssetPanel(mw).query.text() == "swordman", "정상 검색어는 유지"
+        mw.cfg["char_query"] = ""
         # 안내 줄 숨겼다가 다시 보이기 (버튼 / 단축키 동작)
         mw.set_guide_visible(False)
         assert not mw.guide_box.isVisible() and not mw.guide_toggle.isChecked()
@@ -561,6 +624,16 @@ def test_full_flow():
         cp.do_undo()
         assert mw.pr.settings.root_yaw_deg == 70.0 and not cp.b_out.isEnabled(), "빼기 = 가져오기 전으로"
         mw.undo()                                              # 실행 취소도 클립 설정까지 함께 되돌림 (오류 없이)
+        # 모션 목록에서 빼기 / 파일로 더하기 (추출 후 자동 추가도 같은 경로)
+        assert cp.b_rm.isEnabled()
+        n_before = len(mw.pr.src.animations)
+        mw.pr.clip = 0
+        cp.lst.setCurrentRow(n_before - 1)
+        cp.remove_current()
+        assert len(mw.pr.src.animations) == n_before - 1 and cp.lst.count() == n_before - 1 and mw.clip_combo.count() == n_before - 1, "목록에서 빠짐"
+        added_n = cp.add_paths([src2])
+        assert added_n == 1 and cp.lst.count() == n_before
+        assert cp.add_paths([src2]) == 0, "이미 있는 파일은 다시 안 들어감"
         mw.pr.src.animations.pop()
         mw.pr.reset_clip_settings()
         mw._after_load("source")

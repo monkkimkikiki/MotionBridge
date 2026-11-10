@@ -3,8 +3,9 @@
 설정·본별 보정·레이어·IK 구간은 모션마다 따로 저장되므로 하나를 고치다가 다른 모션으로 넘어가도 작업이 그대로 남는다 (core/pipeline.py 의 클립별 설정)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
+from ..core.loader import FILE_FILTER
 from .widgets import CollapsibleBox
 
 TITLE = "모션 목록 — 리타겟 중인 애니메이션"
@@ -26,6 +27,16 @@ class ClipPanel(QWidget):
                             "✎ = 손댄 모션 (본 보정·레이어·IK 구간·프레임 편집이 있음)")
         self.lst.currentRowChanged.connect(self._row)
         v.addWidget(self.lst, 1)
+        r0 = QHBoxLayout()
+        self.b_add = QPushButton("＋ 모션 추가…")
+        self.b_add.setToolTip("모션 파일(PSA·FBX·GLB·BVH)을 골라 목록에 더합니다. 같은 캐릭터 뼈대의 것만 들어갑니다.\n추출 탭에서 애니메이션을 추출하면 자동으로 여기에 더해져요.")
+        self.b_add.clicked.connect(lambda _c=False: self.add_files())
+        self.b_rm = QPushButton("－ 선택한 모션 빼기")
+        self.b_rm.setToolTip("지금 고른 모션을 목록에서 뺍니다 (그 모션의 설정·보정·레이어·IK 구간도 함께 사라져요. 파일은 지워지지 않습니다)")
+        self.b_rm.clicked.connect(lambda _c=False: self.remove_current())
+        r0.addWidget(self.b_add, 1)
+        r0.addWidget(self.b_rm, 1)
+        v.addLayout(r0)
         self.count = QLabel("")
         self.count.setStyleSheet("color:#8aa")
         v.addWidget(self.count)
@@ -92,6 +103,7 @@ class ClipPanel(QWidget):
             if j >= 0:
                 self.src.setCurrentIndex(j)
             can = len(anims) > 1
+            self.b_rm.setEnabled(can)
             self.b_in.setEnabled(can and self.src.count() > 0)
             h = pr.import_history() if anims else []
             self.b_out.setEnabled(bool(h))
@@ -147,3 +159,60 @@ class ClipPanel(QWidget):
         a.history.commit(a._edit_state())
         self.refresh()
         a.statusBar().showMessage(msg)
+
+    # ---- 목록 편집: 모션 더하기 / 빼기
+    def add_files(self) -> None:
+        a = self.app
+        paths, _ = QFileDialog.getOpenFileNames(a, "모션 추가", a._open_start_dir("anim"), FILE_FILTER)
+        if paths:
+            self.add_paths(list(paths), select_first=True)
+
+    def add_paths(self, paths, select_first: bool = False) -> int:
+        """파일들을 목록에 더한다 (추출 직후에도 쓴다). 돌려주는 값: 새로 더해진 모션 수."""
+        a = self.app
+        try:
+            added, skipped = a.pr.add_motions(list(paths))
+        except Exception as e:  # noqa: BLE001
+            a.statusBar().showMessage("모션 추가 실패: %s" % e)
+            return 0
+        if a.pr.src is not None and added and added[0] == 0:
+            a._after_load("source")                     # 목록이 비어 있었으면 첫 모션이 소스가 됨
+        else:
+            a._refill_clip_combo()
+        if select_first and added and a.pr.src is not None and len(a.pr.src.animations) > 1:
+            a.clip_combo.setCurrentIndex(added[0])
+        self.refresh()
+        msg = "모션 %d개를 목록에 더했습니다" % len(added) if added else "더해진 모션이 없습니다"
+        if skipped:
+            msg += " · 건너뜀 %d개: %s" % (len(skipped), "; ".join(skipped[:2]))
+        a.statusBar().showMessage(msg)
+        return len(added)
+
+    def remove_current(self) -> None:
+        a = self.app
+        pr = a.pr
+        if pr.src is None or len(pr.src.animations) <= 1:
+            a.statusBar().showMessage("마지막 모션은 목록에서 뺄 수 없습니다 (소스 빼기를 쓰세요)")
+            return
+        ci = self.lst.currentRow()
+        if ci < 0:
+            return
+        nm = pr.src.animations[ci].name
+        if pr.clip_touched(ci):
+            r = QMessageBox.question(a, "모션 빼기", "'%s' 에는 손댄 작업(본 보정·레이어·IK 구간·프레임 편집)이 있습니다.\n목록에서 빼면 그 작업도 사라집니다. 뺄까요?" % nm)
+            if r != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            pr.remove_clip(ci)
+        except ValueError as e:
+            a.statusBar().showMessage(str(e))
+            return
+        a._refill_clip_combo()
+        a._syncing = True
+        a._sync_settings_ui()
+        a._syncing = False
+        a.recompute(reframe=True)
+        a.history.reset(a._edit_state())
+        self.refresh()
+        a.statusBar().showMessage("목록에서 뺐습니다: " + nm)
+

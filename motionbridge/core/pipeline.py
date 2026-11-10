@@ -112,6 +112,93 @@ class Project:
         self.settings = nxt
         self._clip = v
 
+    # ---- 모션 목록 편집: 모션 추가 / 빼기 (모션별 설정·레이어·편집·IK 구간 번호를 함께 정리)
+    def add_motions(self, paths: Sequence[str]) -> Tuple[List[int], List[str]]:
+        """지금 소스에 모션 파일들을 이어 붙인다. 스켈레톤이 같은 것만 붙고 다른 것·애니메이션 없는 것·이미 있는 파일은 건너뛴다.
+        소스가 아직 없으면 첫 번째 파일을 소스로 연다. 돌려주는 값: (새로 생긴 클립 번호들, 건너뛴 이유들)."""
+        added: List[int] = []
+        skipped: List[str] = []
+        known = getattr(self, "_clip_paths", None)
+        if known is None:
+            known = self._clip_paths = {}
+        for pth in paths:
+            nm = os.path.basename(pth)
+            key = os.path.normcase(os.path.abspath(pth))
+            if self.src is not None and key in known.values():
+                skipped.append("%s: 이미 목록에 있습니다" % nm)
+                continue
+            try:
+                m = load_model(pth, self.blender)
+            except Exception as e:  # noqa: BLE001 - 한 파일이 깨져도 나머지는 계속
+                skipped.append("%s: %s" % (nm, e))
+                continue
+            if not m.animations:
+                skipped.append("%s: 애니메이션이 없습니다" % nm)
+                continue
+            if len(m.animations) == 1:
+                m.animations[0].name = os.path.splitext(nm)[0]
+            if self.src is None:
+                self.src = m
+                self.src_slots = auto_map(m.skeleton)
+                self.reset_clip_settings()
+                self.edits, self.layers, self.result = {}, {}, None
+                self._clip_paths = known = {}
+                self.log += m.notes
+                n0 = 0
+            elif list(m.skeleton.names) == list(self.src.skeleton.names) and np.array_equal(m.skeleton.parents, self.src.skeleton.parents):
+                n0 = len(self.src.animations)
+                self.src.animations += m.animations
+            else:
+                skipped.append("%s: 스켈레톤이 달라 같은 목록에 넣을 수 없습니다 (지금 소스와 다른 캐릭터)" % nm)
+                continue
+            for i in range(n0, len(self.src.animations)):
+                added.append(i)
+                known[i] = key
+        return added, skipped
+
+    def remove_clip(self, ci: int) -> str:
+        """모션 목록에서 클립 ci 를 뺀다. 그 클립의 설정·레이어·편집·IK 구간도 함께 사라지고, 뒤 번호는 앞으로 당겨진다. 마지막 하나는 뺄 수 없다."""
+        n = len(self.src.animations) if self.src is not None else 0
+        if not (0 <= ci < n):
+            raise ValueError("뺄 모션을 목록에서 고르세요.")
+        if n <= 1:
+            raise ValueError("마지막 모션은 목록에서 뺄 수 없습니다 (소스 모션 빼기를 쓰세요).")
+        name = self.src.animations[ci].name
+
+        def shift(d: dict) -> dict:
+            return {(k if k < ci else k - 1): v for k, v in d.items() if k != ci}
+
+        states = dict(self._stash)
+        states[self._clip] = self.settings
+        ik = self.settings.ik_ranges
+        old_clip = self._clip
+        if ci < old_clip:
+            new_clip = old_clip - 1
+        elif ci == old_clip:
+            new_clip = min(ci, n - 2)
+        else:
+            new_clip = old_clip
+        removed_st = states.get(ci)
+        states = shift(states)
+        newik = shift(dict(ik))
+        ik.clear()
+        ik.update(newik)
+        cur = states.pop(new_clip, None)
+        if cur is None:
+            cur = copy.deepcopy(removed_st if removed_st is not None else self.settings)
+        cur.ik_ranges = ik
+        for st in states.values():
+            st.ik_ranges = ik
+        self._stash, self.settings, self._clip = states, cur, new_clip
+        self._import_undo = shift(self._import_undo)
+        self.layers = shift(self.layers)
+        self.edits = shift(self.edits)
+        paths = shift(getattr(self, "_clip_paths", {}))
+        self._clip_paths = paths
+        del self.src.animations[ci]
+        self.result, self._base_cache = None, None
+        return name
+
     def settings_of(self, ci: int) -> Optional[RetargetSettings]:
         """클립 ci 의 리타겟 설정 (아직 한 번도 열지 않은 클립이면 None)."""
         if ci == self._clip:
@@ -119,6 +206,7 @@ class Project:
         return self._stash.get(ci)
 
     def reset_clip_settings(self) -> None:
+        self._clip_paths = {}
         self._stash = {}
         self._import_undo = {}
         self._clip = 0
@@ -226,6 +314,7 @@ class Project:
         self.src = m
         self.src_slots = auto_map(m.skeleton)
         self.reset_clip_settings()
+        self._clip_paths = {i: os.path.normcase(os.path.abspath(path)) for i in range(len(m.animations))}
         self.edits = {}
         self.layers = {}
         self.result = None

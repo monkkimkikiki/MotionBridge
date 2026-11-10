@@ -121,7 +121,53 @@ def test_touched():
     print("touched OK")
 
 
+def test_add_remove_motions():
+    with tempfile.TemporaryDirectory() as d:
+        src, src2, tgt, _a, _b = TP.make_inputs(d)
+        pr = Project()
+        add, skip = pr.add_motions([src])                 # 소스가 없으면 첫 파일이 소스
+        assert add == [0] and not skip and pr.src is not None
+        add2, skip2 = pr.add_motions([src2])
+        n = len(pr.src.animations)
+        assert add2 == [1] and not skip2 and n == 2 and pr.src.animations[1].name == os.path.splitext(os.path.basename(src2))[0], (add2, skip2)
+        add3, skip3 = pr.add_motions([src2, src])           # 이미 있는 파일은 건너뜀
+        assert add3 == [] and len(skip3) == 2 and "이미" in skip3[0]
+        add4, skip4 = pr.add_motions([os.path.join(d, "없는파일.glb")])
+        assert add4 == [] and len(skip4) == 1
+        pr.load_target(tgt)
+        # 클립 0,1 에 서로 다른 작업을 해 두고 0 을 뺀다 -> 1 의 작업이 0 번으로 당겨짐
+        a2 = copy.deepcopy(pr.src.animations[0]); a2.name = "third"; pr.src.animations.append(a2)
+        hip = pr.tgt_slots["Hips"]
+        pr.clip = 1
+        pr.settings.root_yaw_deg = 11.0
+        pr.layer_stack().add().set_key(hip, 1, pos=np.array([0.0, 1.0, 0.0]))
+        pr.settings.ik_ranges[1] = {"왼쪽 다리": [[1, 3, True]]}
+        pr.clip = 2
+        pr.settings.root_yaw_deg = 22.0
+        name = pr.remove_clip(0)
+        assert len(pr.src.animations) == 2 and pr.src.animations[0].name == os.path.splitext(os.path.basename(src2))[0] and name
+        assert pr.clip == 1 and pr.settings.root_yaw_deg == 22.0, "보던 클립은 번호만 당겨짐"
+        pr.clip = 0
+        assert pr.settings.root_yaw_deg == 11.0 and pr.layer_stack().total_keys() == 1 and pr.settings.ik_ranges.get(0), "작업이 한 칸 앞으로"
+        assert set(pr.settings.ik_ranges) == {0}, pr.settings.ik_ranges
+        pr.run(0, analyze_quality=False)
+        # 보고 있는 클립을 빼면 다음 클립으로
+        pr.clip = 0
+        pr.remove_clip(0)
+        assert pr.clip == 0 and len(pr.src.animations) == 1 and pr.settings.root_yaw_deg == 22.0
+        try:
+            pr.remove_clip(0)
+            raise AssertionError("마지막 하나는 못 뺌")
+        except ValueError:
+            pass
+        # 빼고 나서 같은 파일을 다시 추가할 수 있다
+        add5, _ = pr.add_motions([src2])
+        assert add5 == [1], add5
+    print("add / remove motions OK")
+
+
 if __name__ == "__main__":
+    test_add_remove_motions()
     test_per_clip_settings()
     test_import_and_undo()
     test_touched()

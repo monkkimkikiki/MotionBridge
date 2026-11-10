@@ -134,12 +134,22 @@ class LayerPanel(CollapsibleBox):
         v.addLayout(rr)
         rr = QHBoxLayout()
         for text, tip, mode in (("🧽 지우고 블렌드", "이 구간의 프레임을 지우고, 바로 앞·뒤 프레임 값을 자연스럽게 이어서 채웁니다 (수치로 못 고치는 튀는 프레임 제거용)", "blend"),
-                                ("📏 일직선으로", "구간의 시작·끝 값은 그대로 두고 그 사이를 일직선으로 이어 흔들림을 없앱니다", "line"),
+                                ("📏 일직선으로", "구간 전체를 한 값으로 평평하게 만듭니다 (가로 직선 = 값이 변하지 않음). 어떤 값으로 평평하게 할지는 아래 '평평하게 할 값'에서 고릅니다", "flat"),
+                                ("↘ 시작-끝 이어서", "구간의 시작·끝 값은 그대로 두고 그 사이를 대각선으로 이어 흔들림을 없앱니다 (시작과 끝 값이 다르면 비스듬해져요)", "line"),
                                 ("〰 떨림 정리", "구간의 자글자글한 떨림만 펴고, 구간 앞뒤는 서서히 원래 값으로 이어 붙입니다", "smooth")):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _c=False, m=mode: self.range_action(m))
             rr.addWidget(b)
+        v.addLayout(rr)
+        rr = QHBoxLayout()
+        rr.addWidget(QLabel("평평하게 할 값"))
+        self.flat_anchor = QComboBox()
+        self.flat_anchor.addItem("구간 시작 프레임 값 (앞에서 이어짐)", "start")
+        self.flat_anchor.addItem("구간 평균 값", "mean")
+        self.flat_anchor.setToolTip("📏 일직선으로 를 누를 때 구간을 어떤 값에 맞출지.\n시작 값: 앞쪽은 자연스럽게 이어지고 끝에서 원래 값으로 서서히 돌아옵니다 / 평균 값: 위아래로 흔들리던 곳의 가운데 높이")
+        self.flat_anchor.currentIndexChanged.connect(self._anchor_changed)
+        rr.addWidget(self.flat_anchor, 1)
         v.addLayout(rr)
         rr = QHBoxLayout()
         rr.addWidget(QLabel("떨림 정리 세기"))
@@ -395,6 +405,26 @@ class LayerPanel(CollapsibleBox):
         self._msg = "지금 보이는 값으로 키 %d개를 찍었습니다 (프레임 %d)." % (len(js), self._frame() + 1)
         self._changed()
 
+    def key_bone(self, j: int) -> None:
+        """뷰포트에서 Ctrl+클릭한 본 j 에 지금 프레임의 키를 지금 보이는 값 그대로 찍는다. 레이어가 없으면 하나 만든다."""
+        pr = self.app.pr
+        if pr.tgt is None or pr.src is None:
+            self.app.statusBar().showMessage("먼저 소스 모션·타깃 모델을 열어 주세요")
+            return
+        st = self.stack()
+        cur = st.current()
+        if cur is None:
+            cur = st.add("키 찍기")
+        why = layeredit.editable(cur)
+        if why:
+            self.app.statusBar().showMessage(why)
+            return
+        cur.set_key(int(j), self._frame())
+        name = self.app._bone_label(int(j)) if hasattr(self.app, "_bone_label") else str(j)
+        self._msg = "Ctrl+클릭: '%s' 에 프레임 %d 키를 찍었습니다 (레이어 '%s')." % (name, self._frame() + 1, cur.name)
+        self.app.statusBar().showMessage(self._msg)
+        self._changed()
+
     def key_original(self) -> None:
         """지금 프레임의 키를 '이 레이어 아래 상태(원본)의 값' = 변화 0 으로 찍는다."""
         cur, js = self._need_targets()
@@ -427,6 +457,11 @@ class LayerPanel(CollapsibleBox):
         self.rng_a.setRange(1, T)
         self.rng_b.setRange(1, T)
 
+    def _anchor_changed(self, *_a) -> None:
+        ce = getattr(self.app, "curve_editor", None)
+        if ce is not None and getattr(ce, "anchor", None) is not None and ce.anchor.currentIndex() != self.flat_anchor.currentIndex():
+            ce.anchor.setCurrentIndex(self.flat_anchor.currentIndex())
+
     def range_action(self, mode: str, a: Optional[int] = None, b: Optional[int] = None) -> None:
         """대상 본의 프레임 구간(a..b, 0부터)을 mode(blend/line/smooth)대로 고친다. 레이어가 없으면 새로 만든다."""
         pr = self.app.pr
@@ -450,7 +485,7 @@ class LayerPanel(CollapsibleBox):
         final = apply_layers(base, st)
         if a is None or b is None:
             a, b = self.rng_a.value() - 1, self.rng_b.value() - 1
-        n, msg = rangeedit.rewrite(cur, below, final, js, a, b, mode, float(self.smooth_strength.value()))
+        n, msg = rangeedit.rewrite(cur, below, final, js, a, b, mode, float(self.smooth_strength.value()), anchor=self.flat_anchor.currentData() or "start")
         self._msg = msg
         self.app.statusBar().showMessage(msg)
         self._changed()

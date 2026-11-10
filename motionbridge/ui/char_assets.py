@@ -86,7 +86,12 @@ class CharAssetPanel(QWidget):
         self.btn_auto.clicked.connect(lambda *_a: self.index_all())
         v.addWidget(self.btn_auto)
         h = QHBoxLayout()
-        self.query = QLineEdit(self.win.cfg.get("char_query", ""))
+        saved_q = str(self.win.cfg.get("char_query", "") or "")
+        if not saved_q.strip().strip("\\/").strip():          # '\' 나 '/' 만 남은 예전 검색어는 버린다 (칸이 계속 '\' 로 채워져 있던 문제)
+            saved_q = ""
+            self.win.cfg["char_query"] = ""
+        self.query = QLineEdit(saved_q)
+        self.query.setClearButtonEnabled(True)                 # 칸 안의 ✕ 로 한 번에 지움
         self.query.setPlaceholderText("찾은 캐릭터 중에서 고르기 (예: swordman — 쉼표로 나누면 모두 포함). 비우면 전체")
         self.query.textChanged.connect(self._filter)       # 입력하는 대로 이미 찾은 목록을 바로 걸러 보여 준다
         self.query.returnPressed.connect(self.search)
@@ -191,6 +196,8 @@ class CharAssetPanel(QWidget):
         if a is None:
             return
         q = self.query.text().strip()
+        if not q.strip("\\/ "):
+            q = ""
         self.win.cfg["char_query"] = q
         idx = self._index()
         pattern = textmatch.and_regex(q) if q else ANIM_ALL

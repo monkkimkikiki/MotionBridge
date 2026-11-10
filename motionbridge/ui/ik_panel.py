@@ -1,7 +1,7 @@
 """IK 구간 직접 지정 — 자동 접지 판정이 틀렸을 때, 체인(왼발·오른발·손)별로 'IK 를 걸 프레임'과 'IK 를 풀 프레임'을 직접 정한다 (core/ikranges)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QVBoxLayout
 
 from ..core import ikranges
 from .widgets import CollapsibleBox
@@ -58,6 +58,20 @@ class IKRangePanel(CollapsibleBox):
         self.info.setWordWrap(True)
         self.info.setStyleSheet("color:#ffdc50")
         v.addWidget(self.info)
+        self.refresh()
+
+    def open_here(self) -> None:
+        """패널을 펴고, 들어 있는 스크롤 영역에서 보이는 자리로 옮긴다 (발·접지 박스의 [IK 구간 직접 지정 열기] 버튼용)."""
+        self.set_collapsed(False, save=False)
+        self.setVisible(True)
+        w = self.parentWidget()
+        while w is not None and not isinstance(w, QScrollArea):
+            w = w.parentWidget()
+        if w is not None:
+            try:
+                w.ensureWidgetVisible(self, 0, 20)
+            except Exception:  # noqa: BLE001
+                pass
         self.refresh()
 
     def _chain_changed(self, *_a) -> None:

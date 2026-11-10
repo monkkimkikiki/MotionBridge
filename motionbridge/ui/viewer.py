@@ -47,6 +47,7 @@ class Viewport(QWidget):
     asset_dropped = Signal(str, list)  # 에셋 목록에서 끌어다 놓음: (종류 "anim"|"mesh", 게임 안 경로들)
     asset_dropped_from = Signal(str, str, list)  # 출처를 밝힌 채 끌어다 놓음 (예: "vidfind"): (출처, 종류, 경로들) — 출처가 있으면 asset_dropped 는 보내지 않는다
     bone_picked = Signal(int)  # 본 편집 모드에서 뷰포트의 본을 클릭함: 타깃 본 번호
+    bone_ctrl_clicked = Signal(int)  # 본 편집 모드에서 Ctrl 을 누른 채 본을 클릭함: 그 본에 지금 프레임 키를 찍어 달라는 요청 (선택은 그대로)
     bone_dragged = Signal(int, object)  # 본을 끌어 돌림: (타깃 본 번호, 화면 기준 회전 쿼터니언 (w,x,y,z) — 표준 프레임)
     bone_drag_started = Signal()
     bone_moved = Signal(int, object)   # 본을 끌어 옮김: (타깃 본 번호, 월드 이동 벡터 — 표준 프레임, 타깃 단위)
@@ -415,6 +416,14 @@ class Viewport(QWidget):
         self.setFocus()
         self._last = ev.position()
         self._drag = self._left_mode(ev.button(), ev.modifiers())
+        if (self.bone_edit and ev.button() == Qt.MouseButton.LeftButton and (ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                and self.vd is not None and self.vd.tgt_pos is not None):
+            jc = self.pick_joint(ev.position().x(), ev.position().y())      # Ctrl+클릭한 본에 키만 찍는다 (선택·카메라는 그대로)
+            if jc is not None:
+                self._drag = "bone_select"
+                self.bone_ctrl_clicked.emit(int(jc))
+                self.update()
+                return
         if (self.bone_edit and self._drag == "camera" and ev.button() == Qt.MouseButton.LeftButton
                 and self.vd is not None and self.vd.tgt_pos is not None):
             x, y = ev.position().x(), ev.position().y()

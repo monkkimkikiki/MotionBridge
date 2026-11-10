@@ -75,6 +75,22 @@ def test_line_and_smooth():
     out2 = apply_layers(base, st2)
     assert n2 == 1 and wig(out2) < 0.5 * w0, (wig(out2), w0)
     assert ang(out2.rot[0, 2], final.rot[0, 2]) < 0.1 and ang(out2.rot[55, 2], final.rot[55, 2]) < 0.1, "구간 밖은 그대로"
+    # 일직선(평평하게): 구간이 한 값으로 쭉 평평 — 시작 값 기준이면 구간 시작 프레임 값, 평균 기준이면 구간 평균. 대각선이 아니다.
+    for anchor in ("start", "mean"):
+        stf, layf = with_layer(base, 2, {f: float(f - 10) * 0.8 for f in range(10, 40)})        # 점점 기울어지는 곡선 (대각선 모양)
+        bf_, ff_ = apply_layers(base, stf, upto=0), apply_layers(base, stf)
+        nf, msgf = R.rewrite(layf, bf_, ff_, [2], 15, 30, "flat", anchor=anchor)
+        of = apply_layers(base, stf)
+        seg = Q.make_continuous(of.rot[15:31, 2])
+        spread = float(np.degrees(Q.angle_between(seg, np.repeat(seg[:1], len(seg), axis=0))).max())
+        assert nf == 1 and spread < 0.35, (anchor, spread, msgf)
+        if anchor == "start":
+            assert ang(of.rot[22, 2], ff_.rot[15, 2]) < 0.35, "시작 값에 맞춰 평평"
+        else:
+            rr = Q.make_continuous(ff_.rot[15:31, 2])
+            assert ang(of.rot[22, 2], Q.normalize(rr.mean(axis=0, keepdims=True))[0]) < 0.4, "평균 값에 맞춰 평평"
+        assert "일직선" in msgf
+    assert R.rewrite(lay3 if False else Layer("y"), bf_, ff_, [2], 20, 20, "flat")[0] == 0, "한 프레임짜리는 평평하게 할 수 없음"
     # 가중치가 낮은 레이어에서도 보이는 값이 목표가 된다
     st3, lay3 = with_layer(base, 1, {0: 0, 20: 30, 40: 0})
     lay3.weight = 0.5

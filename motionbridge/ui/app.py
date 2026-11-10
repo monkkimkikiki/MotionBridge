@@ -42,6 +42,7 @@ from .mocap_tab import MocapTab
 from .char_assets import CharAssetPanel
 from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
+from ..core import posik
 from .clip_panel import ClipPanel
 from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
 
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         self.live_timer.setSingleShot(True)
         self.live_timer.timeout.connect(self._live_fire)
         self._live_pending = False
+        self._ik_drag = None            # 손·발 IK 끌기: [본, 시작 위치, 끈 합]
         self._live_gap = 0.0      # 직전 계산이 오래 걸렸으면 그 절반만큼 쉬었다가 다음 계산 (무거운 모델에서 화면이 밀리지 않게)
         self.history = History()
         self._actions: Dict[str, tuple] = {}  # 키 -> (QAction, 단축키 목록)
@@ -525,7 +527,8 @@ class MainWindow(QMainWindow):
         self.cb_bone_edit = QPushButton("🦴 본 편집  OFF")
         self.cb_bone_edit.setToolTip("켜면 뷰포트에서 본(점)을 클릭해 고르고, 3ds Max 처럼 Q 선택 / W 이동 / E 회전 / R 크기 키로 도구를 바꿔 직접 고칩니다.\n"
                                      "하위 본 전체가 같이 움직이고, 값은 [리타겟]의 '본별 보정'(회전·위치·크기)에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
-                                     "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.")
+                                     "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.\n"
+                                     "Ctrl 을 누른 채 다른 본(점)을 클릭하면 선택은 그대로 두고 그 본에 지금 프레임의 키만 찍습니다 (레이어가 없으면 새로 만들어요).")
         self.cb_bone_edit.setCheckable(True)
         self.cb_bone_edit.setMinimumHeight(34)
         self.cb_bone_edit.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -536,6 +539,14 @@ class MainWindow(QMainWindow):
             "QPushButton:checked:hover{background:#38905a}")
         self.cb_bone_edit.toggled.connect(self._bone_edit_toggled)
         bl.addWidget(self.cb_bone_edit)
+        self.cb_pos_only = QCheckBox("📍 이 본만 움직이기")
+        self.cb_pos_only.setChecked(bool(self.cfg.get("pos_only", False)))
+        self.cb_pos_only.setToolTip("W 이동으로 손·발을 끌 때의 방식입니다.\n"
+                                    "해제(기본) = 3ds Max 바이패드처럼 팔·다리가 IK 로 자연스럽게 펴지고 접히며 손/발이 따라옵니다 (위팔·아래팔이 돌아감, 길이는 그대로).\n"
+                                    "체크 = 그 본만 위치를 옮깁니다 (팔다리는 그대로, 그 본이 몸에서 떨어지거나 늘어난 모양이 될 수 있어요).\n"
+                                    "손·발 끝이 아닌 본(골반·몸통·팔꿈치 등)은 항상 그 본만 움직입니다.")
+        self.cb_pos_only.toggled.connect(self._pos_only_toggled)
+        bl.addWidget(self.cb_pos_only)
         self.tool_buttons: Dict[str, QPushButton] = {}
         for tool, text, tip in (("select", "Q 선택", "점을 눌러 본을 고릅니다 (끌어도 아무것도 바뀌지 않음)"),
                                 ("move", "W 이동", "화살표(X 빨강/Y 초록/Z 파랑)를 끌면 그 축으로만, 중심 네모를 끌면 자유롭게 본(과 하위 본 전체)을 옮깁니다"),
@@ -576,6 +587,7 @@ class MainWindow(QMainWindow):
         self.bone_tree.hide()
         rl.addWidget(self.bone_tree)
         self.viewport.bone_picked.connect(self._bone_picked)
+        self.viewport.bone_ctrl_clicked.connect(self._bone_ctrl_clicked)
         self.viewport.bone_dragged.connect(self._bone_dragged)
         self.viewport.bone_drag_started.connect(self._bone_drag_started)
         self.viewport.bone_moved.connect(self._bone_moved)
@@ -807,6 +819,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.mesh_opts)
         h = QHBoxLayout()
         self.ex_filter = QLineEdit(self.KIND_FILTERS["anim"])
+        self.ex_filter.setClearButtonEnabled(True)
         self.ex_filter.setToolTip("에셋 경로에 대한 정규식. 예: (?i)(walk|run|attack)\n쉼표(,)로 나누면 모두 포함하는 것만 찾습니다. 예: player,attack (대소문자 무시)")
         h.addWidget(self.ex_filter, 1)
         b = QPushButton("검색")
@@ -1252,9 +1265,15 @@ class MainWindow(QMainWindow):
         glb = next((f for f in files if f.lower().endswith(".glb") and "_static" not in f), None) or next((f for f in files if f.lower().endswith(".glb")), None)
         self.statusBar().showMessage(msg)
         if psa:
-            if len(files) > 1:
-                self.statusBar().showMessage(msg + " (첫 번째 모션을 열었습니다)")
-            self._open_path(psa)
+            psas = [f for f in files if f.lower().endswith(".psa")]
+            if self.pr.src is not None:
+                # 이미 리타겟 중인 소스가 있으면 새로 추출한 모션을 왼쪽 모션 목록에 더한다 (소스를 갈아엎지 않음)
+                n = self.clip_panel.add_paths(psas, select_first=True)
+                self.statusBar().showMessage(msg + (" · 모션 목록에 %d개 추가" % n if n else " · 이미 목록에 있거나 뼈대가 달라 추가하지 못했습니다"))
+            else:
+                if len(files) > 1:
+                    self.statusBar().showMessage(msg + " (모션 목록에 올렸습니다)")
+                self.clip_panel.add_paths(psas, select_first=False)
         elif glb:
             self._open_path_as_target(glb)
 
@@ -1453,6 +1472,10 @@ class MainWindow(QMainWindow):
         bf.valueChanged.connect(lambda v: self._set("blend_frames", int(v)))
         self._fields["blend_frames"] = (bf, False)
         fa.addRow("접지 전환 프레임", bf)
+        b_ik = QPushButton("🎯 IK 구간 직접 지정 열기…")
+        b_ik.setToolTip("발이 땅에 붙는 구간을 프레임으로 직접 정합니다 (아래 'IK 구간 직접 지정' 칸이 펴집니다)")
+        b_ik.clicked.connect(lambda _c=False: self.ik_panel.open_here())
+        f.addRow(b_ik)
         f.addRow(adv)
         try:
             adv.set_collapsed(True, save=False)      # 처음에는 접어 둔다 (사용자가 펴 두면 그 상태를 기억)
@@ -2565,11 +2588,15 @@ class MainWindow(QMainWindow):
         if j is not None:
             self._select_bone(int(j), from_tree=True)
 
+    def _bone_ctrl_clicked(self, j: int) -> None:
+        self.layer_panel.key_bone(int(j))
+
     def _bone_picked(self, j: int) -> None:
         self._select_bone(int(j))
 
     def _bone_drag_started(self) -> None:
         self._bone_drag_open = True
+        self._ik_drag = None
 
     def _bone_dragged(self, j: int, q_view) -> None:
         """뷰포트에서 본을 끌어 돌린 만큼을 '본별 회전 보정'에 더한다 (루트 Yaw 가 있으면 그만큼 되돌려서 화면에 보이는 방향대로 돈다).
@@ -2603,9 +2630,40 @@ class MainWindow(QMainWindow):
         f = min(self.viewport.frame, vd.tgt_wr.shape[0] - 1)
         return vd.tgt_wr[f], vd.Ft
 
+    def _pos_only_toggled(self, on: bool) -> None:
+        self.cfg["pos_only"] = bool(on)
+        self._ik_drag = None
+
+    def _pos_ik_move(self, j: int, dview) -> bool:
+        """손/발 끝을 옮기면 위팔·아래팔(허벅지·정강이)을 돌려 IK 처럼 따라오게 한다 (바이패드식). 해당 안 되면 False — 그 본만 옮기는 기존 방식으로."""
+        if self.pr.tgt is None or self.cb_pos_only.isChecked():
+            return False
+        ch = posik.end_chain(self.pr.tgt_slots, j)
+        vd = self.viewport.vd
+        if ch is None or vd is None or vd.tgt_pos is None:
+            return False
+        up, lo, end, _name = ch
+        f = min(self.viewport.frame, vd.tgt_pos.shape[0] - 1)
+        P = vd.tgt_pos[f]
+        if self._ik_drag is None or self._ik_drag[0] != j:
+            self._ik_drag = [int(j), np.array(P[end], dtype=float), np.zeros(3)]   # 끌기를 시작한 순간의 끝 위치 + 지금까지 끈 합 = 절대 목표
+        self._ik_drag[2] = self._ik_drag[2] + np.asarray(dview, dtype=float)
+        T = self._ik_drag[1] + self._ik_drag[2]
+        sol = posik.solve(P[up], P[lo], P[end], T)
+        if sol is None:
+            return False
+        q1, q2, reach = sol
+        self._bone_dragged(up, q1)
+        self._bone_dragged(lo, q2)
+        if not reach:
+            self.statusBar().showMessage("팔다리가 다 펴져서 더 멀리는 못 가요")
+        return True
+
     def _bone_moved(self, j: int, dview) -> None:
         """뷰포트에서 본을 끌어 옮긴 만큼(표준 프레임 월드 이동)을 '본별 위치 보정'(바인드 포즈 기준)에 더한다."""
         if self.pr.tgt is None:
+            return
+        if self._pos_ik_move(j, dview):
             return
         if self.layer_panel.recording():
             if self.layer_panel.on_pos_drag(j, dview):
@@ -2793,6 +2851,20 @@ class MainWindow(QMainWindow):
 
     def _issue_clicked(self, item) -> None:
         self.frame_slider.setValue(int(item.data(Qt.ItemDataRole.UserRole)))
+
+    def _refill_clip_combo(self) -> None:
+        """pr.src.animations 에 맞춰 클립 콤보박스와 모션 목록을 다시 채운다 (보던 클립 번호는 pr.clip)."""
+        prev = self._syncing
+        self._syncing = True
+        try:
+            self.clip_combo.clear()
+            if self.pr.src is not None:
+                for i, a in enumerate(self.pr.src.animations):
+                    self.clip_combo.addItem("%d: %s (%d프레임, %.0ffps)" % (i, a.name, a.n_frames, a.fps))
+                self.clip_combo.setCurrentIndex(min(max(self.pr.clip, 0), self.clip_combo.count() - 1))
+        finally:
+            self._syncing = prev
+        self._refresh_clip_list()
 
     def _refresh_clip_list(self) -> None:
         cp = getattr(self, "clip_panel", None)
