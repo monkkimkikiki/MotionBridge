@@ -72,6 +72,10 @@ def test_script_and_auto():
             assert ph not in ms, ph
         assert 'local tmplFile = "C:/작업/skinned.max"' in ms and "global mbAuto = false" in ms
         TB._lint_scope(ms)
+        # 3ds Max 2026 실측으로 얻은 규칙: node.rotation = quat 는 어긋나므로 변환 행렬로 넣고, angleaxis 대신 직접 만든 행렬을 쓴다
+        assert "nodes[i].transform = tmk" in ms and "(nodes[i].rotation =" not in ms, "회전은 transform 행렬로 넣는다"
+        assert "angleaxis" not in ms.replace("MaxScript 의 (angleaxis ...)", "") and "fn mbMat ang ax" in ms
+        assert "Orientation_Constraint" in ms and "회전 점검" in ms, "구속을 풀고, 월드 회전 전체를 점검한다"
         assert files[1].endswith(".mbbones") and os.path.exists(files[1])
         # 자동 실행용: 경로가 박히고 메시지 창이 없다
         auto = {"log": os.path.join(d, "L.log"), "quit": True}
@@ -85,6 +89,8 @@ def test_script_and_auto():
         assert "global mbAuto = true" in msb and "if not mbAuto do ( if not (checkForSave())" in msb and "SAVED: " in msb
         assert "messageBox msg" not in msb.split("fn mbRun")[1], "mbRun 안에서는 mbSay 만 쓴다"
         TB._lint_scope(msb)
+        assert "angleaxis" not in msb.replace("MaxScript 의 (angleaxis ...)", ""), "angleaxis as matrix3 는 3ds Max 에서 방향이 거꾸로 나왔다(실측)"
+        assert "회전 점검" in msb and "local gz = undefined" in msb, "월드 회전 전체 점검 + 발 관절을 바닥으로 한 골반 높이 비율"
     print("maxbones script OK")
 
 
@@ -164,9 +170,22 @@ def test_pipeline_auto_with_fake_max():
     print("pipeline auto OK")
 
 
+def test_read_log_cp949(tmp_path=None):
+    import tempfile, os
+    from motionbridge.core import maxrun
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "a.log")
+    open(p, "wb").write("SAVED: D:\\한글\\a.max\n".encode("cp949"))
+    assert "한글" in maxrun.read_log(p)
+    open(p, "wb").write("SAVED: D:\\한글\\b.max\n".encode("utf-8"))
+    assert "한글" in maxrun.read_log(p)
+
+
 if __name__ == "__main__":
     test_compute_and_data()
     test_script_and_auto()
     test_maxrun()
+    test_read_log_cp949()
     test_pipeline_auto_with_fake_max()
     print("test_maxbones ALL OK")
+

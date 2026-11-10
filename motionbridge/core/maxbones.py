@@ -52,8 +52,9 @@ def compute(skel: Skeleton, anim: Animation, slots: Dict[str, int], frame_to_can
     allp = Q.rotate(C, bwp) / units_per_meter
     ground = float(min([allp[slots[s], 2] for s in ("L_Toe", "R_Toe", "L_Foot", "R_Foot") if s in slots] or [allp[:, 2].min()]))
     hip_h = float(allp[hips, 2] - ground) if hips >= 0 else 0.0
+    hip_z = float(allp[hips, 2]) if hips >= 0 else 0.0
     return {"names": list(skel.names), "parents": [int(p) for p in skel.parents], "aim": aim, "dirs": dirs, "pos_bones": pos_bones,
-            "deltas": deltas, "posd": posd, "hips": hips, "hip_height_m": hip_h, "fps": float(anim.fps), "frames": T, "name": anim.name}
+            "deltas": deltas, "posd": posd, "hips": hips, "hip_height_m": hip_h, "hips_z_m": hip_z, "fps": float(anim.fps), "frames": T, "name": anim.name}
 
 
 def write_data(path: str, d: dict) -> None:
@@ -65,6 +66,7 @@ def write_data(path: str, d: dict) -> None:
         f.write("fps %.6f\n" % d["fps"])
         f.write("frames %d\n" % d["frames"])
         f.write("hip_height_m %.6f\n" % d["hip_height_m"])
+        f.write("hips_z_m %.6f\n" % d["hips_z_m"])
         f.write("hips %d\n" % (d["hips"] + 1))
         f.write("bones %d\n" % len(names))
         f.write("posbones %d\n" % len(d["pos_bones"]))
@@ -109,7 +111,6 @@ fn mbUniqueStem dir base exts =
 	stem
 )
 
-fn mbMat ang ax = ( if abs ang < 1e-4 then (matrix3 1) else ((angleaxis ang ax) as matrix3) )
 
 fn mbRun =
 (
@@ -122,7 +123,7 @@ fn mbRun =
 	local f = openFile dataFile mode:"r"
 	local bName = #(), bAim = #(), bPk = #(), bDir = #()
 	local lines = #()
-	local fps = 30.0, nFrames = 0, hipM = 0.9, hipsIdx = 0, nPos = 0
+	local fps = 30.0, nFrames = 0, hipM = 0.9, hipZm = 0.0, hipsIdx = 0, nPos = 0
 	local ln = readLine f
 	local inData = false
 	while not (eof f) do
@@ -139,6 +140,7 @@ fn mbRun =
 					"fps": fps = tk[2] as float
 					"frames": nFrames = tk[2] as integer
 					"hip_height_m": hipM = tk[2] as float
+					"hips_z_m": hipZm = tk[2] as float
 					"hips": hipsIdx = tk[2] as integer
 					"posbones": nPos = tk[2] as integer
 					"B": ( append bName ln ; append bAim (tk[tk.count - 4] as integer) ; append bPk (tk[tk.count - 3] as integer) ; append bDir [tk[tk.count - 2] as float, tk[tk.count - 1] as float, tk[tk.count] as float] )
@@ -181,9 +183,33 @@ fn mbRun =
 	local found = nB - missing.count
 	if found < 1 do ( mbSay ("스키닝된 .max 안에서 이름이 같은 본을 하나도 찾지 못했습니다 (모델 본 이름 예: " + bName[1] + "). Biped 방식을 쓰거나 본 이름을 맞춰 주세요.") ; return undefined )
 
+	-- ---------------------------------------------------------------- 구속(Constraint)으로 다른 본을 따라가는 본은 키가 구속에 막힌다
+	-- (예: Ref_ 본이 Biped 에 Position/Orientation 구속) -> 월드 변환을 기억해 두고 평범한 컨트롤러로 바꾼 뒤 부모부터 원래 자리로 되돌린다.
+	-- 이 .max 는 다른 이름으로 저장되는 복사본이라 원본 템플릿은 그대로다.
+	local tms = for i = 1 to nB collect (if nodes[i] != undefined then nodes[i].transform else (matrix3 1))
+	local detached = 0
+	local bipSkipped = #()
+	for i = 1 to nB do
+	(
+		if nodes[i] != undefined do
+		(
+			local c = nodes[i].controller
+			if (classof c) == prs then
+			(
+				local rcl = classof c.rotation.controller
+				local pcl = classof c.position.controller
+				if rcl == Orientation_Constraint or rcl == LookAt_Constraint then ( try ( c.rotation.controller = Euler_XYZ() ; detached += 1 ) catch () )
+				if pcl == Position_Constraint or pcl == Path_Constraint or pcl == Attachment then ( try ( c.position.controller = Position_XYZ() ) catch () )
+			)
+			else append bipSkipped nodes[i].name
+		)
+	)
+	for i = 1 to nB do ( if nodes[i] != undefined and (findItem bipSkipped nodes[i].name) == 0 do ( try ( nodes[i].transform = tms[i] ) catch () ) )
+
 	-- ---------------------------------------------------------------- 기본 자세 기록 + 타깃 바인드 포즈와 비교
 	local restM = for i = 1 to nB collect (if nodes[i] != undefined then ((nodes[i].transform.rotationpart) as matrix3) else (matrix3 1))
 	local restP = for i = 1 to nB collect (if nodes[i] != undefined then nodes[i].transform.pos else [0,0,0])
+	local restS = for i = 1 to nB collect (if nodes[i] != undefined then nodes[i].scale else [1,1,1])
 	local offList = #()
 	for i = 1 to nB do
 	(
@@ -205,11 +231,18 @@ fn mbRun =
 		for k = 1 to (amin 12 offList.count) do figMsg += offList[k] + "  "
 	)
 	else figMsg = ".max 의 기본 자세가 타깃 모델의 바인드 포즈와 일치합니다."
+	-- 위치 배율: 데이터(미터)의 바인드 골반 높이 vs 이 .max 의 골반 높이 (같은 모델이면 거의 1:1)
 	local r = U
-	if hipsIdx > 0 and nodes[hipsIdx] != undefined and hipM > 0.05 do
+	local rMsg = ""
+	if hipsIdx > 0 and nodes[hipsIdx] != undefined and hipZm > 0.05 do
 	(
 		local ph = restP[hipsIdx].z
-		if ph > 0 do r = ph / hipM       -- 골반 높이 비율(데이터 미터 -> 이 .max 의 길이)
+		if ph > 0 do
+		(
+			r = ph / hipZm
+			rMsg = "위치 배율 " + (r as string) + " (1m = " + (U as string) + " 단위 기준 " + ((r / U) as string) + "배)"
+			if (r / U) < 0.8 or (r / U) > 1.25 do append msgs ("⚠ 이 .max 의 골반 높이와 타깃 모델의 골반 높이 비율이 " + ((r / U) as string) + "배입니다 — 다른 모델/단위가 아닌지 확인하세요.")
+		)
 	)
 
 	-- ---------------------------------------------------------------- 키 넣기 (부모부터: 데이터의 본 순서가 부모 먼저)
@@ -230,14 +263,17 @@ fn mbRun =
 				(
 					if nodes[i] != undefined do
 					(
-						if bPk[i] > 0 do
+						-- 주의: node.rotation = quat 는 3ds Max 에서 목표와 60도 넘게 어긋났다(실측). 변환 행렬을 통째로 넣는 방식이 정확하다.
+						local o = rotBase + (i - 1) * 4
+						local tmk = restM[i] * (mbMat (tk[o + 4] as float) [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float])
+						if restS[i] != [1,1,1] do tmk = (scaleMatrix restS[i]) * tmk
+						if bPk[i] > 0 then
 						(
 							local po = (bPk[i] - 1) * 3
-							try ( in coordsys world (nodes[i].pos = restP[i] + [tk[po + 1] as float, tk[po + 2] as float, tk[po + 3] as float] * r) ) catch ( appendIfUnique failed (bName[i] + "(위치)") )
+							tmk.row4 = restP[i] + [tk[po + 1] as float, tk[po + 2] as float, tk[po + 3] as float] * r
 						)
-						local o = rotBase + (i - 1) * 4
-						local dm = mbMat (tk[o + 4] as float) [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]
-						try ( in coordsys world (nodes[i].rotation = ((restM[i] * dm) as quat)) ) catch ( appendIfUnique failed bName[i] )
+						else tmk.row4 = nodes[i].transform.pos
+						try ( nodes[i].transform = tmk ) catch ( appendIfUnique failed bName[i] )
 					)
 				)
 			)
@@ -256,7 +292,7 @@ fn mbRun =
 			for i = 1 to nB do
 			(
 				local c = bAim[i]
-				if c > 0 and nodes[i] != undefined and nodes[c] != undefined and tk.count >= rotBase + 4 * nB do
+				if c > 0 and nodes[i] != undefined and nodes[c] != undefined and bPk[c] == 0 and tk.count >= rotBase + 4 * nB do   -- 자식이 위치 키를 받으면(이동하면) 뼈 방향이 달라지는 게 정상
 				(
 					local db = restP[c] - restP[i]
 					if length db > 1e-6 do
@@ -275,6 +311,30 @@ fn mbRun =
 			)
 		)
 	)
+	-- 월드 회전 전체(뼈 축을 도는 비틀림 포함) 점검: 목표 = 기본 자세 * 데이터 델타, 실제 = 키를 넣은 본의 현재 회전
+	local rotMax = for i = 1 to nB collect 0.0
+	for t in #(1, (nFrames + 3) / 4, (nFrames + 1) / 2, (nFrames * 3 + 1) / 4, nFrames) do
+	(
+		if t >= 1 and t <= nFrames do
+		(
+			sliderTime = (t - 1)
+			local tk = filterString lines[t] " "
+			for i = 1 to nB do
+			(
+				if nodes[i] != undefined and tk.count >= rotBase + 4 * nB do
+				(
+					local o = rotBase + (i - 1) * 4
+					local tgt = restM[i] * (mbMat (tk[o + 4] as float) [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float])
+					local act = (nodes[i].transform.rotationpart) as matrix3
+					local qd = (tgt * (inverse act)) as quat
+					local e = 2.0 * acos (amin 1.0 (abs qd.w))
+					if e > rotMax[i] do rotMax[i] = e
+				)
+			)
+		)
+	)
+	local worstRot = #()
+	for i = 1 to nB do ( if rotMax[i] > 10.0 do append worstRot (bName[i] + ":" + (((floor rotMax[i]) as integer) as string) + "도") )
 	sliderTime = 0
 	local checkMsg = ""
 	if worst.count == 0 then checkMsg = "자가 점검: 뼈 방향이 데이터와 일치합니다 (프레임 1·중간·끝, 오차 15도 이하)"
@@ -282,6 +342,12 @@ fn mbRun =
 	(
 		checkMsg = "⚠ 자가 점검: 뼈 방향이 데이터와 다른 본 (본@프레임:오차) — "
 		for k = 1 to (amin 12 worst.count) do checkMsg += worst[k] + "  "
+	)
+	if worstRot.count == 0 then checkMsg += "\n회전 점검: 모든 본의 월드 회전이 데이터와 일치합니다 (프레임 5곳, 오차 10도 이하)"
+	else
+	(
+		checkMsg += "\n⚠ 회전 점검: 월드 회전이 데이터와 다른 본 (최대 오차) — "
+		for k = 1 to (amin 15 worstRot.count) do checkMsg += worstRot[k] + "  "
 	)
 
 	-- ---------------------------------------------------------------- 저장
@@ -293,7 +359,9 @@ fn mbRun =
 	if savedMax do msg += "저장: " + outMax + "\n"
 	msg += figMsg + "\n"
 	msg += checkMsg + "\n"
-	msg += "위치 배율 " + (r as string) + "\n"
+	msg += rMsg + "\n"
+	if detached > 0 do msg += "구속을 풀고 직접 키를 넣은 본: " + (detached as string) + "개 (다른 이름으로 저장된 복사본에만 적용)\n"
+	if bipSkipped.count > 0 do msg += "Biped 본이라 건드리지 않은 본: " + (bipSkipped as string) + " (Biped 방식을 쓰세요)\n"
 	if missing.count > 0 do
 	(
 		msg += "이름이 같은 본이 없어 키를 못 넣은 본 (" + (missing.count as string) + "개): "

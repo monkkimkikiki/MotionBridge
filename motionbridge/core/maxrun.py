@@ -61,6 +61,18 @@ def parse_log(text: str) -> Dict[str, object]:
     return {"saved": saved, "warnings": warns, "text": text}
 
 
+def read_log(path: str) -> str:
+    """MaxScript 의 format to:file 은 UTF-8 이 아니라 시스템 ANSI(한국어 Windows 는 cp949)로 쓰는 경우가 있다."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    for enc in ("utf-8-sig", "mbcs" if os.name == "nt" else "cp949", "cp949"):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def run(exe: str, script: str, log: str, timeout: float = 900.0, runner: Callable = subprocess.run) -> Dict[str, object]:
     """3ds Max 로 script 를 실행. 반환: {"ok", "saved", "warnings", "log", "error"}. 로그는 실행 전에 지운다."""
     out: Dict[str, object] = {"ok": False, "saved": [], "warnings": [], "log": "", "error": ""}
@@ -80,8 +92,7 @@ def run(exe: str, script: str, log: str, timeout: float = 900.0, runner: Callabl
         return out
     text = ""
     if os.path.exists(log):
-        with open(log, encoding="utf-8", errors="replace") as f:
-            text = f.read()
+        text = read_log(log)
     info = parse_log(text)
     out.update(saved=info["saved"], warnings=info["warnings"], log=text)
     if cp.returncode not in (0, None) and not info["saved"]:

@@ -176,6 +176,20 @@ fn mbSay msg =
 	)
 	if not mbAuto do messageBox msg title:"MotionBridge"
 )
+
+-- 축-각도(도) -> 회전 행렬. MaxScript 의 (angleaxis ...) as matrix3 는 실제 3ds Max 에서 방향이 거꾸로 나와(프레임마다 모션이 반대로 돎)
+-- 로드리게스 공식을 직접 써서 행벡터 규약(v * M)의 오른손 회전 행렬을 만든다.
+fn mbMat ang ax =
+(
+	if abs ang < 1e-4 or length ax < 1e-9 then (matrix3 1) else
+	(
+		local k = normalize ax
+		local c = cos ang
+		local s = sin ang
+		local t = 1.0 - c
+		matrix3 [t*k.x*k.x + c, t*k.x*k.y + s*k.z, t*k.x*k.z - s*k.y] [t*k.x*k.y - s*k.z, t*k.y*k.y + c, t*k.y*k.z + s*k.x] [t*k.x*k.z + s*k.y, t*k.y*k.z - s*k.x, t*k.z*k.z + c] [0,0,0]
+	)
+)
 '''
 
 SCRIPT = r'''-- MotionBridge -> 3ds Max Biped  (자동 생성 파일, 리타깃 결과)
@@ -392,7 +406,7 @@ fn mbRun =
 				local cs = dot db pDir[i]
 				if s > 1e-5 do
 				(
-					local rm = (angleaxis (atan2 s cs) (normalize axs)) as matrix3
+					local rm = mbMat (atan2 s cs) axs
 					local cur = (nodes[i].transform.rotationpart) as matrix3
 					try ( biped.setTransform nodes[i] #rotation ((cur * rm) as quat) false ) catch ( append msgs ("자세 맞추기 실패: " + pSlot[i]) )
 				)
@@ -405,7 +419,16 @@ fn mbRun =
 	local r = U
 	if pelvisIdx > 0 and nodes[pelvisIdx] != undefined and hipM > 0.05 do
 	(
-		local ph = nodes[pelvisIdx].transform.pos.z
+		-- 데이터의 골반 높이(hipM)는 '발(발끝이 매핑돼 있으면 발끝) 관절'을 바닥으로 잰 값이라, Biped 쪽도 같은 관절을 바닥으로 해서 잰다
+		-- (바닥을 z=0 으로 두면 발목 높이만큼 비율이 커져서 이동량이 10% 넘게 부풀었다)
+		local gz = undefined
+		for nm in #("L_Toe", "R_Toe", "L_Foot", "R_Foot") do
+		(
+			local k = findItem pSlot nm
+			if k > 0 and nodes[k] != undefined do ( local z = nodes[k].transform.pos.z ; if gz == undefined or z < gz do gz = z )
+		)
+		if gz == undefined do gz = 0.0
+		local ph = nodes[pelvisIdx].transform.pos.z - gz
 		if ph > 0 do r = ph / hipM       -- 골반 높이 비율(Biped 비율 -> 내 모델 비율)
 	)
 
@@ -430,7 +453,7 @@ fn mbRun =
 					(
 						local o = 3 + (i - 1) * 4
 						local ang = tk[o + 4] as float
-						local dm = if abs ang < 1e-4 then (matrix3 1) else ((angleaxis ang [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]) as matrix3)
+						local dm = mbMat ang [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]
 						try ( biped.setTransform nodes[i] #rotation ((restM[i] * dm) as quat) true ) catch ( appendIfUnique failed pSlot[i] )
 					)
 				)
@@ -456,7 +479,7 @@ fn mbRun =
 				(
 					local o = 3 + (i - 1) * 4
 					local ang = tk[o + 4] as float
-					local dm = if abs ang < 1e-4 then (matrix3 1) else ((angleaxis ang [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]) as matrix3)
+					local dm = mbMat ang [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]
 					local want = normalize (pDir[i] * dm)
 					local got = nodes[c].transform.pos - nodes[i].transform.pos
 					if length got > 1e-6 do
@@ -469,12 +492,44 @@ fn mbRun =
 			)
 		)
 	)
+	-- 같은 점검을 '뼈 방향'이 아니라 '월드 회전 전체'(뼈 축을 도는 비틀림 포함)로도 한다: 목표 = 기본 자세 * 데이터 델타, 실제 = 키를 넣은 뼈의 현재 회전
+	local worstRot = #()
+	local rotFrames = #(1, (nFrames + 3) / 4, (nFrames + 1) / 2, (nFrames * 3 + 1) / 4, nFrames)
+	local rotMax = for i = 1 to nParts collect 0.0
+	for t in rotFrames do
+	(
+		if t >= 1 and t <= nFrames do
+		(
+			sliderTime = (t - 1)
+			local tk = filterString lines[t] " "
+			for i = 1 to nParts do
+			(
+				if nodes[i] != undefined and tk.count >= 3 + 4 * nParts do
+				(
+					local o = 3 + (i - 1) * 4
+					local dm = mbMat (tk[o + 4] as float) [tk[o + 1] as float, tk[o + 2] as float, tk[o + 3] as float]
+					local tgt = restM[i] * dm
+					local act = (nodes[i].transform.rotationpart) as matrix3
+					local qd = (tgt * (inverse act)) as quat
+					local e = 2.0 * acos (amin 1.0 (abs qd.w))
+					if e > rotMax[i] do rotMax[i] = e
+				)
+			)
+		)
+	)
+	for i = 1 to nParts do ( if rotMax[i] > 10.0 do append worstRot (pSlot[i] + ":" + (((floor rotMax[i]) as integer) as string) + "도") )
 	sliderTime = 0
 	if worst.count == 0 then checkMsg = "자가 점검: 뼈 방향이 데이터와 일치합니다 (프레임 1·중간·끝, 오차 15도 이하)"
 	else
 	(
 		checkMsg = "⚠ 자가 점검: 뼈 방향이 데이터와 다른 부위 (부위@프레임:오차) — "
 		for k = 1 to (amin 12 worst.count) do checkMsg += worst[k] + "  "
+	)
+	if worstRot.count == 0 then checkMsg += "\n회전 점검: 모든 부위의 월드 회전이 데이터와 일치합니다 (프레임 5곳, 오차 10도 이하)"
+	else
+	(
+		checkMsg += "\n⚠ 회전 점검: 월드 회전이 데이터와 다른 부위 (최대 오차) — "
+		for k = 1 to (amin 19 worstRot.count) do checkMsg += worstRot[k] + "  "
 	)
 
 	-- ---------------------------------------------------------------- 저장
