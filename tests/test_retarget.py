@@ -616,10 +616,39 @@ def test_placement_and_ghost():
     print("placement OK")
 
 
+def test_ik_knee_direction_stable():
+    """거의 펴진 다리는 발 목표가 옆으로 조금만 가도 무릎이 옆으로 돌아가던 문제: 앞뒤의 충분히 굽은 프레임 방향을 이어 써서 무릎이 계속 앞을 향한다."""
+    from motionbridge.core.retarget import stable_pole, two_bone_ik
+    N = 9
+    A = np.tile([0, 1.0, 0], (N, 1))
+    B = np.tile([0, 0.5, 0.0005], (N, 1))
+    C = np.zeros((N, 3))
+    B[0] = B[-1] = [0, 0.55, 0.25]
+    C[0] = C[-1] = [0, 0.05, 0]
+    T = C + np.stack([np.linspace(-0.06, 0.06, N), np.zeros(N), np.zeros(N)], 1) + np.array([0, 0.01, -0.02])
+    R = np.tile([1.0, 0, 0, 0], (N, 1))
+    old, _, _ = two_bone_ik(A, B, C, T, 0.5, 0.5)
+    pole, rel = stable_pole(A, B, C, R)
+    new, _, _ = two_bone_ik(A, B, C, T, 0.5, 0.5, pole=pole, pole_rel=rel)
+    ang_old = np.degrees(np.arctan2(np.abs(old[1:-1, 0]), old[1:-1, 2])).max()
+    ang_new = np.degrees(np.arctan2(np.abs(new[1:-1, 0]), new[1:-1, 2])).max()
+    assert ang_old > 40 and ang_new < 25, (ang_old, ang_new)             # 예전: 무릎이 옆으로 40°+ 돌아감
+    assert (new[:, 2] > 0).all(), "무릎이 뒤로 꺾이지 않는다"
+    assert np.allclose(new[0], old[0], atol=1e-6) and np.allclose(new[-1], old[-1], atol=1e-6), "충분히 굽은 프레임은 예전과 같다"
+    # 너무 접히지 않기: 발 목표가 골반 바로 밑 가까이여도 무릎 안쪽 각도가 20° 아래로 내려가지 않는다
+    Tn = np.tile([0.0, 0.9, 0.0], (1, 1))
+    Bn, Cn, _ = two_bone_ik(A[:1], B[:1], C[:1], Tn, 0.5, 0.5)
+    u, v = A[0] - Bn[0], Cn[0] - Bn[0]
+    inner = np.degrees(np.arccos(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))))
+    assert inner >= 19.9, inner
+    print("ik knee direction OK")
+
+
 if __name__ == "__main__":
     test_placement_and_ghost()
     test_fk_invariants()
     test_ik()
+    test_ik_knee_direction_stable()
     test_hand_ik()
     test_ik_off_shows_nothing()
     test_scale_independent_of_frame()

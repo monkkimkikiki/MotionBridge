@@ -147,13 +147,43 @@ def clean_mask(mask: np.ndarray, min_len: int = 3, max_gap: int = 2) -> np.ndarr
     return m
 
 
-def two_bone_ik(A, B, C, T, l1, l2, pole_fallback=(0.0, 0.0, 1.0)):
-    """벡터화된 2본 IK. A(상단), B(중간), C(끝), T(목표) 모두 (N,3). 반환: B_new, C_new, 도달실패 마스크."""
+def stable_pole(A, B, C, Rref, pole_fallback=(0.0, 0.0, 1.0), lo=0.015, hi=0.05):
+    """무릎/팔꿈치가 향할 방향을 프레임마다 안정적으로 정한다. (pole (N,3), 신뢰도 (N,) 0..1)
+
+    다리가 거의 펴진 프레임은 '꺾인 방향'을 현재 자세에서 읽을 수 없다 (펴진 다리의 옆 성분은 거의 0 이라 발 목표가 조금만 옆으로 가도 무릎이 옆·뒤로 돌아간다).
+    그래서 꺾임이 충분한 프레임(신뢰도 높음)의 방향을 부모(Rref) 기준 로컬로 저장해 두고, 펴진 프레임은 앞뒤의 믿을 만한 프레임 값을 이어서 쓴다."""
+    N = len(A)
+    chord = C - A
+    cl = np.linalg.norm(chord, axis=1)
+    cd = chord / np.maximum(cl, 1e-9)[:, None]
+    off = (B - A) - cd * np.sum((B - A) * cd, axis=1, keepdims=True)         # 현재 무릎이 코드(힙-발 직선)에서 벗어난 벡터
+    L = np.linalg.norm(B - A, axis=1) + np.linalg.norm(C - B, axis=1)
+    mag = np.linalg.norm(off, axis=1) / np.maximum(L, 1e-9)
+    rel = np.clip((mag - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+    rel = rel * rel * (3 - 2 * rel)
+    cur_dir = off / np.maximum(np.linalg.norm(off, axis=1), 1e-9)[:, None]
+    local = Q.rotate(Q.conj(Rref), cur_dir)
+    good = np.flatnonzero(rel > 0.5)
+    fb = Q.rotate(Q.conj(Rref[0]), np.asarray(pole_fallback, dtype=float))
+    if len(good) == 0:
+        filled = np.tile(fb, (N, 1))
+    else:
+        idx = np.arange(N)
+        filled = np.stack([np.interp(idx, good, local[good, c]) for c in range(3)], axis=1)
+    filled = filled / np.maximum(np.linalg.norm(filled, axis=1), 1e-9)[:, None]
+    return Q.rotate(Rref, filled), rel
+
+
+def two_bone_ik(A, B, C, T, l1, l2, pole_fallback=(0.0, 0.0, 1.0), pole=None, pole_rel=None, min_fold_deg=20.0):
+    """벡터화된 2본 IK. A(상단), B(중간), C(끝), T(목표) 모두 (N,3). 반환: B_new, C_new, 도달실패 마스크.
+    pole(N,3)/pole_rel(N,) 을 주면 꺾임이 작은 프레임에서 무릎 방향을 pole 쪽으로 잡는다 (stable_pole)."""
     AT = T - A
     d = np.linalg.norm(AT, axis=1)
     dirAT = AT / np.maximum(d, 1e-9)[:, None]
     reach_max = (l1 + l2) * 0.9999
-    reach_min = abs(l1 - l2) * 1.0001 + 1e-6
+    # 너무 접히는 것도 막는다: 무릎/팔꿈치 안쪽 각도가 min_fold_deg 보다 작아지지 않게 (발이 골반 바로 밑·안쪽으로 끌려와도 다리가 접혀 뒤집히지 않도록)
+    fold = np.radians(min_fold_deg)
+    reach_min = max(abs(l1 - l2) * 1.0001 + 1e-6, float(np.sqrt(max(l1 * l1 + l2 * l2 - 2 * l1 * l2 * np.cos(fold), 0.0))))
     dc = np.clip(d, reach_min, reach_max)
     fail = d > (l1 + l2) * 1.0005
     cur = B - A
@@ -163,9 +193,19 @@ def two_bone_ik(A, B, C, T, l1, l2, pole_fallback=(0.0, 0.0, 1.0)):
     fb = pf - dirAT * np.sum(pf * dirAT, axis=1, keepdims=True)
     fbn = np.linalg.norm(fb, axis=1)
     perp_dir = np.where((pn > 1e-6)[:, None], perp / np.maximum(pn, 1e-9)[:, None], fb / np.maximum(fbn, 1e-9)[:, None])
+    if pole is not None:
+        pp = np.asarray(pole, dtype=float)
+        pp = pp - dirAT * np.sum(pp * dirAT, axis=1, keepdims=True)
+        ppn = np.linalg.norm(pp, axis=1)
+        pp = pp / np.maximum(ppn, 1e-9)[:, None]
+        w = np.clip(np.asarray(pole_rel, dtype=float) if pole_rel is not None else np.zeros(len(A)), 0.0, 1.0)
+        mix = perp_dir * w[:, None] + pp * (1.0 - w)[:, None]
+        mn = np.linalg.norm(mix, axis=1)
+        perp_dir = np.where((mn > 1e-6)[:, None], mix / np.maximum(mn, 1e-9)[:, None], perp_dir)
     a = np.clip((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1.0, 1.0)
     Bn = A + dirAT * (l1 * a)[:, None] + perp_dir * (l1 * np.sqrt(1 - a * a))[:, None]
-    dBT = T - Bn
+    Teff = np.where((d < reach_min)[:, None], A + dirAT * dc[:, None], T)       # 너무 가까운 목표는 접힘 한계 지점으로
+    dBT = Teff - Bn
     dBT = dBT / np.maximum(np.linalg.norm(dBT, axis=1), 1e-9)[:, None]
     Cn = Bn + dBT * l2
     return Bn, Cn, fail
@@ -578,7 +618,10 @@ def retarget(
             A = Q.rotate(Ft, Wp[:, ch.upper])
             B = Q.rotate(Ft, Wp[:, ch.lower])
             Cc = Q.rotate(Ft, Wp[:, ch.foot])
-            Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2)
+            pu0 = tgt.parents[ch.upper]
+            Rref = Q.mul(Ft, Wr[:, pu0]) if pu0 >= 0 else np.tile(np.asarray(Ft, dtype=float), (T, 1))
+            pole, prel = stable_pole(A, B, Cc, Rref)
+            Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2, pole=pole, pole_rel=prel)
             pl.fail = fail
             q1 = Q.between(B - A, Bn - A)
             Cpre = Bn + Q.rotate(q1, Cc - B)
