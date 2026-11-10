@@ -220,8 +220,9 @@ class ClipPanel(QWidget):
         self.added_ui(added, skipped, select_first)
         return len(added)
 
-    def added_ui(self, added, skipped, select_first: bool = False) -> None:
-        """add_motions 가 끝난 뒤 화면을 맞춘다 (일하는 스레드에서 add_motions 만 하고 이쪽은 화면 스레드에서 부른다)."""
+    def added_ui(self, added, skipped, select_first: bool = False, select_existing=None) -> None:
+        """add_motions 가 끝난 뒤 화면을 맞춘다 (일하는 스레드에서 add_motions 만 하고 이쪽은 화면 스레드에서 부른다).
+        select_existing: 새로 더해진 것이 없고 이미 목록에 있던 모션으로 가야 할 때 그 번호."""
         a = self.app
         if a.pr.src is not None and added and added[0] == 0:
             a._after_load("source")                     # 목록이 비어 있었으면 첫 모션이 소스가 됨
@@ -229,10 +230,18 @@ class ClipPanel(QWidget):
             a._refill_clip_combo()
         if select_first and added and a.pr.src is not None and len(a.pr.src.animations) > 1:
             a.clip_combo.setCurrentIndex(added[0])
+        elif not added and select_existing is not None and a.pr.src is not None:
+            a.clip_combo.setCurrentIndex(int(select_existing))
         self.refresh()
-        msg = "모션 %d개를 목록에 더했습니다" % len(added) if added else "더해진 모션이 없습니다"
-        if skipped:
+        if added:
+            msg = "모션 %d개를 목록에 더했습니다" % len(added)
+        elif select_existing is not None:
+            msg = "이미 모션 목록에 있는 모션이라 그 모션으로 이동했습니다"
+        else:
+            msg = "더해진 모션이 없습니다"
+        if skipped and not (select_existing is not None and not added):
             msg += " · 건너뜀 %d개: %s" % (len(skipped), "; ".join(skipped[:2]))
+        a._last_status = msg
         a.statusBar().showMessage(msg)
 
     def remove_current(self) -> None:

@@ -1014,6 +1014,8 @@ def test_extract_tab():
         assert [f for _r, f in got] == ["AS_Run.psa", "AS_Walk.psa"] and all(len(r.split(os.sep)) == 3 and r.endswith("Animations") for r, _f in got), got
         # 추출하면 바로 화면에 바뀐 모션이 열린다 (여러 개면 첫 번째)
         assert mw.pr.src is not None and mw.pr.src.path.endswith(os.path.basename(mw.ex_files.first_path())), mw.pr.src and mw.pr.src.path
+        assert mw.btn_play.isChecked(), "추출하면 새 모션이 바로 재생된다"
+        assert mw.clip_panel.lst.count() == 2 and mw.pr.clip_of_path(mw.ex_files.first_path()) == mw.pr.clip, "추출한 모션이 모션 목록에 올라가고 선택된다"
         before = mw.pr.src.path
         # 아무것도 추출되지 않으면 이유를 알려주고 화면은 그대로
         mw.ex_list.set_paths(["Game/Content/Anim/AM_Skip.uasset"])
@@ -1030,7 +1032,14 @@ def test_extract_tab():
         mw._open_extracted()
         # 이미 목록에 올라가 있는 모션이므로 중복으로 더하지 않고 그 모션으로 이동한다
         assert mw.pr.src is not None and mw.pr.src.path.endswith(".psa") and mw.clip_combo.count() == 2
-        assert mw.pr.clip_of_path(mw.ex_files.first_path()) == mw.pr.clip
+        assert mw.pr.clip_of_path(mw.ex_files.first_path()) == mw.pr.clip and mw.btn_play.isChecked()
+        # 이미 목록에 있는 모션을 다시 추출해도 그 모션으로 이동해 재생한다 (예전 재생이 그대로 남지 않음)
+        mw.clip_combo.setCurrentIndex(1 - mw.pr.clip)
+        mw._clip_changed(1 - mw.pr.clip)
+        mw.btn_play.setChecked(False)
+        mw._after_extract(list(mw.ex_files.all_paths()))
+        assert mw.pr.clip_of_path(mw.ex_files.first_path()) == mw.pr.clip and mw.btn_play.isChecked() and mw.frame_slider.value() == 0
+        assert mw.clip_panel.lst.count() == 2, "중복으로 더하지 않음"
         # 암호화된 게임: 키 없이는 도우미를 부르지 않는다
         log = os.environ["FAKE_LOG"]
         n_before = len(open(log).read().splitlines())

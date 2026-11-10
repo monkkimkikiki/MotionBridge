@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self._fields: Dict[str, object] = {}  # settings 키 -> 위젯 (프로필 불러올 때 동기화)
         self._syncing = False
         self._playing = False
+        self._last_status = ""
         self.scan: Optional[gamescan.GameScan] = None
         self.link: Optional[animlink.LinkServer] = None
         self._link_sig = _LinkSignals()
@@ -1340,15 +1341,9 @@ class MainWindow(QMainWindow):
         glb = next((f for f in files if f.lower().endswith(".glb") and "_static" not in f), None) or next((f for f in files if f.lower().endswith(".glb")), None)
         self.statusBar().showMessage(msg)
         if psa:
+            # 방금 추출한 모션은 왼쪽 모션 목록에 더하고(이미 있으면 그 모션으로 이동), 바로 처음부터 재생한다
             psas = [f for f in files if f.lower().endswith(".psa")]
-            if self.pr.src is not None:
-                # 이미 리타겟 중인 소스가 있으면 새로 추출한 모션을 왼쪽 모션 목록에 더한다 (소스를 갈아엎지 않음)
-                n = self.clip_panel.add_paths(psas, select_first=True)
-                self.statusBar().showMessage(msg + (" · 모션 목록에 %d개 추가" % n if n else " · 이미 목록에 있거나 뼈대가 달라 추가하지 못했습니다"))
-            else:
-                if len(files) > 1:
-                    self.statusBar().showMessage(msg + " (모션 목록에 올렸습니다)")
-                self.clip_panel.add_paths(psas, select_first=False)
+            self._add_source_files(psas, play=True, sync=True, prefix=msg)
         elif glb:
             self._open_path_as_target(glb)
 
@@ -1372,38 +1367,49 @@ class MainWindow(QMainWindow):
 
     def _open_path(self, path: str) -> None:
         self._remember_dir(path)
-        self._add_source_files([path])
+        self._add_source_files([path], play=True)
 
-    def _add_source_files(self, paths) -> None:
+    def _add_source_files(self, paths, play: bool = False, sync: bool = False, prefix: str = "") -> None:
         """뷰포트에 소스 모션으로 여는 파일은 전부 왼쪽 모션 목록에 자동으로 더한다 (이미 열린 모션은 그대로 두고 뒤에 붙인다).
-        지금 소스와 뼈대가 다른 캐릭터의 모션이면, 목록을 비우고 새로 열지 묻는다."""
+        이미 목록에 있는 파일이면 그 모션으로 이동한다. 지금 소스와 뼈대가 다른 캐릭터의 모션이면, 목록을 비우고 새로 열지 묻는다.
+        play=True 면 열린 모션을 처음부터 바로 재생한다. sync=True 면 일하는 스레드 없이 바로 읽는다(다른 작업의 완료 콜백 안에서 쓸 때)."""
         paths = [p for p in paths if p]
         if not paths:
             return
+        if sync:
+            self._added_done(paths, self.pr.add_motions(paths), play, prefix)
+            return
+        self.run_async(lambda w: self.pr.add_motions(paths), lambda res: self._added_done(paths, res, play, prefix), "소스 읽는 중")
 
-        def done(res):
-            added, skipped = res
-            diff = [x for x in skipped if "스켈레톤이 달라" in x]
-            if diff and not added and self.pr.src is not None:
-                r = QMessageBox.question(self, "다른 캐릭터의 모션", "지금 목록의 모션과 뼈대가 다른 캐릭터의 모션입니다.\n(%s)\n\n지금 목록을 비우고 이 모션으로 새로 열까요?\n(지금 모션들의 보정 작업은 사라집니다)" % diff[0][:80])
-                if r == QMessageBox.StandardButton.Yes:
-                    self.pr.unload_source()
-                    self._after_unload("source")
-                    self._add_source_files(paths)
-                    return
-            if not added and self.pr.src is not None:          # 이미 목록에 있는 모션이면 새로 더하지 않고 그 모션으로 간다
-                hit = next((self.pr.clip_of_path(p) for p in paths if self.pr.clip_of_path(p) is not None), None)
-                if hit is not None:
-                    self.clip_combo.setCurrentIndex(hit)
-                    self.clip_panel.refresh()
-                    self.statusBar().showMessage("이미 모션 목록에 있는 모션이라 그 모션으로 이동했습니다")
-                    return
-            bad = [x for x in skipped if "이미 목록에 있습니다" not in x]
-            if not added and bad and not diff:
-                QMessageBox.warning(self, "소스 모션 열기", "열지 못했습니다:\n" + "\n".join(bad)[:700])
-            self.clip_panel.added_ui(added, skipped, select_first=True)
+    def _added_done(self, paths, res, play: bool = False, prefix: str = "") -> None:
+        added, skipped = res
+        diff = [x for x in skipped if "스켈레톤이 달라" in x]
+        if diff and not added and self.pr.src is not None:
+            r = QMessageBox.question(self, "다른 캐릭터의 모션", "지금 목록의 모션과 뼈대가 다른 캐릭터의 모션입니다.\n(%s)\n\n지금 목록을 비우고 이 모션으로 새로 열까요?\n(지금 모션들의 보정 작업은 사라집니다)" % diff[0][:80])
+            if r == QMessageBox.StandardButton.Yes:
+                self.pr.unload_source()
+                self._after_unload("source")
+                self._add_source_files(paths, play=play, sync=True, prefix=prefix)    # 완료 콜백 안이라 바로 읽는다
+                return
+        hit = None
+        if not added and self.pr.src is not None:          # 이미 목록에 있는 모션이면 새로 더하지 않고 그 모션으로 간다
+            hit = next((self.pr.clip_of_path(p) for p in paths if self.pr.clip_of_path(p) is not None), None)
+        bad = [x for x in skipped if "이미 목록에 있습니다" not in x]
+        if not added and hit is None and bad and not diff:
+            QMessageBox.warning(self, "소스 모션 열기", "열지 못했습니다:\n" + "\n".join(bad)[:700])
+        self.clip_panel.added_ui(added, skipped, select_first=True, select_existing=hit)
+        if prefix:
+            self.statusBar().showMessage(prefix + " · " + self.__dict__.get("_last_status", ""))
+        if play and (added or hit is not None) and self.pr.src is not None:
+            self._play_from_start()
 
-        self.run_async(lambda w: self.pr.add_motions(paths), done, "소스 읽는 중")
+    def _play_from_start(self) -> None:
+        """지금 모션을 처음 프레임부터 재생한다 (이미 재생 중이면 새 모션의 fps 로 다시 시작)."""
+        self.frame_slider.setValue(0)
+        if self.btn_play.isChecked():
+            self._toggle_play(True)
+        else:
+            self.btn_play.setChecked(True)
 
     # ------------------------------------------------------------------ 탭 1
     def _tab_files(self) -> QWidget:

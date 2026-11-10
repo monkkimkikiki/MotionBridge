@@ -1996,11 +1996,12 @@ class VidFindTab(QWidget):
             n = len(added)
             self.last_files = list(files)
             win.ex_files.set_paths(files)
-            win.clip_panel.added_ui(added, skipped, select_first=True)  # 탭은 옮기지 않는다 (이 탭에 그대로 머물며 더 고를 수 있게)
+            win._added_done([f for f in files if f.lower().endswith(".psa")], (added, skipped), play=True)  # 목록에 더하고 바로 재생 (탭은 옮기지 않는다 — 이 탭에 머물며 더 고를 수 있게)
             msg = "소스 모션 %d개를 뷰포트로 열었습니다 — 왼쪽 '모션 목록'에 올라갔습니다" % n
             if skipped:
                 msg += " (건너뜀 %d: %s)" % (len(skipped), skipped[0][:80])
-                QMessageBox.information(self, "뷰포트로 열기", "일부는 열지 못했습니다:\n" + "\n".join(skipped)[:700])
+                if added:
+                    QMessageBox.information(self, "뷰포트로 열기", "일부는 열지 못했습니다:\n" + "\n".join(skipped)[:700])
             win.statusBar().showMessage(msg)
 
         win.run_async(job, done, "애니메이션 뽑는 중")
