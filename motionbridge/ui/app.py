@@ -106,8 +106,8 @@ class MainWindow(QMainWindow):
         _app = QApplication.instance()
         if _app is not None:
             _app.installEventFilter(self.wheel_guard)
-        self.wheel_cb = QCheckBox("🔒 휠 잠금")
-        self.wheel_cb.setToolTip("켜 두면 숫자칸·슬라이더·목록 위에서 마우스 휠을 굴려도 값이 바뀌지 않고 패널만 스크롤됩니다. (단축키 Ctrl+L)\n3D 뷰와 곡선 그래프의 휠 확대는 그대로 됩니다.")
+        self.wheel_cb = QCheckBox("🔒 슬라이더 휠 잠금")
+        self.wheel_cb.setToolTip("켜 두면 리타겟 조절의 슬라이더(파란 선) 위에서 마우스 휠을 굴려도 값이 바뀌지 않고 패널만 스크롤됩니다. (단축키 Ctrl+L)\n숫자칸·콤보박스·3D 뷰·곡선 그래프의 휠은 그대로 동작합니다.")
         self.wheel_cb.setChecked(self.wheel_guard.lock)
         self.wheel_cb.toggled.connect(lambda on: self.set_wheel_lock(on))
         self.statusBar().addPermanentWidget(self.wheel_cb)
@@ -216,7 +216,7 @@ class MainWindow(QMainWindow):
         spec += [("보기", k, n, a, sc) for k, n, a, sc in mesh_items]
         spec += [
             ("보기", "mesh_cycle", "메시 보기 방식 순환", "mesh_cycle", ("M",)),
-            ("보기", "wheel_lock", "휠 잠금 켜기/끄기 (숫자칸·슬라이더가 휠로 안 바뀜)", "toggle_wheel_lock", ("Ctrl+L",)),
+            ("보기", "wheel_lock", "슬라이더 휠 잠금 켜기/끄기 (파란 선이 휠로 안 바뀜)", "toggle_wheel_lock", ("Ctrl+L",)),
             ("탭", "tab0", "0. 게임에서 추출", "goto_tab:0", ("Ctrl+1",)),
             ("탭", "tab1", "1. 파일·매핑", "goto_tab:1", ("Ctrl+2",)),
             ("탭", "tab2", "2. 리타겟 조절", "goto_tab:2", ("Ctrl+3",)),
@@ -225,7 +225,7 @@ class MainWindow(QMainWindow):
             ("탭", "tab5", "영상으로 찾기", "goto_tab:5", ("Ctrl+6",)),
             ("탭", "tab8", "AI 모캡", "goto_tab:8", ("Ctrl+7",)),
             ("도움말", "first_steps", "처음 쓰는 방법", "show_first_steps", ()),
-            ("도움말", "toggle_guide", "안내 줄 보이기/숨기기", "toggle_guide", ()),
+            ("도움말", "toggle_guide", "안내 줄 보이기/숨기기", "toggle_guide", ("F2",)),
             ("도움말", "shortcuts", "단축키 목록", "show_shortcuts", ("F1",)),
             ("도움말", "about", "정보", "show_about", ()),
         ]
@@ -462,7 +462,7 @@ class MainWindow(QMainWindow):
         b.clicked.connect(lambda *_a: self.show_first_steps())
         grow.addWidget(b)
         self.guide_close = QPushButton("숨기기")
-        self.guide_close.setToolTip("안내 줄을 숨깁니다 (도움말 메뉴에서 다시 켤 수 있어요)")
+        self.guide_close.setToolTip("안내 줄을 숨깁니다 (F2 또는 아래쪽 [ℹ 안내 줄] 버튼으로 다시 켤 수 있어요)")
         self.guide_close.clicked.connect(lambda *_a: self.set_guide_visible(False))
         grow.addWidget(self.guide_close)
         gl.addLayout(grow)
@@ -491,6 +491,12 @@ class MainWindow(QMainWindow):
         cb.toggled.connect(self._helpers_toggled)
         opts.addWidget(cb)
         self._view_checks["helpers"] = cb
+        self.guide_toggle = QPushButton("ℹ 안내 줄")
+        self.guide_toggle.setCheckable(True)
+        self.guide_toggle.setChecked(bool(self.cfg.get("show_guide", True)))
+        self.guide_toggle.setToolTip("위쪽 안내 줄(① 모션 열기 → ② 모델 열기 …)을 숨기거나 다시 보이게 합니다. 단축키 F2")
+        self.guide_toggle.clicked.connect(lambda checked=False: self.set_guide_visible(bool(self.guide_toggle.isChecked())))
+        opts.addWidget(self.guide_toggle)
         opts.addWidget(QLabel("메시"))
         self.mesh_combo = QComboBox()
         for k, n in MESH_MODES:
@@ -2386,6 +2392,11 @@ class MainWindow(QMainWindow):
     def set_guide_visible(self, on: bool) -> None:
         self.guide_box.setVisible(bool(on))
         self.cfg["show_guide"] = bool(on)
+        gt = getattr(self, "guide_toggle", None)
+        if gt is not None and gt.isChecked() != bool(on):
+            gt.setChecked(bool(on))
+        if not on:
+            self.statusBar().showMessage("안내 줄을 숨겼습니다 — 다시 보려면 F2 또는 아래 [ℹ 안내 줄] 버튼")
         try:
             bridge.save_config(self.cfg)
         except Exception:
@@ -2431,7 +2442,7 @@ class MainWindow(QMainWindow):
         cb = getattr(self, "wheel_cb", None)
         if cb is not None and cb.isChecked() != bool(on):
             cb.setChecked(bool(on))
-        self.statusBar().showMessage("휠 잠금 %s — 숫자칸·슬라이더 위에서 휠을 굴려도 %s" % (("켜짐", "값이 바뀌지 않습니다") if on else ("꺼짐", "값이 바뀝니다")))
+        self.statusBar().showMessage("슬라이더 휠 잠금 %s — 슬라이더(파란 선) 위에서 휠을 굴려도 %s" % (("켜짐", "값이 바뀌지 않습니다") if on else ("꺼짐", "값이 바뀝니다")))
         try:
             bridge.save_config(self.cfg)
         except Exception:  # noqa: BLE001

@@ -279,11 +279,14 @@ with tempfile.TemporaryDirectory() as d:
     check(mw.wheel_guard.lock and mw.wheel_cb.isChecked(), "휠 잠금 기본 켜짐")
     nf_ = mw._fields["ik_knee_stable"][0]
     nf_.show()
-    v0_ = nf_.spin.value()
+    v0_ = nf_.slider.value()
+    vs0_ = nf_.spin.value()
     wv_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
-    _QA2.sendEvent(nf_.spin, wv_)
+    _QA2.sendEvent(nf_.slider, wv_)
     app.processEvents()
-    check(nf_.spin.value() == v0_, "휠 잠금 켜짐: 숫자칸이 휠로 안 바뀜 (%s)" % nf_.spin.value())
+    check(nf_.slider.value() == v0_ and nf_.spin.value() == vs0_, "슬라이더 휠 잠금 켜짐: 파란 슬라이더가 휠로 안 바뀜 (%s)" % nf_.slider.value())
+    sp2_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    check(not mw.wheel_guard.watched(nf_.spin) and not mw.wheel_guard.watched(mw.frame_slider), "숫자칸·프레임 슬라이더는 잠금 대상이 아님")
     mw.toggle_wheel_lock()
     check(not mw.wheel_guard.lock and not mw.wheel_cb.isChecked(), "Ctrl+L 동작: 잠금 해제")
     mw.set_wheel_lock(True)
@@ -291,6 +294,10 @@ with tempfile.TemporaryDirectory() as d:
     mw.cb_bone_edit.setChecked(True)
     check("ON" in mw.cb_bone_edit.text(), "본 편집 켜면 글자가 ON")
     mw.cb_bone_edit.setChecked(False)
+    mw.set_guide_visible(False)
+    check(not mw.guide_box.isVisible() and not mw.guide_toggle.isChecked(), "안내 줄 숨김 -> 버튼도 꺼짐")
+    mw.guide_toggle.click()
+    check(mw.guide_box.isVisible() or not mw.isVisible(), "[ℹ 안내 줄] 버튼으로 다시 보임")
     pts = ce.canvas.key_points()
     if pts:
         f_, v_, _id = pts[0]

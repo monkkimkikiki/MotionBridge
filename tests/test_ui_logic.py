@@ -524,6 +524,12 @@ def test_full_flow():
         assert "ON" in mw.cb_bone_edit.text()
         mw.cb_bone_edit.setChecked(False)
         assert "OFF" in mw.cb_bone_edit.text()
+        # 안내 줄 숨겼다가 다시 보이기 (버튼 / 단축키 동작)
+        mw.set_guide_visible(False)
+        assert not mw.guide_box.isVisible() and not mw.guide_toggle.isChecked()
+        mw.toggle_guide()
+        assert mw.guide_box.isVisible() and mw.guide_toggle.isChecked(), "다시 나타남"
+        assert any(k == "F2" for _n, k in mw.shortcut_table()), "F2 단축키"
         # 왼쪽 모션 목록: 클립을 눌러 오가면 설정이 클립마다 따로 남고, 다른 모션 세팅을 가져왔다 뺄 수 있다
         import copy as _copy
         n0 = len(mw.pr.src.animations)

@@ -5,7 +5,7 @@ import threading
 import traceback
 
 from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import QAbstractSlider, QAbstractSpinBox, QApplication, QMenu
+from PySide6.QtWidgets import QAbstractSlider, QApplication, QMenu
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QProgressBar, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -69,6 +69,7 @@ class NumField(QWidget):
         self.slider = None
         if slider:
             self.slider = QSlider(Qt.Orientation.Horizontal)
+            self.slider.setProperty("noWheel", True)       # 패널을 스크롤하다 파란 슬라이더 값이 바뀌지 않게 (WheelGuard)
             lay.addWidget(self.slider, 1)
         self.spin = QDoubleSpinBox()
         self.spin.setDecimals(decimals)
@@ -599,20 +600,20 @@ class BusyDialog(QDialog):
 
 
 class WheelGuard(QObject):
-    """마우스 휠 잠금 — 켜 두면 숫자칸·슬라이더·콤보박스 위에서 휠을 굴려도 값이 바뀌지 않고, 휠이 그대로 바깥 패널 스크롤이 된다.
-    (패널을 스크롤하다 배율 같은 값이 실수로 바뀌는 것을 막는다. 값은 클릭해서 입력하거나 슬라이더를 끌어서 바꾼다.)
-    위젯에 setProperty('wheelOk', True) 를 주면 그 위젯은 잠금에서 빼 준다."""
+    """슬라이더(파란 선) 휠 잠금 — 켜 두면 리타겟 조절의 슬라이더 위에서 휠을 굴려도 값이 바뀌지 않고, 휠이 그대로 바깥 패널 스크롤이 된다.
+    (패널을 스크롤하다 배율 같은 값이 실수로 바뀌는 것을 막는다. 슬라이더는 끌어서, 값은 옆 숫자칸에 입력해서 바꾼다.)
+    숫자칸·콤보박스·프레임 슬라이더 등 다른 위젯은 건드리지 않는다 (NumField 의 슬라이더에만 noWheel 표시가 있다)."""
 
     def __init__(self, lock: bool = True, parent=None) -> None:
         super().__init__(parent)
         self.lock = bool(lock)
 
     def watched(self, obj) -> bool:
-        if isinstance(obj, (QAbstractSpinBox, QAbstractSlider, QComboBox)):
+        if isinstance(obj, QAbstractSlider):
             try:
-                return not bool(obj.property("wheelOk"))
+                return bool(obj.property("noWheel"))
             except Exception:  # noqa: BLE001
-                return True
+                return False
         return False
 
     def eventFilter(self, obj, ev) -> bool:  # noqa: N802
