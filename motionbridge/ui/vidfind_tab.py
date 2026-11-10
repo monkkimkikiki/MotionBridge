@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, pairing, panel, skelgraph, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
 
@@ -37,6 +37,11 @@ MESH_RX = re.compile(r"(?i)/sk[a-z]*_[^/]*$")
 ANIM_RX = re.compile(r"(?i)anim")
 LIST_PATTERN = r"(?i)(/sk[a-z]*_|/sm[a-z]{0,2}_|anim)"
 STATIC_RX = re.compile(r"(?i)/sm[a-z]{0,2}_[^/]*$")
+class _Vocab(list):
+    """AI 에게 줄 이름 목록. ids=True 면 각 줄이 '<ID> = <게임 속 이름> [종류]' (캐릭터 카탈로그)."""
+    ids = False
+
+
 MONSTER_DIRS = re.compile(r"(?i)/(monsters?|enemies|enemy|bosses|boss|creatures?|npcs?)/")
 LABEL_CHOICES = ["타격", "피격", "스킬", "연출", "회피", "사망", "걷기", "달리기", "대기"]
 PICK_FILTER = "영상/이미지 (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.png *.jpg *.jpeg *.webp);;모든 파일 (*)"
@@ -814,9 +819,47 @@ class VidFindTab(QWidget):
         assetidx.save_index(INDEX_CACHE, idx, game)
         return idx
 
-    def _vocab(self, idx: assetidx.AssetIndex, limit: int, pat: str):
-        """AI에게 알려줄 이름 목록과 안내 문구."""
+    def _catalog(self, idx: assetidx.AssetIndex) -> "charcatalog.Catalog":
+        """에셋 목록(+ 있으면 글자 사전)으로 만든 캐릭터 카탈로그. 같은 목록이면 다시 만들지 않는다."""
+        try:
+            mt = os.path.getmtime(NAMES_CACHE) if os.path.isfile(NAMES_CACHE) else 0.0
+        except OSError:
+            mt = 0.0
+        key = (id(idx), mt)
+        c = self.__dict__.get("_charcat_memo")
+        if c and c[0] == key:
+            return c[1]
+        book = self.name_book()
+        cat = charcatalog.Catalog.build([m.path for m in idx.meshes], idx.anims, book.entries if book else ())
+        self._charcat_memo = (key, cat)
+        return cat
+
+    def _vocab(self, idx: assetidx.AssetIndex, limit: int, pat: str, style: str = "raw"):
+        """AI에게 알려줄 이름 목록과 안내 문구.
+        style: 'lines' = 캐릭터 카탈로그 줄('<ID> = <게임 속 이름> [종류]', 결과의 ids 가 True) / 'names' = 카탈로그의 대표 메시 이름 / 'raw' = 예전 방식(메시 이름 알파벳순).
+        카탈로그는 메시 413종을 캐릭터 100여 명으로 묶어 자르지 않고 전부 알린다 (예전엔 120종만 알려서 뒤쪽 캐릭터는 AI 가 아예 볼 수 없었다)."""
         notes: List[str] = []
+        if style in ("lines", "names"):
+            try:
+                cat = self._catalog(idx)
+                chars = cat.all()
+            except Exception as e:  # noqa: BLE001 - 카탈로그가 안 만들어져도 예전 방식으로 계속
+                chars, cat = [], None
+                notes.append("캐릭터 카탈로그를 만들지 못해 예전 방식으로 진행합니다: %s" % e)
+            if cat is not None and len(chars) >= 8:
+                if pat:
+                    try:
+                        chars = [c for c in chars if assetidx.filter_paths(c.meshes, pat)]
+                    except re.error as e:
+                        notes.append("이름 필터가 올바르지 않아 무시했습니다: %s" % e)
+                if len(chars) > limit:
+                    notes.append("캐릭터 %d명 중 %d명만 AI에게 알렸습니다 (보스 > 미니보스 > 일반 > NPC 순). '이름 필터'로 줄이면 정확해집니다." % (len(chars), limit))
+                    chars = chars[:limit]
+                named = sum(1 for c in chars if c.names)
+                notes.append("캐릭터 %d명을 전부 AI에게 알렸습니다 (게임 속 이름이 있는 캐릭터 %d명)." % (len(chars), named) if len(chars) <= limit else "")
+                out = _Vocab(cat.vocab_lines(chars=chars) if style == "lines" else cat.vocab_names(chars=chars))
+                out.ids = style == "lines"
+                return out, [n for n in notes if n]
         meshes = [m.path for m in idx.meshes]
         if pat:
             try:
@@ -930,13 +973,18 @@ class VidFindTab(QWidget):
                 stop_check(w)
                 w.progress.emit(i, n, "장면 뽑는 중 " + name)
 
-            fr = frames.sample_sources(ff, srcs, FRAME_DIR, max(per, 6) if fast else per, w_cap, sampling)
+            fr = framepick.sample_sources_best(ff, srcs, FRAME_DIR, max(per, 6) if fast else per, w_cap, sampling)   # 검은/정지(메뉴) 화면 제외, 서로 다른 장면 위주
             stop_check(w)
-            vocab, notes = self._vocab(idx, min(prov.vocab_limit(), vision.FAST_VOCAB) if fast else prov.vocab_limit(), pat)
+            vocab, notes = self._vocab(idx, prov.vocab_limit(), pat, style="lines")   # 카탈로그면 자르지 않고 전부 (잘리면 보스 > 미니보스 > 일반 > NPC 순으로 남김)
+            ids = bool(getattr(vocab, "ids", False))
+            cat = self._catalog(idx) if ids else None
+            read_text = bool(self.cfg.get("vf_read_text", True)) and cat is not None
+            if not ids and fast and len(vocab) > vision.FAST_VOCAB:
+                vocab = vocab[:vision.FAST_VOCAB]
             if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
                 gamenames.resolve_known(known, idx, book)
                 for k in known:
-                    if k.top and k.top.name not in vocab:
+                    if k.top and not any(v == k.top.name or v.startswith(k.top.name + " ") for v in vocab):
                         vocab = [k.top.name] + list(vocab)
                     notes.append("아는 정보: %s → %s" % (k.name, (k.top.name + " (%d%%)" % round(k.top.score * 100)) if k.top else "리소스를 못 찾음"))
             klines = [k.prompt_line() for k in known]
@@ -953,7 +1001,10 @@ class VidFindTab(QWidget):
                     si, (src, paths) = si_src
                     stop_check(w)
                     sheet = panel.make_sheet(paths, os.path.join(FRAME_DIR, "guess_sheet_%02d.jpg" % si), cols=4, cell_w=384, max_frames=9)
-                    return prov.analyze_sheet(sheet, paths[0], vocab, hint, klines, vision.FAST_VOCAB)
+                    found: List[vision.Detection] = []
+                    if read_text:   # 화면에 이름이 적혀 있으면(보스 체력바 등) 추측하지 않고 글자로 바로 찾는다
+                        found = screenname.read_names(prov, paths, cat, 3, on_error=lambda e, _s=src: errors.append("%s(글자 읽기): %s" % (os.path.basename(_s), e)))
+                    return found + prov.analyze_sheet(sheet, paths[0], vocab, hint, klines, 0 if ids else vision.FAST_VOCAB, ids=ids)
 
                 workers = 3 if prov.key in ("claude", "openai") else 1
                 done_n = 0
@@ -978,16 +1029,22 @@ class VidFindTab(QWidget):
                             except vision.VisionError as e:
                                 errors.append("%s: %s" % (os.path.basename(it[1][0]), e))
                             done_n += 1
+                if cat is not None:
+                    screenname.canonicalize(dets, cat)   # AI 가 낸 이름(ID/줄 통째/영·한 이름) -> 대표 메시 이름
                 return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
+            if read_text:
+                dets += screenname.read_names(prov, [f.path for f in fr], cat, 3, on_error=lambda e: errors.append("글자 읽기: %s" % e))
             for i, f in enumerate(fr):
                 stop_check(w)  # 취소하면 다음 장면부터 안 한다
                 w.progress.emit(i, len(fr), "캐릭터 인식 중 " + os.path.basename(f.path))
                 try:
-                    dets += prov.analyze(f.path, vocab, hint, klines)
+                    dets += prov.analyze(f.path, vocab, hint, klines, ids)
                 except vision.VisionError as e:
                     errors.append("%s: %s" % (os.path.basename(f.path), e))
                     if len(errors) >= 3 and not dets:
                         break  # 계속 실패하면 멈춘다 (키/연결 문제)
+            if cat is not None:
+                screenname.canonicalize(dets, cat)
             return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
 
         self.win.run_async(job, self._after_guess, "캐릭터 추측 중", cancellable=True,
@@ -1732,8 +1789,8 @@ class VidFindTab(QWidget):
                     raise panel.PanelStopped()
                 w.progress.emit(i, n, "장면 뽑는 중 " + name)
 
-            fr = frames.sample_sources(ff, srcs, FRAME_DIR, max(per, 6), 24, sampling)
-            vocab, notes = self._vocab(idx, limit, pat)
+            fr = framepick.sample_sources_best(ff, srcs, FRAME_DIR, max(per, 6), 24, sampling)
+            vocab, notes = self._vocab(idx, limit, pat, style="names")
             if known:
                 gamenames.resolve_known(known, idx, book)
                 for k in known:

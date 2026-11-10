@@ -99,8 +99,9 @@ class Group:
 
 
 # ---------------------------------------------------------------------- 질문과 답 해석
-def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = (), sheet: bool = False, alts: bool = False) -> str:
-    names = ", ".join(vocab)
+def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = (), sheet: bool = False, alts: bool = False, ids: bool = False) -> str:
+    # ids=True: 목록이 '<ID> = <게임 속 이름> [종류]' 한 줄씩 (캐릭터 카탈로그). 줄바꿈으로 나누고 답은 ID 만 쓰게 한다.
+    names = "\n".join(vocab) if ids else ", ".join(vocab)
     game = (" from the video game %s" % game_hint) if game_hint else " from a video game"
     extra = ""
     if known:
@@ -116,9 +117,11 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str]
         shot + " Identify every distinct monster, enemy, boss or NPC character visible, and also the player-controlled "
         "(playable) character when its body is visible (ignore first-person hands/weapon, UI, and scenery). Several can be on screen at once. "
         "For the playable character use a name from the list that contains words like player, hero or protagonist if one exists, otherwise answer \"player\".\n"
-        "%sKnown character names in this game's files:\n[%s]\n\n"
+        "%s" + ("Characters in this game, one per line as '<ID> = <in-game name> [kind]' (kind: boss, miniboss, enemy, npc, shell = playable armor set; "
+                "internal IDs are descriptive English words that hint at the creature's look):\n%s\n\n" if ids else "Known character names in this game's files:\n[%s]\n\n") +
         "For each visible character answer with:\n"
-        '  "name": the matching name from the list above exactly as written. Do NOT force a match: if the character is not clearly one of them '
+        '  "name": ' + ("the ID (the part before ' =') of the matching line, exactly as written" if ids else "the matching name from the list above exactly as written") +
+        '. Do NOT force a match: if the character is not clearly one of them '
         '(for example an unnamed or unique boss/NPC, or a variant you cannot tell apart), answer "unknown",\n'
         '  "confidence": a number from 0 to 1 (use below 0.5 when you are unsure),\n'
         '  "description": a short English description of its look (colors, body shape, weapon),\n'
@@ -189,6 +192,31 @@ def parse_response(text: str, frame: str = "") -> List[Detection]:
         alts = [str(x).strip()[:80] for x in (it.get("alternatives") or []) if isinstance(x, str) and str(x).strip()][:4] if isinstance(it.get("alternatives"), list) else []
         out.append(Detection(name or "unknown", max(0.0, min(1.0, conf)), desc, _norm_box(it.get("box")), frame, alts))
     return out
+
+
+def build_read_prompt() -> str:
+    return ("This is a screenshot from a video game (UI text may be Korean or English). Transcribe every piece of on-screen text that could be the NAME of a "
+            "character, boss or enemy: boss health-bar name plates, lock-on or target labels, encounter banners, subtitles that name someone. "
+            "Copy the text exactly as shown, one entry per line of text. Ignore item names, menu or button labels, tutorial hints and numbers.\n"
+            'Reply with ONLY JSON: {"texts":["..."]}. If there is no such text reply {"texts":[]}.')
+
+
+def parse_texts(text: str) -> List[str]:
+    """읽기 답(JSON)을 글자 목록으로. 형식이 조금 틀려도 읽을 수 있는 만큼 읽는다."""
+    obj = _extract_json(text)
+    if isinstance(obj, dict):
+        obj = obj.get("texts") or obj.get("text") or obj.get("names") or []
+    if isinstance(obj, str):
+        obj = [obj]
+    if not isinstance(obj, list):
+        raise VisionError("글자 읽기 결과를 해석하지 못했습니다: " + (text or "")[:200])
+    out: List[str] = []
+    for it in obj:
+        t = (it.get("text") if isinstance(it, dict) else it)
+        t = str(t or "").strip()[:80]
+        if len(t) >= 2 and t not in out:
+            out.append(t)
+    return out[:12]
 
 
 # ---------------------------------------------------------------------- 네트워크 (바꿔 끼울 수 있음)
@@ -262,17 +290,21 @@ class Provider:
     def _send(self, prompt: str, image_path: Optional[str]) -> str:  # pragma: no cover - 하위 클래스가 구현
         raise NotImplementedError
 
-    def analyze(self, image_path: str, vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = ()) -> List[Detection]:
-        text = self.ask(image_path, build_prompt(list(vocab)[: self.vocab_limit()], game_hint, known))
+    def analyze(self, image_path: str, vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = (), ids: bool = False) -> List[Detection]:
+        text = self.ask(image_path, build_prompt(list(vocab)[: self.vocab_limit()], game_hint, known, ids=ids))
         return parse_response(text, image_path)
+
+    def read_texts(self, image_path: str) -> List[str]:
+        """장면 속 글자(보스 체력바 이름, 조준 표시, 자막 등)를 읽어 온다. 이름 칸이 있으면 AI 가 '추측'하지 않고 글자로 바로 찾을 수 있다."""
+        return parse_texts(self.ask(image_path, build_read_prompt()))
 
 
     def analyze_sheet(self, sheet_path: str, first_frame: str, vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = (),
-                      limit: int = 0) -> List[Detection]:
+                      limit: int = 0, ids: bool = False) -> List[Detection]:
         """영상 하나를 장면 시트 한 장으로 한 번에 묻는다 (프레임마다 묻는 것보다 몇 배 빠름). 후보군(alternatives)도 같이 받는다.
         위치(box)는 시트 기준이라 쓸 수 없으므로 지우고, 대표 장면은 첫 프레임으로 둔다."""
         n = min(self.vocab_limit(), limit) if limit else self.vocab_limit()
-        text = self.ask(sheet_path, build_prompt(list(vocab)[:n], game_hint, known, sheet=True, alts=True))
+        text = self.ask(sheet_path, build_prompt(list(vocab)[:n], game_hint, known, sheet=True, alts=True, ids=ids))
         dets = parse_response(text, first_frame)
         for d in dets:
             d.box = None
