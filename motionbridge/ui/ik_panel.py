@@ -1,7 +1,7 @@
 """IK 구간 직접 지정 — 자동 접지 판정이 틀렸을 때, 체인(왼발·오른발·손)별로 'IK 를 걸 프레임'과 'IK 를 풀 프레임'을 직접 정한다 (core/ikranges)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QVBoxLayout
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout
 
 from ..core import ikranges
 from .widgets import CollapsibleBox
@@ -16,8 +16,9 @@ class IKRangePanel(CollapsibleBox):
         self._busy = False
         v = QVBoxLayout(self)
         note = QLabel("프로그램이 '발이 땅에 닿았다'고 자동으로 판정한 구간이 틀릴 때 고칩니다.\n"
-                      "· IK 켜기 = 그 프레임들에서 발(손)을 한 자리에 고정해 미끄러지지 않게 함\n"
-                      "· IK 끄기 = 그 프레임들에서는 IK 없이 원래 동작 그대로 (공중에 뜬 발인데 땅에 붙어 끌려갈 때)")
+                      "쓰는 법: 재생바로 시작할 프레임에 가서 [IK 켜기]를 한 번 누르고, 끝낼 프레임으로 가서 [IK 켜기]를 한 번 더 누르면 그 사이가 지정됩니다.\n"
+                      "· IK 켜기 = 그 구간에서 발(손)을 한 자리에 고정해 미끄러지지 않게 함\n"
+                      "· IK 끄기 = 그 구간에서는 IK 없이 원래 동작 그대로 (공중에 뜬 발인데 땅에 붙어 끌려갈 때)")
         note.setWordWrap(True)
         note.setStyleSheet("color:#8aa")
         v.addWidget(note)
@@ -28,33 +29,18 @@ class IKRangePanel(CollapsibleBox):
         self.chain.currentIndexChanged.connect(self._chain_changed)
         r.addWidget(self.chain, 1)
         v.addLayout(r)
+        self._pending = None                 # (켬 여부, 시작 프레임 0부터, 체인 라벨) — 첫 번째 누름 뒤 끝 프레임을 기다리는 중
         r = QHBoxLayout()
-        r.addWidget(QLabel("프레임"))
-        self.a = QSpinBox()
-        self.a.setRange(1, 1)
-        self.b = QSpinBox()
-        self.b.setRange(1, 1)
-        r.addWidget(self.a)
-        bn = QPushButton("지금")
-        bn.setToolTip("지금 보고 있는 프레임을 시작으로")
-        bn.clicked.connect(lambda _c=False: self.a.setValue(self._now()))
-        r.addWidget(bn)
-        r.addWidget(QLabel("~"))
-        r.addWidget(self.b)
-        bn = QPushButton("지금")
-        bn.setToolTip("지금 보고 있는 프레임을 끝으로")
-        bn.clicked.connect(lambda _c=False: self.b.setValue(self._now()))
-        r.addWidget(bn)
-        v.addLayout(r)
-        r = QHBoxLayout()
-        b1 = QPushButton("✅ 이 구간 IK 켜기")
-        b1.setToolTip("선택한 부위를 이 프레임 구간에서 한 자리에 고정합니다")
-        b1.clicked.connect(lambda _c=False: self.add(True))
-        b2 = QPushButton("🚫 이 구간 IK 끄기")
-        b2.setToolTip("선택한 부위를 이 프레임 구간에서는 IK 없이 원래 동작대로 둡니다")
-        b2.clicked.connect(lambda _c=False: self.add(False))
-        r.addWidget(b1)
-        r.addWidget(b2)
+        self.b_on = QPushButton("")
+        self.b_on.clicked.connect(lambda _c=False: self.toggle(True))
+        self.b_off = QPushButton("")
+        self.b_off.clicked.connect(lambda _c=False: self.toggle(False))
+        r.addWidget(self.b_on)
+        r.addWidget(self.b_off)
+        self.b_cancel = QPushButton("취소")
+        self.b_cancel.setToolTip("시작만 찍어 둔 지정을 없앱니다")
+        self.b_cancel.clicked.connect(lambda _c=False: self.cancel())
+        r.addWidget(self.b_cancel)
         v.addLayout(r)
         self.lst = QListWidget()
         self.lst.setMaximumHeight(90)
@@ -76,6 +62,7 @@ class IKRangePanel(CollapsibleBox):
 
     def _chain_changed(self, *_a) -> None:
         if not self._busy:
+            self._pending = None
             self.refresh()
 
     # ---- 상태
@@ -84,7 +71,8 @@ class IKRangePanel(CollapsibleBox):
         return int(a.n_frames) if a is not None else 0
 
     def _now(self) -> int:
-        return int(self.app.viewport.frame) + 1
+        """지금 보고 있는 프레임 (0부터)."""
+        return int(self.app.viewport.frame)
 
     def _label(self):
         return self.chain.currentData()
@@ -117,15 +105,16 @@ class IKRangePanel(CollapsibleBox):
             i = self.chain.findData(keep) if keep is not None else -1
             if i >= 0:
                 self.chain.setCurrentIndex(i)
-            T = max(self._T(), 1)
-            self.a.setRange(1, T)
-            self.b.setRange(1, T)
             self.lst.clear()
             lab = self._label()
             T0 = self._T()
             for a, b, on in (ikranges.normalize(self._ranges(lab), T0) if lab else []):
                 self.lst.addItem(QListWidgetItem("%s  %s" % ("IK 켜기 " if on else "IK 끄기 ", ikranges.describe([(a, b)]) + " 프레임")))
+            self._buttons()
             lines = []
+            if self._pending is not None:
+                on, f0, _l = self._pending
+                lines.append("▶ %d 프레임부터 IK %s 지정 중 — 끝낼 프레임으로 가서 [%s]를 한 번 더 누르세요" % (f0 + 1, "켜기" if on else "끄기", "IK 켜기" if on else "IK 끄기"))
             res = pr.result
             if lab and res is not None:
                 for c, pl in zip(res.chains, res.plans):
@@ -142,13 +131,49 @@ class IKRangePanel(CollapsibleBox):
             self._busy = False
 
     # ---- 조작
-    def add(self, on: bool) -> None:
+    def _buttons(self) -> None:
+        """버튼 글자: 시작을 찍기 전엔 '여기서부터', 찍은 뒤엔 '여기까지'."""
+        pend = self._pending
+        for btn, on in ((self.b_on, True), (self.b_off, False)):
+            name = "IK 켜기" if on else "IK 끄기"
+            icon = "✅" if on else "🚫"
+            if pend is not None and pend[0] == on:
+                btn.setText("%s 여기까지 %s (끝 프레임 지정)" % (icon, name))
+                btn.setToolTip("지금 보고 있는 프레임을 끝으로 해서 %d 프레임부터 여기까지를 지정합니다" % (pend[1] + 1))
+            else:
+                btn.setText("%s 여기서부터 %s" % (icon, name))
+                btn.setToolTip("지금 보고 있는 프레임을 시작으로 찍습니다. 끝낼 프레임으로 가서 한 번 더 누르면 구간이 지정돼요"
+                               + ("" if on else " (공중에 뜬 발인데 땅에 붙을 때)"))
+        self.b_cancel.setEnabled(pend is not None)
+
+    def toggle(self, on: bool) -> None:
+        """한 번 누르면 지금 프레임이 시작, 같은 버튼을 한 번 더 누르면 지금 프레임이 끝이 되어 구간이 지정된다."""
         lab, T = self._label(), self._T()
         if lab is None or T <= 0:
             self.app.statusBar().showMessage("먼저 소스 모션·타깃 모델을 열고 대상 부위를 고르세요")
             return
-        a, b = sorted((int(self.a.value()) - 1, int(self.b.value()) - 1))
+        f = min(max(self._now(), 0), T - 1)
+        pend = self._pending
+        if pend is None or pend[0] != on or pend[2] != lab:
+            self._pending = (bool(on), f, lab)                      # 시작 찍기 (다른 쪽 버튼이었으면 새로 시작)
+            self.app.statusBar().showMessage("%d 프레임부터 IK %s — 끝낼 프레임으로 가서 같은 버튼을 한 번 더 누르세요" % (f + 1, "켜기" if on else "끄기"))
+            self.refresh()
+            return
+        self._pending = None
+        a, b = sorted((pend[1], f))
+        self.app.statusBar().showMessage("IK %s: %d~%d 프레임" % ("켜기" if on else "끄기", a + 1, b + 1))
         self._store(lab, ikranges.add(self._ranges(lab), a, b, on, T))
+
+    def cancel(self) -> None:
+        self._pending = None
+        self.refresh()
+
+    def add(self, on: bool, a: int, b: int) -> None:
+        """프레임 a..b(0부터, 끝 포함)를 직접 지정 (프로그램/시험용)."""
+        lab, T = self._label(), self._T()
+        if lab is None or T <= 0:
+            return
+        self._store(lab, ikranges.add(self._ranges(lab), min(a, b), max(a, b), on, T))
 
     def remove_selected(self) -> None:
         lab, T = self._label(), self._T()

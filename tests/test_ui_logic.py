@@ -481,9 +481,6 @@ def test_full_flow():
         assert cv.layer is None
         cv.press_at(float(cv.geom().x_of(fa)), 40.0, double=True)
         assert cv.msg and not lp.stack().total_keys() == 0, "원본 상태에서는 키를 못 만들고 이유를 알려 준다"
-        msg0 = lp._msg
-        lp.auto_flatten()
-        assert lp._msg and len(st) >= 1, "자동 평탄화 호출 (결과 문장은 항상 있음)"
         mw.pr.layers = {}
         mw.recompute()
         # 한 프레임만 고치면 앞뒤로 서서히 원래 값으로 돌아간다 (맥스 바이패드 레이어처럼). 레이어가 골라져 있으면 기록 체크 없이도 레이어 키, 원본 상태면 본별 보정
@@ -524,17 +521,31 @@ def test_full_flow():
         assert ik.chain.count() >= 2, "체인 목록"
         lab = ik.chain.itemData(0)
         T_ = mw.pr.anim.n_frames
-        ik.a.setValue(3)
-        ik.b.setValue(7)
-        ik.add(True)
-        assert mw.pr.settings.ik_ranges[mw.pr.clip][lab] == [[2, 6, True]], mw.pr.settings.ik_ranges
-        ik.a.setValue(5)
-        ik.b.setValue(9)
-        ik.add(False)
-        assert mw.pr.settings.ik_ranges[mw.pr.clip][lab] == [[2, 4, True], [4 + 0, 8, False]] or mw.pr.settings.ik_ranges[mw.pr.clip][lab][-1][2] is False
+        mw.frame_slider.setValue(2)
+        mw.viewport.frame = 2
+        ik.toggle(True)
+        assert ik._pending is not None and "여기까지" in ik.b_on.text() and "여기서부터" in ik.b_off.text(), "첫 번째 누름 = 시작만 찍음"
+        assert not mw.pr.settings.ik_ranges, "아직 구간 없음"
+        mw.frame_slider.setValue(6)
+        mw.viewport.frame = 6
+        ik.toggle(True)
+        assert ik._pending is None and mw.pr.settings.ik_ranges[mw.pr.clip][lab] == [[2, 6, True]], mw.pr.settings.ik_ranges
+        # 끝 프레임이 시작보다 앞이어도 순서를 바로잡고, 다른 버튼을 누르면 새로 시작 / 취소
+        mw.frame_slider.setValue(8)
+        mw.viewport.frame = 8
+        ik.toggle(False)
+        ik.toggle(True)
+        assert ik._pending[0] is True, "다른 쪽 버튼 = 새로 시작"
+        ik.cancel()
+        assert ik._pending is None
+        ik.toggle(False)
+        mw.frame_slider.setValue(4)
+        mw.viewport.frame = 4
+        ik.toggle(False)
+        assert mw.pr.settings.ik_ranges[mw.pr.clip][lab][-1][2] is False
         mw.recompute()
         pl = [p for c, p in zip(mw.pr.result.chains, mw.pr.result.plans) if c.label == lab][0]
-        assert pl.contact[2:4].all() and not pl.contact[4:9].any(), "직접 지정이 접지에 반영"
+        assert pl.contact[2:4].all() and not pl.contact[4:9].any(), "직접 지정이 접지에 반영: %s" % pl.contact[:12]
         assert ik.lst.count() == 2
         ik.clear_chain()
         mw.recompute()

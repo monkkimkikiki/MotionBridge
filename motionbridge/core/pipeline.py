@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import animops, autoflat, bridge, biped, frameedit, layout, maxbones, maxrun, motionfx, safesave, export as X
+from . import animops, bridge, biped, frameedit, layout, maxbones, maxrun, motionfx, safesave, export as X
 from .layers import LayerStack, apply_layers
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
@@ -222,19 +222,6 @@ class Project:
         """클립 ci(기본: 현재 클립)의 보정 레이어 묶음 (없으면 만든다)."""
         ci = self.clip if ci is None else ci
         return self.layers.setdefault(ci, LayerStack())
-
-    def auto_flatten(self, sigma: float = 2.5):
-        """IK 접지 구간의 다리 회전 떨림을 평탄화한 새 레이어를 현재 상태 위에 쌓는다. (레이어 또는 None, 한국어 요약)"""
-        if not self.ready():
-            return None, "소스 모션과 타깃 모델을 열고 본을 연결한 뒤에 쓸 수 있습니다."
-        if self.settings.fx_mirror:
-            return None, "좌우 반전이 켜져 있으면 접지 구간이 반전 전 기준이라 평탄화할 수 없습니다. 반전을 끄고 평탄화한 뒤 다시 켜세요."
-        res = self.run(analyze_quality=False)
-        lay, msg = autoflat.flatten_layer(res.anim, res.chains, res.plans, sigma)
-        if lay is not None:
-            self.layer_stack().push(lay)
-            self.result = None
-        return lay, msg
 
     def save_layers(self, path: str, ci: Optional[int] = None) -> None:
         names = self.tgt.skeleton.names if self.tgt else []

@@ -56,17 +56,6 @@ class LayerPanel(CollapsibleBox):
             b.clicked.connect(lambda _c=False, f=fn: f())
             row.addWidget(b)
         v.addLayout(row)
-        fr = QHBoxLayout()
-        self.btn_flat = QPushButton("🧹 IK 접지 구간 자동 평탄화")
-        self.btn_flat.setToolTip("발이 땅에 닿아 IK 가 잡고 있는 구간의 다리 회전 떨림을 규칙 기반으로 부드럽게 만드는 새 레이어를 만듭니다. "
-                                 "(AI 모델이 아니라 규칙 계산입니다.) 새 레이어라서 목록에서 '원본'이나 이전 줄을 고르면 바로 원복됩니다.")
-        self.btn_flat.clicked.connect(lambda _c=False: self.auto_flatten())
-        fr.addWidget(self.btn_flat)
-        fr.addWidget(QLabel("세기"))
-        self.flat_strength = NumField(0.5, 6.0, 0.25, 2.5, 2, slider=False)
-        self.flat_strength.setToolTip("클수록 더 많이 펴집니다 (가우시안 폭, 프레임 단위). 기본 2.5")
-        fr.addWidget(self.flat_strength)
-        v.addLayout(fr)
         wr = QHBoxLayout()
         wr.addWidget(QLabel("가중치"))
         self.weight = NumField(0.0, 1.0, 0.05, 1.0, 2)
@@ -221,7 +210,6 @@ class LayerPanel(CollapsibleBox):
             self.weight.setEnabled(cur is not None)
             self.fade.set_value(cur.fade if cur else 8)
             self.fade.setEnabled(cur is not None)
-            self.btn_flat.setEnabled(self.app.pr.ready())
             self.sync_range()
         finally:
             self._busy = False
@@ -340,7 +328,7 @@ class LayerPanel(CollapsibleBox):
                 self.app.set_bone_tool("rotate")
             self.app.statusBar().showMessage("키 기록 켜짐 — 프레임을 고르고 본을 끌어 보세요" if self.layer() is not None else "레이어를 고르거나 '＋ 새 레이어'를 만들면 그 레이어에 기록됩니다")
 
-    # ---- 합치기 · 자동 평탄화
+    # ---- 합치기
     def _T(self) -> int:
         a = self.app.pr.anim if self.app.pr.src is not None else None
         return int(a.n_frames) if a is not None else 0
@@ -372,15 +360,6 @@ class LayerPanel(CollapsibleBox):
             self.app.statusBar().showMessage("지금 보이는 레이어가 둘 이상이어야 합칠 수 있어요")
             return
         self._merge(0, st.top - 1)
-
-    def auto_flatten(self) -> None:
-        if not self.app.pr.ready():
-            self.app.statusBar().showMessage("소스 모션과 타깃 모델을 열고 본을 연결해야 합니다")
-            return
-        lay, msg = self.app.pr.auto_flatten(float(self.flat_strength.value()))
-        self._msg = msg
-        self.app.statusBar().showMessage(msg.splitlines()[0] if msg else "")
-        self._changed()
 
     # ---- 키 조작
     def _targets(self) -> list:

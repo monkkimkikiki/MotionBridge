@@ -306,71 +306,6 @@ def test_curve_drag():
     print("curve drag OK")
 
 
-def test_auto_flatten():
-    """접지 구간의 회전 떨림을 새 레이어로 평탄화한다: 떨림이 줄고, 접지 밖은 그대로이며, 레이어를 끄면 원래대로."""
-    from motionbridge.core import autoflat
-    with tempfile.TemporaryDirectory() as d:
-        pr = project(d)
-        res = pr.run(0)
-        assert res.plans and any(p.contact.any() for p in res.plans), "시험 데이터에 접지 구간이 있어야 한다"
-        # 접지 구간의 다리 관절에 잔떨림을 얹어 둔다 (IK 전환 톱니 흉내)
-        rng = np.random.default_rng(3)
-        noisy = res.anim.copy()
-        ch = res.chains[0]
-        pl = res.plans[0]
-        idx = np.where(pl.contact)[0]
-        for j in (ch.upper, ch.lower, ch.foot):
-            n = Q.from_axis_angle(np.array([1.0, 0, 0]), np.radians(rng.normal(scale=3.0, size=len(idx))))
-            noisy.rot[idx, j] = Q.mul(n, noisy.rot[idx, j])
-        lay, msg = autoflat.flatten_layer(noisy, res.chains, res.plans, sigma=2.5)
-        assert lay is not None and "감소" in msg, msg
-        a, b = int(idx.min()), int(idx.max())
-        from motionbridge.core.layers import LayerStack, apply_layers
-        st = LayerStack()
-        st.layers.append(lay)
-        st.top = 1
-        flat = apply_layers(noisy, st)
-        for j in (ch.upper, ch.lower, ch.foot):
-            assert autoflat.jitter(flat.rot[:, j], a, b) < 0.6 * autoflat.jitter(noisy.rot[:, j], a, b), (j,)
-        # 접지 구간 밖(여유 프레임 바깥)은 변하지 않는다
-        far = np.ones(noisy.n_frames, bool)
-        for p in res.plans:
-            for aa, bb in autoflat._runs(p.contact):
-                far[max(0, aa - 4):bb + 5] = False
-        if far.any():
-            assert np.allclose(flat.rot[far], noisy.rot[far], atol=1e-9)
-        assert lay.n_keys() < noisy.n_frames * 3 * len(res.plans), "모든 프레임에 키를 찍지 않는다"
-        # 레이어를 끄면 원래대로
-        lay.mute = True
-        assert apply_layers(noisy, st) is noisy
-        # 접지 구간이 없으면 안내
-        none_plans = [type("P", (), {"contact": np.zeros(noisy.n_frames, bool)})() for _ in res.plans]
-        l2, m2 = autoflat.flatten_layer(noisy, res.chains, none_plans)
-        assert l2 is None and "없" in m2
-        # 이미 매끄러운 모션이면 바꿀 게 없다고 알려 준다
-        l3, m3 = autoflat.flatten_layer(res.anim, res.chains, res.plans, sigma=2.5)
-        assert (l3 is None and "이미" in m3) or l3 is not None
-    print("auto flatten OK")
-
-
-def test_project_auto_flatten():
-    with tempfile.TemporaryDirectory() as d:
-        pr = project(d)
-        rng = np.random.default_rng(5)
-        res = pr.run(0)
-        # 잔떨림을 리타겟 결과 대신 소스에 심을 수 없으니, 설정으로는 평탄화할 게 있는지만 본다 (없거나 있거나 둘 다 정상 응답)
-        lay, msg = pr.auto_flatten(2.5)
-        assert isinstance(msg, str) and msg
-        if lay is not None:
-            st = pr.layer_stack()
-            assert st.layers[-1] is lay and st.top == len(st) and pr.run(0).base_anim is not None
-        pr.settings.fx_mirror = True
-        l2, m2 = pr.auto_flatten()
-        assert l2 is None and "반전" in m2
-    print("project auto flatten OK")
-
-
-# ------------------------------------------------------------------- 후처리
 def test_spikes_smooth_parts():
     with tempfile.TemporaryDirectory() as d:
         pr = project(d)
@@ -509,8 +444,6 @@ if __name__ == "__main__":
     test_stack_states()
     test_merge()
     test_curve_drag()
-    test_auto_flatten()
-    test_project_auto_flatten()
     test_spikes_smooth_parts()
     test_mirror()
     test_profile_keeps_fx()
