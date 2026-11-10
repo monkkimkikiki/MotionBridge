@@ -97,6 +97,8 @@ class ChainPlan:
     leg_length: float = 0.0
     auto_contact: Optional[np.ndarray] = None  # 직접 지정한 구간을 반영하기 전, 자동으로 판정한 접지 (T,) bool
     applied: bool = False  # 이 체인에 IK 가 실제로 적용됐는가 (꺼져 있거나 손이 바닥에 안 닿으면 False — 뷰포트 IK 표시도 이때는 그리지 않는다)
+    knee_stable_frames: int = 0   # 무릎 방향 고정이 실제로 방향을 바꾼 프레임 수 (화면 표시용)
+    knee_fold_frames: int = 0     # 접힘 방지가 발 위치를 한계 지점으로 당긴 프레임 수
 
 
 @dataclass
@@ -180,6 +182,12 @@ def stable_pole(A, B, C, Rref, pole_fallback=(0.0, 0.0, 1.0), lo=0.015, hi=0.05)
     return Q.rotate(Rref, filled), rel
 
 
+def fold_reach(l1: float, l2: float, min_fold_deg: float) -> float:
+    """무릎 안쪽 각도가 min_fold_deg 보다 작아지지 않는 가장 가까운 발 거리."""
+    fold = np.radians(min_fold_deg)
+    return max(abs(l1 - l2) * 1.0001 + 1e-6, float(np.sqrt(max(l1 * l1 + l2 * l2 - 2 * l1 * l2 * np.cos(fold), 0.0))))
+
+
 def two_bone_ik(A, B, C, T, l1, l2, pole_fallback=(0.0, 0.0, 1.0), pole=None, pole_rel=None, min_fold_deg=20.0):
     """벡터화된 2본 IK. A(상단), B(중간), C(끝), T(목표) 모두 (N,3). 반환: B_new, C_new, 도달실패 마스크.
     pole(N,3)/pole_rel(N,) 을 주면 꺾임이 작은 프레임에서 무릎 방향을 pole 쪽으로 잡는다 (stable_pole)."""
@@ -188,8 +196,7 @@ def two_bone_ik(A, B, C, T, l1, l2, pole_fallback=(0.0, 0.0, 1.0), pole=None, po
     dirAT = AT / np.maximum(d, 1e-9)[:, None]
     reach_max = (l1 + l2) * 0.9999
     # 너무 접히는 것도 막는다: 무릎/팔꿈치 안쪽 각도가 min_fold_deg 보다 작아지지 않게 (발이 골반 바로 밑·안쪽으로 끌려와도 다리가 접혀 뒤집히지 않도록)
-    fold = np.radians(min_fold_deg)
-    reach_min = max(abs(l1 - l2) * 1.0001 + 1e-6, float(np.sqrt(max(l1 * l1 + l2 * l2 - 2 * l1 * l2 * np.cos(fold), 0.0))))
+    reach_min = fold_reach(l1, l2, min_fold_deg)
     dc = np.clip(d, reach_min, reach_max)
     fail = d > (l1 + l2) * 1.0005
     cur = B - A
@@ -643,8 +650,12 @@ def retarget(
             pole, prel = stable_pole(A, B, Cc, Rref)
             stab = float(np.clip(st.ik_knee_stable, 0.0, 100.0)) / 100.0
             prel = 1.0 - stab * (1.0 - prel)             # 0% 면 신뢰도 1 = 예전처럼 현재 자세의 방향만 쓴다
-            Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2, pole=pole, pole_rel=prel,
-                                       min_fold_deg=20.0 * float(np.clip(st.ik_knee_fold, 0.0, 100.0)) / 100.0)
+            mfd = 20.0 * float(np.clip(st.ik_knee_fold, 0.0, 100.0)) / 100.0
+            Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2, pole=pole, pole_rel=prel, min_fold_deg=mfd)
+            # 이 보정이 몇 프레임에 실제로 걸렸는지 (검수자가 '쓰이고 있나' 바로 볼 수 있게)
+            on_f = (pl.weight > 1e-9) | (float(np.clip(st.ik_follow, 0.0, 1.0)) > 0)
+            pl.knee_stable_frames = int((on_f & (prel < 0.98)).sum()) if stab > 0 else 0
+            pl.knee_fold_frames = int((on_f & (np.linalg.norm(pl.target - A, axis=1) < fold_reach(l1, l2, mfd))).sum()) if mfd > 0 else 0
             pl.fail = fail
             q1 = Q.between(B - A, Bn - A)
             Cpre = Bn + Q.rotate(q1, Cc - B)

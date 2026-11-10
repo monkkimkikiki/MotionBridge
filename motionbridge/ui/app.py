@@ -1392,6 +1392,11 @@ class MainWindow(QMainWindow):
                                                                     "100% = 항상 그쪽을 유지 (기본) · 50% = 반쯤 · 0% = 막지 않음 (원본 자세에서 읽은 방향 그대로. 몬스터처럼 무릎이 옆으로 꺾이는 모델은 낮추세요)"))
         f.addRow("무릎·팔꿈치 과하게 접힘 방지", self._num("ik_knee_fold", 0, 100, 5, 0, " %", tip="발이 골반 바로 아래·안쪽으로 끌려올 때 무릎이 완전히 접혀 뒤집히는 것을 막는 정도입니다.\n"
                                                                     "100% = 안쪽 각도 20° 아래로는 못 접힘 (기본) · 0% = 제한 없음"))
+        self.knee_status = QLabel("")
+        self.knee_status.setWordWrap(True)
+        self.knee_status.setStyleSheet("color:#ffdc50")
+        self.knee_status.setToolTip("위 두 보정이 이 클립에서 실제로 몇 프레임에 걸렸는지 보여 줍니다. 0 프레임이면 이 클립에서는 보정이 필요한 장면이 없어서 슬라이더를 바꿔도 달라지지 않습니다.")
+        f.addRow(self.knee_status)
         adv = CollapsibleBox("접지 판정 세부값 — 보통 건드릴 필요 없음")
         adv.setToolTip("발이 땅에 닿았는지 판정하는 기준과 골반 낮추기 한계입니다. 기본값으로 대부분 맞고, 발이 땅에서 뜨거나 미끄러지는 클립이 있을 때만 만져 보세요.")
         fa = QFormLayout(adv)
@@ -2616,6 +2621,30 @@ class MainWindow(QMainWindow):
         if not self._syncing:
             self.recompute_timer.start()
 
+    def _refresh_knee_status(self) -> None:
+        """무릎 보정 두 슬라이더 아래에 '이 클립에서 몇 프레임에 걸렸나'를 적는다."""
+        lab = getattr(self, "knee_status", None)
+        if lab is None:
+            return
+        res = self.pr.result
+        st = self.pr.settings
+        if res is None or not getattr(res, "plans", None):
+            lab.setText("")
+            return
+        lines = []
+        for c, pl in zip(res.chains, res.plans):
+            if c.kind != "foot" and not pl.applied:
+                continue
+            if not pl.applied:
+                continue
+            lines.append("%s: 방향 고정 %d프레임 · 접힘 방지 %d프레임" % (c.label, pl.knee_stable_frames, pl.knee_fold_frames))
+        if not lines:
+            lab.setText("지금 IK 가 적용된 다리/팔이 없어 무릎 보정도 쓰이지 않습니다 (IK 사용을 켜 보세요).")
+        else:
+            tot = sum(pl.knee_stable_frames + pl.knee_fold_frames for pl in res.plans if pl.applied)
+            lines.append("→ 지금 클립에서 보정이 걸린 프레임 수입니다." + ("" if tot else " 0 이면 이 클립엔 보정이 필요한 장면이 없다는 뜻이라 슬라이더를 바꿔도 달라지지 않아요."))
+            lab.setText("\n".join(lines))
+
     def recompute(self, reframe: bool = False, live: bool = False) -> None:
         """live=True: 본을 끄는 중의 가벼운 갱신 (품질 분석·목록/안내 갱신을 건너뛴다)."""
         err = None
@@ -2645,6 +2674,7 @@ class MainWindow(QMainWindow):
             self.layer_panel.refresh()
         if getattr(self, "ik_panel", None) is not None:
             self.ik_panel.refresh()
+        self._refresh_knee_status()
         self._update_info(err)
         self._update_quality()
         self._maybe_refresh_bone_ui()

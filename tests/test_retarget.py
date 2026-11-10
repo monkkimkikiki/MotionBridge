@@ -719,6 +719,13 @@ def test_ik_knee_direction_stable():
     r_off = setup(sc, tc, st=RetargetSettings(foot_ik=True, ik_knee_stable=0.0, ik_knee_fold=0.0))[3]
     r_half = setup(sc, tc, st=RetargetSettings(foot_ik=True, ik_knee_stable=50.0))[3]
     assert np.isfinite(r_on.anim.rot).all() and np.isfinite(r_off.anim.rot).all() and np.isfinite(r_half.anim.rot).all()
+    # 발이 골반 가까이 끌려오는 장면(바닥 높이를 크게 올림)에서: 접힘 방지 100% 는 프레임 수가 세어지고 결과가 0% 와 달라지며, 0% 는 0프레임
+    kw = dict(foot_ik=True, hip_drop=False, ground_offset=60.0)
+    f100 = setup(sc, tc, st=RetargetSettings(ik_knee_fold=100.0, **kw))[3]
+    f0 = setup(sc, tc, st=RetargetSettings(ik_knee_fold=0.0, **kw))[3]
+    n100 = sum(p.knee_fold_frames for p in f100.plans if p.applied)
+    assert n100 > 0 and sum(p.knee_fold_frames for p in f0.plans if p.applied) == 0, (n100,)
+    assert np.degrees(Q.angle_between(f100.anim.rot, f0.anim.rot)).max() > 1.0, "접힘 방지 % 가 결과에 반영돼야 함"
     print("ik knee direction OK")
 
 
