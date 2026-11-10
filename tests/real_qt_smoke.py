@@ -205,6 +205,7 @@ with tempfile.TemporaryDirectory() as d:
     mw.cb_bone_edit.setChecked(True)
     jt0 = sorted(mw.viewport.pickable)[0]
     mw._bone_picked(jt0)
+    lp.rec.setChecked(False)
     lp.rec.setChecked(True)
     check(lp.recording() and mw.viewport.bone_tool == "rotate", "키 기록 켜기 -> 회전 도구")
     mw.frame_slider.setValue(5)

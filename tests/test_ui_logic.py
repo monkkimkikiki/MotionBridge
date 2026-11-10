@@ -430,23 +430,55 @@ def test_full_flow():
         assert abs(float(cv.final[ch0][f0]) - want) < 0.6, (float(cv.final[ch0][f0]), want)
         cv.release()
         n_keys = len(lp.layer().frames(jt))
-        cv.press_at(float(gm.x_of(8)), 40.0, double=True)
-        assert 8 in lp.layer().frames(jt) and len(lp.layer().frames(jt)) == n_keys + 1, "더블클릭 = 키 추가"
+        fa = next(f for f in range(cv.T) if f not in lp.layer().frames(jt) and f > 2)
+        cv.press_at(float(gm.x_of(fa)), 40.0, double=True)
+        assert fa in lp.layer().frames(jt) and len(lp.layer().frames(jt)) == n_keys + 1, "더블클릭 = 키 추가"
         mw.recompute()
         ce.refresh()
         gm = cv.geom()
-        pt = [q for q in cv.key_points() if q[0] == 8][0]
-        cv.press_at(float(gm.x_of(8)), float(gm.y_of(pt[1])), right=True)
-        assert 8 not in lp.layer().frames(jt), "우클릭 = 키 삭제"
+        pt = [q for q in cv.key_points() if q[0] == fa][0]
+        cv.press_at(float(gm.x_of(fa)), float(gm.y_of(pt[1])), right=True)
+        assert fa not in lp.layer().frames(jt), "우클릭 = 키 삭제"
         lp._row_changed(0)
         mw.recompute()
         ce.refresh()
         assert cv.layer is None
-        cv.press_at(float(cv.geom().x_of(8)), 40.0, double=True)
+        cv.press_at(float(cv.geom().x_of(fa)), 40.0, double=True)
         assert cv.msg and not lp.stack().total_keys() == 0, "원본 상태에서는 키를 못 만들고 이유를 알려 준다"
         msg0 = lp._msg
         lp.auto_flatten()
         assert lp._msg and len(st) >= 1, "자동 평탄화 호출 (결과 문장은 항상 있음)"
+        mw.pr.layers = {}
+        mw.recompute()
+        # 한 프레임만 고치면 앞뒤로 서서히 원래 값으로 돌아간다 (맥스 바이패드 레이어처럼). 레이어가 골라져 있으면 기록 체크 없이도 레이어 키, 원본 상태면 본별 보정
+        mw.pr.layers = {}
+        mw.pr.settings.rot_offsets.clear()
+        mw.recompute()
+        base2 = mw.pr.result.anim.rot.copy()
+        Tn = base2.shape[0]
+        lp.rec.setChecked(True)                    # 기본값
+        lp.add_layer()
+        assert lp.recording(), "레이어를 고르면 기록은 자동"
+        fm = min(8, Tn - 1)
+        mw.frame_slider.setValue(fm)
+        mw.viewport.frame = fm
+        mw._bone_picked(jt)
+        mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(35.0)))
+        assert not mw.pr.settings.rot_offsets and lp.layer().frames(jt) == [fm], "레이어 키로 기록 (본별 보정은 그대로)"
+        mw.recompute()
+        ch = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt]))
+        assert ch[fm] > 20, ch[fm]
+        far = [f for f in range(Tn) if abs(f - fm) >= 9]
+        assert far and all(ch[f] < 1e-6 for f in far), "퍼짐 구간 밖은 원래 각도"
+        lp.fade.set_value(0.0)
+        lp._fade_changed(0.0)
+        mw.recompute()
+        ch0 = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt]))
+        assert all(abs(ch0[f] - ch0[fm]) < 1e-6 for f in range(Tn)), "퍼짐 0 이면 끝 키 값을 계속 유지"
+        lp._row_changed(0)                                        # 원본 상태: 본 편집은 전체 구간 보정으로
+        mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(10.0)))
+        assert jt in mw.pr.settings.rot_offsets and not lp.recording()
+        mw._bone_reset_selected()
         mw.pr.layers = {}
         mw.recompute()
         # 끄는 동안 실시간 갱신: 가벼운 계산을 바로 하고(품질 분석 생략), 손을 놓으면 전체 계산이 이어진다

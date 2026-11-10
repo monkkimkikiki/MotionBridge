@@ -70,8 +70,18 @@ class LayerPanel(CollapsibleBox):
         self.weight.changed.connect(self._weight_changed)
         wr.addWidget(self.weight, 1)
         v.addLayout(wr)
-        self.rec = QCheckBox("🔴 뷰포트에서 끌면 이 레이어에 키로 기록")
-        self.rec.setToolTip("켜면 본 편집의 이동/회전이 '본별 보정(전체 구간)' 대신 이 레이어의 현재 프레임 키로 기록됩니다. 크기(R)는 레이어에 기록되지 않습니다.")
+        fd = QHBoxLayout()
+        fd.addWidget(QLabel("퍼짐(프레임)"))
+        self.fade = NumField(0, 60, 1, 8, 0, slider=False)
+        self.fade.setToolTip("첫 키 앞/마지막 키 뒤에서 변화가 원래 값으로 돌아가는 데 걸리는 프레임 수 (맥스 바이패드 레이어처럼 한 프레임만 고치면 앞뒤로 서서히 사라집니다).\n"
+                             "0 = 끝 키 값을 계속 유지. 앞뒤에 키를 직접 찍어 두면 그 사이만 블렌드되고 바깥은 퍼짐 규칙을 따릅니다.")
+        self.fade.changed.connect(self._fade_changed)
+        fd.addWidget(self.fade, 1)
+        v.addLayout(fd)
+        self.rec = QCheckBox("🔴 레이어를 고른 동안 본 편집을 이 레이어의 키로 기록 (끄면 전체 구간 '본별 보정'으로 들어가며 레이어가 아닙니다)")
+        self.rec.setChecked(True)
+        self.rec.setToolTip("켜 두면, 레이어가 선택된 상태에서 뷰포트로 본을 돌리거나 옮길 때 현재 프레임에 키가 찍히고 앞뒤로 블렌드됩니다.\n"
+                            "'원본' 줄이 선택돼 있거나 레이어가 없으면 전체 구간 '본별 보정'에 기록됩니다 (레이어를 꺼도 남는 값). 크기(R)는 레이어에 기록되지 않습니다.")
         self.rec.toggled.connect(self._rec_toggled)
         v.addWidget(self.rec)
         row = QHBoxLayout()
@@ -105,7 +115,14 @@ class LayerPanel(CollapsibleBox):
         return self.stack().current()
 
     def recording(self) -> bool:
-        return bool(self.rec.isChecked())
+        """본 편집을 레이어 키로 기록할지: 레이어가 골라져 있고 기록이 켜져 있을 때."""
+        return bool(self.rec.isChecked()) and self.stack().current() is not None
+
+    def note_base_edit(self) -> None:
+        """본 편집이 레이어가 아닌 '본별 보정'으로 들어갈 때 알려 준다 (레이어를 꺼도 남기 때문에 헷갈리기 쉽다)."""
+        st = self.stack()
+        if len(st):
+            self._warn("⚠ 이 편집은 레이어가 아닌 '본별 보정'(전체 구간)에 기록됩니다. 레이어에 기록하려면 목록에서 레이어를 고르고 🔴 기록을 켜세요.")
 
     def _frame(self) -> int:
         return int(self.app.viewport.frame)
@@ -138,6 +155,8 @@ class LayerPanel(CollapsibleBox):
             cur = st.current()
             self.weight.set_value(cur.weight if cur else 1.0)
             self.weight.setEnabled(cur is not None)
+            self.fade.set_value(cur.fade if cur else 8)
+            self.fade.setEnabled(cur is not None)
             self.btn_flat.setEnabled(self.app.pr.ready())
         finally:
             self._busy = False
@@ -150,6 +169,8 @@ class LayerPanel(CollapsibleBox):
                 " · 내보내기도 이 상태로 나갑니다.")
         if st.top < len(st.layers):
             head += " (위쪽 %d개는 잠시 숨김)" % (len(st.layers) - st.top)
+        head += "\n본 편집 기록 위치: " + ("레이어 '%s' 의 키 (프레임별, 앞뒤로 블렌드)" % cur.name if self.recording() else
+                                            "전체 구간 '본별 보정' — 레이어가 아니라서 레이어를 꺼도 남습니다")
         if self._msg:
             head += "\n" + self._msg
         if cur is None:
@@ -238,15 +259,21 @@ class LayerPanel(CollapsibleBox):
             self.refresh()
             self.app.schedule()
 
+    def _fade_changed(self, v: float) -> None:
+        if self._busy:
+            return
+        cur = self.layer()
+        if cur is not None:
+            cur.fade = int(round(v))
+            self.app.schedule()
+
     def _rec_toggled(self, on: bool) -> None:
         if on:
-            if self.layer() is None:
-                self.add_layer()
             if not self.app.cb_bone_edit.isChecked():
                 self.app.cb_bone_edit.setChecked(True)
             if self.app.viewport.bone_tool in ("select", "scale"):
                 self.app.set_bone_tool("rotate")
-            self.app.statusBar().showMessage("키 기록 켜짐 — 프레임을 고르고 본을 끌어 보세요")
+            self.app.statusBar().showMessage("키 기록 켜짐 — 프레임을 고르고 본을 끌어 보세요" if self.layer() is not None else "레이어를 고르거나 '＋ 새 레이어'를 만들면 그 레이어에 기록됩니다")
 
     # ---- 합치기 · 자동 평탄화
     def _T(self) -> int:

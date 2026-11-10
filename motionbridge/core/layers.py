@@ -18,6 +18,7 @@ from . import quat as Q
 from .model import Animation
 
 _ID = np.array([1.0, 0.0, 0.0, 0.0])
+DEFAULT_FADE = 8        # 새 레이어: 첫/마지막 키 밖에서 변화가 원래 값으로 되돌아가는 데 걸리는 프레임 수 (0 = 끝 키 값을 계속 유지)
 
 
 @dataclass
@@ -35,6 +36,7 @@ class Layer:
     weight: float = 1.0
     mute: bool = False
     keys: Dict[int, Dict[int, Key]] = field(default_factory=dict)   # 관절 -> 프레임 -> 키
+    fade: int = DEFAULT_FADE
 
     # ---- 키 편집
     def set_key(self, j: int, f: int, rot: Optional[np.ndarray] = None, pos: Optional[np.ndarray] = None) -> Key:
@@ -92,22 +94,34 @@ class Layer:
         qs = [d[f].rot for f in fr]
         ps = [d[f].pos for f in fr]
         t = np.arange(T)
+        arr = np.array(fr)
         if len(fr) == 1:
             rot[:] = qs[0]
             pos[:] = ps[0]
-            return rot, pos
-        arr = np.array(fr)
-        idx = np.clip(np.searchsorted(arr, t, side="right") - 1, 0, len(fr) - 2)
-        f0, f1 = arr[idx], arr[idx + 1]
-        u = np.clip((t - f0) / np.maximum(f1 - f0, 1), 0.0, 1.0)
-        qa, qb = np.array(qs)[idx], np.array(qs)[idx + 1]
-        rot = Q.slerp(qa, qb, u)
-        pa, pb = np.array(ps)[idx], np.array(ps)[idx + 1]
-        pos = pa + (pb - pa) * u[:, None]
-        rot[t <= arr[0]] = qs[0]                    # 첫 키 앞/마지막 키 뒤는 값을 유지
-        pos[t <= arr[0]] = ps[0]
-        rot[t >= arr[-1]] = qs[-1]
-        pos[t >= arr[-1]] = ps[-1]
+        else:
+            idx = np.clip(np.searchsorted(arr, t, side="right") - 1, 0, len(fr) - 2)
+            f0, f1 = arr[idx], arr[idx + 1]
+            u = np.clip((t - f0) / np.maximum(f1 - f0, 1), 0.0, 1.0)
+            qa, qb = np.array(qs)[idx], np.array(qs)[idx + 1]
+            rot = Q.slerp(qa, qb, u)
+            pa, pb = np.array(ps)[idx], np.array(ps)[idx + 1]
+            pos = pa + (pb - pa) * u[:, None]
+            rot[t <= arr[0]] = qs[0]
+            pos[t <= arr[0]] = ps[0]
+            rot[t >= arr[-1]] = qs[-1]
+            pos[t >= arr[-1]] = ps[-1]
+        # 첫 키 앞/마지막 키 뒤: fade 프레임에 걸쳐 원래 값(변화 없음)으로 부드럽게 돌아간다 (fade=0 이면 끝 키 값을 계속 유지)
+        n = max(int(self.fade), 0)
+        if n > 0:
+            for lo_side, edge, q_e, p_e in ((True, arr[0], qs[0], ps[0]), (False, arr[-1], qs[-1], ps[-1])):
+                dist = (edge - t) if lo_side else (t - edge)
+                m = dist > 0
+                if not m.any():
+                    continue
+                x = np.clip(dist[m] / float(n), 0.0, 1.0)
+                keep = 1.0 - x * x * (3 - 2 * x)                     # 1 -> 0 (smoothstep)
+                rot[m] = Q.slerp(np.repeat(_ID[None], int(m.sum()), axis=0), np.repeat(q_e[None], int(m.sum()), axis=0), keep)
+                pos[m] = p_e[None, :] * keep[:, None]
         return rot, pos
 
     def effective(self, j: int, T: int):
@@ -125,11 +139,11 @@ class Layer:
         for j, d in self.keys.items():
             if 0 <= j < len(names):
                 ks[names[j]] = [[int(f), [float(x) for x in k.rot], [float(x) for x in k.pos]] for f, k in sorted(d.items())]
-        return {"name": self.name, "weight": float(self.weight), "mute": bool(self.mute), "keys": ks}
+        return {"name": self.name, "weight": float(self.weight), "mute": bool(self.mute), "fade": int(self.fade), "keys": ks}
 
     @staticmethod
     def from_dict(d: dict, index: Dict[str, int], warns: Optional[List[str]] = None) -> "Layer":
-        lay = Layer(str(d.get("name", "레이어")), float(d.get("weight", 1.0)), bool(d.get("mute", False)))
+        lay = Layer(str(d.get("name", "레이어")), float(d.get("weight", 1.0)), bool(d.get("mute", False)), fade=int(d.get("fade", 0)))      # 예전 파일은 fade 가 없으면 끝 키 값 유지
         for nm, lst in (d.get("keys") or {}).items():
             if nm not in index:
                 if warns is not None:
@@ -151,7 +165,7 @@ def fit_keys(rot: np.ndarray, pos: np.ndarray, hint, tol_deg: float = 0.1, tol_p
     lo, hi = frames[0], frames[-1]
     tol_r = np.radians(tol_deg)
     for _ in range(max_keys):
-        tmp = Layer(keys={0: dict(keys)})
+        tmp = Layer(keys={0: dict(keys)}, fade=0)
         r, p = tmp.eval(0, T)
         er = Q.angle_between(r[lo:hi + 1], rot[lo:hi + 1])
         ep = np.linalg.norm(p[lo:hi + 1] - pos[lo:hi + 1], axis=1)
@@ -180,9 +194,12 @@ def combine_effective(layers: Sequence["Layer"], j: int, T: int):
 def merge_layers(layers: Sequence["Layer"], T: int, name: Optional[str] = None, tol_deg: float = 0.1, tol_pos: float = 1e-4) -> "Layer":
     """여러 레이어를 효과가 같은(허용 오차 안) 레이어 하나로 합친다. 가중치는 값에 구워 넣고 새 레이어의 가중치는 1.
     키는 원래 키 프레임에서 시작해 오차가 큰 곳에만 더 찍는다 (모든 프레임에 키를 찍지 않는다)."""
-    out = Layer(name or layers[0].name)
+    out = Layer(name or layers[0].name, fade=0)       # 퍼짐 구간까지 키로 구워 넣으므로 합친 레이어는 끝 값 유지(fade 0)로 충분하다
+    F = max([max(int(l.fade), 0) for l in layers] + [0])
     for j in sorted({j for l in layers for j in l.keys}):
         hint = sorted({f for l in layers for f in l.keys.get(j, {})})
+        if hint and F:
+            hint = sorted(set(hint) | {max(hint[0] - F, 0), min(hint[-1] + F, T - 1)})
         rot, pos = combine_effective(layers, j, T)
         ks = fit_keys(rot, pos, hint, tol_deg, tol_pos)
         if ks and not all(k.is_identity(1e-7) for k in ks.values()):
@@ -287,7 +304,7 @@ class LayerStack:
     def snapshot(self):
         """실행 취소용 상태 (순수 튜플 — 같은지 비교할 수 있다)."""
         return (self.top, tuple(
-            (l.name, float(l.weight), bool(l.mute),
+            (l.name, float(l.weight), bool(l.mute), int(l.fade),
              tuple((j, tuple((f, tuple(float(x) for x in k.rot), tuple(float(x) for x in k.pos)) for f, k in sorted(d.items())))
                    for j, d in sorted(l.keys.items())))
             for l in self.layers))
@@ -296,8 +313,8 @@ class LayerStack:
     def from_snapshot(snap) -> "LayerStack":
         st = LayerStack()
         top, layers = snap
-        for name, w, mute, joints in layers:
-            lay = Layer(name, w, mute)
+        for name, w, mute, fade, joints in layers:
+            lay = Layer(name, w, mute, fade=fade)
             for j, ks in joints:
                 lay.keys[j] = {f: Key(np.array(r, float), np.array(p, float)) for f, r, p in ks}
             st.layers.append(lay)

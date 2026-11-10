@@ -78,6 +78,7 @@ class RetargetSettings:
     # 모션빌더식 후처리 (core/motionfx): 부위별 모션 세기(부위 -> 0..1.5), 튀는 프레임 제거 기준(도, 0=끔), 부드럽게(프레임, 0=끔), 좌우 반전
     fx_parts: Dict[str, float] = field(default_factory=dict)
     fx_spike_deg: float = 0.0
+    fx_spike_len: int = 6        # 튀는 구간으로 볼 최대 프레임 수
     fx_smooth: float = 0.0
     fx_mirror: bool = False
 

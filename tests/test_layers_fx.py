@@ -9,9 +9,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 from motionbridge.core import motionfx
 from motionbridge.core import quat as Q
-from motionbridge.core.layers import Layer, LayerStack, apply_layers
+from motionbridge.core.layers import combine_effective, Layer, LayerStack, apply_layers
 from motionbridge.core.model import Animation, fk
 from motionbridge.core.pipeline import Project
+
+# 이 파일의 예전 시험들은 '끝 키 값 유지(fade 0)' 를 가정한다. 퍼짐(fade) 동작은 test_layer_fade / UI 시험이 따로 본다.
+_add_orig = LayerStack.add
+
+
+def _add_hold(self, name=None):
+    lay = _add_orig(self, name)
+    lay.fade = 0
+    return lay
+
+
+LayerStack.add = _add_hold
 import test_pipeline as TP
 
 
@@ -23,8 +35,47 @@ def project(d):
     return pr
 
 
+def test_layer_fade():
+    """키를 하나만 찍으면 그 프레임만 고쳐지고 앞뒤는 fade 프레임에 걸쳐 원래 값으로 돌아간다 (맥스 바이패드 레이어처럼)."""
+    X = np.array([1.0, 0, 0])
+    lay = Layer("a")                                 # 기본 fade
+    lay.set_key(3, 20, rot=Q.from_axis_angle(X, np.radians(30)))
+    r, _ = lay.eval(3, 60)
+    ang = np.degrees(Q.angle_between(r, np.tile(np.array([1.0, 0, 0, 0]), (60, 1))))
+    assert abs(ang[20] - 30) < 1e-6
+    assert ang[0] < 1e-6 and ang[60 - 1] < 1e-6 and ang[20 - 8] < 1e-6 and ang[20 + 8] < 1e-6, "fade 프레임 뒤에는 원래 값"
+    assert 0 < ang[24] < 30 and ang[22] > ang[24] > ang[27], "서서히 돌아감"
+    # 앞뒤에 키를 찍어 두면 그 사이만 블렌드되고, 20 이후는 원래 각도
+    lay2 = Layer("b")
+    lay2.set_key(3, 0, rot=np.array([1.0, 0, 0, 0]))
+    lay2.set_key(3, 40, rot=np.array([1.0, 0, 0, 0]))
+    lay2.set_key(3, 20, rot=Q.from_axis_angle(X, np.radians(30)))
+    r2, _ = lay2.eval(3, 60)
+    a2 = np.degrees(Q.angle_between(r2, np.tile(np.array([1.0, 0, 0, 0]), (60, 1))))
+    assert abs(a2[20] - 30) < 1e-6 and a2[0] < 1e-6 and a2[40] < 1e-6 and a2[55] < 1e-6 and 0 < a2[10] < 30
+    # 저장/실행취소 상태에 fade 가 들어간다
+    from motionbridge.core.layers import LayerStack
+    st = LayerStack()
+    st.push(lay)
+    lay.fade = 3
+    snap = st.snapshot()
+    assert LayerStack.from_snapshot(snap).layers[0].fade == 3
+    assert Layer.from_dict(lay.to_dict(["a"] * 5), {"a": 3}).fade == 3
+    assert Layer.from_dict({"name": "old", "keys": {}}, {}).fade == 0, "예전 파일은 끝 키 값 유지"
+    # 합쳐도 같은 모양 (퍼짐 구간까지 키로 구워 넣음)
+    from motionbridge.core.layers import merge_layers
+    lay.fade = 8
+    la = Layer("c")
+    la.set_key(3, 30, rot=Q.from_axis_angle(X, np.radians(20)))
+    m = merge_layers([lay, la], 60)
+    rm, _ = m.effective(3, 60)
+    rr, _ = combine_effective([lay, la], 3, 60)
+    assert float(np.max(Q.angle_between(rm, rr))) < np.radians(0.2), "합친 결과가 같아야 함"
+    print("layer fade OK")
+
+
 def test_layer_basics():
-    lay = Layer("a")
+    lay = Layer("a", fade=0)                      # fade 0 = 끝 키 값을 계속 유지
     lay.set_key(3, 10, rot=Q.from_axis_angle(np.array([1.0, 0, 0]), np.radians(40)))
     lay.set_key(3, 20, rot=Q.from_axis_angle(np.array([1.0, 0, 0]), np.radians(80)))
     r, p = lay.eval(3, 40)
@@ -306,6 +357,22 @@ def test_spikes_smooth_parts():
         a.rot[10, j] = Q.mul(Q.from_axis_angle(np.array([1.0, 0, 0]), np.radians(120)), a.rot[10, j])
         fixed, n = motionfx.remove_spikes(a, 40)
         assert n >= 1 and np.degrees(Q.angle_between(fixed.rot[10, j], base.rot[10, j])) < 10, n
+        # 여러 프레임 연속으로 이상한 각도로 꺾인 구간(IK 가 억지로 따라가며 생기는 것) — 앞뒤 정상 프레임 사이로 메운다
+        b = base.copy()
+        for f in (20, 21, 22, 23):
+            b.rot[f, j] = Q.mul(Q.from_axis_angle(np.array([0.0, 0, 1.0]), np.radians(70)), b.rot[f, j])
+        e0 = max(np.degrees(Q.angle_between(b.rot[f, j], base.rot[f, j])) for f in (20, 21, 22, 23))
+        fx4, n4 = motionfx.remove_spikes(b, 30, max_len=6)
+        e1 = max(np.degrees(Q.angle_between(fx4.rot[f, j], base.rot[f, j])) for f in (20, 21, 22, 23))
+        assert n4 >= 4 and e0 > 60 and e1 < 15, (n4, e0, e1)
+        fx_short, n_s = motionfx.remove_spikes(b, 30, max_len=2)
+        assert max(np.degrees(Q.angle_between(fx_short.rot[f, j], base.rot[f, j])) for f in (20, 21, 22, 23)) > 60, "최대 길이보다 긴 구간은 건드리지 않는다"
+        # 진짜 빠른 움직임(한쪽으로 계속 도는 것)은 그대로
+        q = base.copy()
+        for f in range(q.n_frames):
+            q.rot[f, j] = Q.mul(Q.from_axis_angle(np.array([0.0, 1.0, 0]), np.radians(12.0 * f)), base.rot[f, j])
+        same, n_same = motionfx.remove_spikes(q, 30, max_len=6)
+        assert n_same == 0 and np.allclose(same.rot, Q.make_continuous(Q.normalize(q.rot)), atol=1e-9), n_same
         sm = motionfx.smooth(a, 2.0)
         assert np.degrees(Q.angle_between(sm.rot[10, j], base.rot[10, j])) < np.degrees(Q.angle_between(a.rot[10, j], base.rot[10, j]))
         assert np.allclose(np.linalg.norm(sm.rot, axis=-1), 1.0)
@@ -410,6 +477,7 @@ def test_drag_to_key():
 if __name__ == "__main__":
     test_drag_to_key()
     test_layer_basics()
+    test_layer_fade()
     test_new_key_starts_from_visible_value()
     test_apply_non_destructive_and_fk()
     test_position_layer_and_export()

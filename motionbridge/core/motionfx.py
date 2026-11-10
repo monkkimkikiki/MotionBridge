@@ -55,27 +55,44 @@ def scale_parts(anim: Animation, skel: Skeleton, weights: Dict[str, float], tgt_
     return out
 
 
-def remove_spikes(anim: Animation, thresh_deg: float, passes: int = 2) -> Tuple[Animation, int]:
-    """한 프레임만 튀는 회전(앞뒤 프레임은 서로 비슷한데 혼자 thresh_deg 이상 벗어남)을 앞뒤의 중간값으로 바꾼다. (애니메이션, 고친 키 수)"""
+def remove_spikes(anim: Animation, thresh_deg: float, passes: int = 2, max_len: int = 6) -> Tuple[Animation, int]:
+    """튀는 구간 제거. 앞뒤의 정상 프레임(앵커)은 서로 비슷한데 그 사이 1~max_len 프레임이 앵커를 잇는 선(구면 보간)에서 thresh_deg 이상 벗어나 있으면
+    그 구간을 앵커 사이 보간 값으로 바꾼다 (진짜 빠른 움직임은 앵커끼리도 많이 달라서 건드리지 않는다). (애니메이션, 고친 키 수)
+    한 프레임짜리 모캡 튐뿐 아니라 IK 가 원래 동작을 억지로 따라가며 몇 프레임 동안 이상한 각도로 꺾이는 것도 잡는다."""
     out = anim.copy()
     if thresh_deg <= 0 or out.n_frames < 3:
         return out, 0
     th = np.radians(thresh_deg)
+    max_len = max(1, int(max_len))
     fixed = 0
     for _ in range(passes):
         r = Q.make_continuous(Q.normalize(out.rot))
-        mid = Q.slerp(r[:-2], r[2:], 0.5)
-        dev = Q.angle_between(r[1:-1], mid)             # (T-2, J)
-        side = Q.angle_between(r[:-2], r[2:])           # 앞뒤가 서로 얼마나 다른가 (진짜 빠른 움직임과 구분)
-        bad = (dev > th) & (side < 0.6 * dev)
-        n = int(bad.sum())
-        if n == 0:
-            out.rot = r
-            break
-        fixed += n
-        sel = r[1:-1]
-        sel[bad] = mid[bad]
+        T, J = r.shape[0], r.shape[1]
+        done = np.zeros((T, J), bool)
+        n_pass = 0
+        for L in range(1, min(max_len, T - 2) + 1):
+            S = T - L - 1                                   # 시작 프레임 s = 1 .. T-L-1
+            if S < 1:
+                break
+            ra, rb = r[0:S], r[L + 1:L + 1 + S]             # 앵커: s-1, s+L  (인덱스 s-1 = 0..S-1)
+            dev = np.zeros((S, J))
+            for k in range(L):
+                mid = Q.slerp(ra, rb, (k + 1.0) / (L + 1.0))
+                dev = np.maximum(dev, Q.angle_between(r[1 + k:1 + k + S], mid))
+            side = Q.angle_between(ra, rb)
+            bad = (dev > th) & (side < 0.6 * dev)
+            for si, j in zip(*np.nonzero(bad)):
+                s0 = int(si) + 1
+                if done[s0 - 1:s0 + L + 1, j].any():        # 이미 고친 구간과 겹치면 건너뜀 (앵커도 고친 프레임이면 믿을 수 없다)
+                    continue
+                u = ((np.arange(L) + 1.0) / (L + 1.0))
+                r[s0:s0 + L, j] = Q.slerp(np.repeat(r[s0 - 1, j][None], L, axis=0), np.repeat(r[s0 + L, j][None], L, axis=0), u)
+                done[s0:s0 + L, j] = True
+                n_pass += L
         out.rot = r
+        fixed += n_pass
+        if n_pass == 0:
+            break
     return out, fixed
 
 
@@ -175,7 +192,7 @@ def apply(res, skel: Skeleton, tgt_slots: Dict[str, int], st) -> None:
         res.warnings.append("ℹ 부위별 모션 세기: " + ", ".join("%s %d%%" % (PARTS[k][0], round(100 * float(v))) for k, v in parts.items()
                                                        if k in PARTS and abs(float(v) - 1.0) > 1e-6))
     if getattr(st, "fx_spike_deg", 0.0) > 0:
-        a, n = remove_spikes(a, float(st.fx_spike_deg))
+        a, n = remove_spikes(a, float(st.fx_spike_deg), max_len=int(getattr(st, "fx_spike_len", 6)))
         res.warnings.append("ℹ 튀는 프레임 제거: %d 곳을 앞뒤 값으로 고쳤습니다 (기준 %.0f°)" % (n, st.fx_spike_deg))
     if getattr(st, "fx_smooth", 0.0) > 0.05:
         a = smooth(a, float(st.fx_smooth))

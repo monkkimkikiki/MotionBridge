@@ -1387,15 +1387,23 @@ class MainWindow(QMainWindow):
         f.addRow("바닥 높이 보정", self._num("ground_offset", -50, 50, 0.1, 2, tip="타깃 단위. 발목 기준 바닥 높이를 올리거나 내림"))
         self.ground_field = self._fields["ground_offset"][0]
         f.addRow(self._chk("hip_drop", "다리가 모자라면 골반 낮추기"))
-        f.addRow("골반 최대 하강(다리 길이 비)", self._num("max_hip_drop", 0, 0.4, 0.01, 2))
-        f.addRow("접지 높이 임계(다리 길이 비)", self._num("contact_height", 0.005, 0.3, 0.005, 3))
-        f.addRow("접지 속도 임계(다리 길이/초)", self._num("contact_speed", 0.05, 3.0, 0.05, 2))
+        adv = CollapsibleBox("접지 판정 세부값 — 보통 건드릴 필요 없음")
+        adv.setToolTip("발이 땅에 닿았는지 판정하는 기준과 골반 낮추기 한계입니다. 기본값으로 대부분 맞고, 발이 땅에서 뜨거나 미끄러지는 클립이 있을 때만 만져 보세요.")
+        fa = QFormLayout(adv)
+        fa.addRow("골반 최대 하강(다리 길이 비)", self._num("max_hip_drop", 0, 0.4, 0.01, 2, tip="다리가 모자랄 때 골반을 낮출 수 있는 최대치"))
+        fa.addRow("접지 높이 임계(다리 길이 비)", self._num("contact_height", 0.005, 0.3, 0.005, 3, tip="소스 발이 가장 낮은 높이에서 이 비율 이내면 '땅에 닿음' 후보"))
+        fa.addRow("접지 속도 임계(다리 길이/초)", self._num("contact_speed", 0.05, 3.0, 0.05, 2, tip="발 속도가 이 값보다 느려야 '땅에 닿음'으로 판정"))
         bf = QSpinBox()
         bf.setRange(0, 16)
         bf.setValue(int(self.pr.settings.blend_frames))
         bf.valueChanged.connect(lambda v: self._set("blend_frames", int(v)))
         self._fields["blend_frames"] = (bf, False)
-        f.addRow("접지 전환 프레임", bf)
+        fa.addRow("접지 전환 프레임", bf)
+        f.addRow(adv)
+        try:
+            adv.set_collapsed(True, save=False)      # 처음에는 접어 둔다 (사용자가 펴 두면 그 상태를 기억)
+        except TypeError:                            # 시험용 가짜 Qt
+            pass
         lay.addWidget(g)
 
         g = CollapsibleBox("좌표축 (자동 인식이 틀릴 때만)")
@@ -1470,7 +1478,9 @@ class MainWindow(QMainWindow):
         f.addRow(self._chk("fx_mirror", "좌우 반전 (Mirror)", "모션을 거울처럼 뒤집습니다. 왼팔이 하던 동작을 오른팔이 하고 몸 전체가 반대로 움직입니다. 타깃 모델이 좌우 대칭이어야 해요.\n"
                            "※ 화면의 발 고정(IK) 표시와 소스 고스트는 반전 전 기준 그대로 보입니다."))
         f.addRow("부드럽게", self._num("fx_smooth", 0.0, 10.0, 0.5, 1, " 프레임", tip="떨리는 모션(AI 모캡 등)을 시간 방향으로 다듬습니다. 0 = 끔. 값이 클수록 부드럽지만 빠른 동작이 둔해지고 발 고정이 조금 미끄러질 수 있어요."))
-        f.addRow("튀는 프레임 제거", self._num("fx_spike_deg", 0.0, 180.0, 5.0, 0, " °", tip="한 프레임만 이 각도 이상 튀는 회전을 앞뒤 값으로 고칩니다 (모캡의 순간 튐). 0 = 끔. 보통 40~60° 에서 시작하세요."))
+        f.addRow("튀는 프레임 제거", self._num("fx_spike_deg", 0.0, 180.0, 5.0, 0, " °", tip="앞뒤 정상 프레임을 잇는 선에서 이 각도 이상 벗어나 튀는 구간(최대 아래 '튀는 구간 길이' 프레임)을 앞뒤 값으로 메웁니다. "
+                                                                                     "모캡의 순간 튐과, IK 가 원래 동작을 억지로 따라가다 몇 프레임 이상하게 꺾이는 것 둘 다 잡습니다. 0 = 끔. 처음엔 25~40° 로 시작해 보세요."))
+        f.addRow("튀는 구간 길이(프레임)", self._num("fx_spike_len", 1, 20, 1, 0, slider=False, tip="이 프레임 수까지 이어서 튀는 구간을 고칩니다. 동작이 원래 빠르면 짧게 두세요."))
         lb = QLabel("부위별 모션 세기 — 100% = 그대로, 0% = 기준 자세로 고정, 100% 초과 = 과장")
         lb.setWordWrap(True)
         lb.setStyleSheet("color:#8aa")
@@ -2482,6 +2492,7 @@ class MainWindow(QMainWindow):
         if self.layer_panel.recording():
             self.layer_panel.on_rot_drag(j, q_view)
             return
+        self.layer_panel.note_base_edit()
         st = self.pr.settings
         yaw = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
         d = Q.mul(Q.conj(yaw), Q.mul(np.asarray(q_view, float), yaw))
@@ -2512,6 +2523,7 @@ class MainWindow(QMainWindow):
         if self.layer_panel.recording():
             self.layer_panel.on_pos_drag(j, dview)
             return
+        self.layer_panel.note_base_edit()
         st = self.pr.settings
         dview = np.asarray(dview, dtype=float)
         vf = self._bone_view_frame()
