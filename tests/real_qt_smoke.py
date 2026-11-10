@@ -261,6 +261,18 @@ with tempfile.TemporaryDirectory() as d:
     app.processEvents()
     check(ikp._pending is None, "IK 구간 패널: 두 번 눌러 구간 지정")
     ikp.clear_chain()
+    # 화면 크기 조절: 뷰포트와 아래 줄 사이 / 모션 목록과 탭 사이를 끄는 줄 (진짜 Qt)
+    mw.vsplit.setSizes([420, 260])
+    app.processEvents()
+    h_top, h_bot = mw.vsplit.sizes()[:2]
+    check(mw.vsplit.count() == 2 and mw.viewport.height() >= 180 and mw.curve_editor.isVisibleTo(mw), "위아래 크기 조절 줄: 뷰포트 %d / 아래 %d" % (h_top, h_bot))
+    mw.vsplit.setSizes([300, 520])
+    mw._vsplit_moved()
+    check(0.1 <= mw.cfg.get("vsplit_bottom", 0) <= 0.85 and mw.vsplit.sizes()[1] > mw.vsplit.sizes()[0] * 0.9, "아래 영역을 키우면 비율이 저장됨 (%s)" % mw.cfg.get("vsplit_bottom"))
+    mw._left_split.setSizes([260, 700])
+    mw._left_split_moved()
+    check(mw.cfg.get("clip_panel_w", 0) >= 150 and mw.clip_panel.width() >= 150, "모션 목록 폭 조절 (%s)" % mw.cfg.get("clip_panel_w"))
+    mw.vsplit.setSizes([420, 260])
     # 왼쪽 모션 목록: 클립을 눌러 오가기 / 다른 모션 세팅 가져오기 / 빼기 (진짜 Qt 위젯)
     import copy as _cp
     cpn = mw.clip_panel

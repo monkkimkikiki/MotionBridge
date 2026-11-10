@@ -427,19 +427,31 @@ class MainWindow(QMainWindow):
         fit_widths(self.tabs)  # 좁은 패널에서 내용이 잘리지 않게
         # 왼쪽 끝: 리타겟 중인 모션 목록 (눌러서 오가며 작업 / 다른 모션 세팅 가져오기) + 그 오른쪽에 기존 탭
         self.clip_panel = ClipPanel(self)
-        self.clip_panel.setMinimumWidth(170)
-        self.clip_panel.setMaximumWidth(300)
-        left = QWidget()
-        ll = QHBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.setSpacing(0)
-        ll.addWidget(self.clip_panel)
-        ll.addWidget(self.tabs, 1)
+        self.clip_panel.setMinimumWidth(150)
+        left = QSplitter(Qt.Orientation.Horizontal)          # 모션 목록 폭도 끌어서 조절
+        left.addWidget(self.clip_panel)
+        left.addWidget(self.tabs)
+        try:
+            left.setStretchFactor(0, 0)
+            left.setStretchFactor(1, 1)
+            left.setCollapsible(1, False)
+            left.setSizes([int(self.cfg.get("clip_panel_w", 210)), 700])
+        except (TypeError, AttributeError):
+            pass
+        self._left_split = left
+        mv_ = getattr(left, "splitterMoved", None)
+        if mv_ is not None and hasattr(mv_, "connect"):
+            mv_.connect(self._left_split_moved)
         split.addWidget(left)
 
         right = QWidget()
         self.right_box = right
-        rl = QVBoxLayout(right)
+        outer = QVBoxLayout(right)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.vsplit = QSplitter(Qt.Orientation.Vertical)     # 위: 뷰포트 / 아래: 조절 줄·타임라인·곡선 그래프 — 사이 줄을 끌어서 크기 조절
+        outer.addWidget(self.vsplit)
+        top = QWidget()
+        rl = QVBoxLayout(top)
         rl.setContentsMargins(0, 0, 0, 0)
         self.viewport = Viewport()
         self.viewport.key_action.connect(self._viewport_key)
@@ -478,6 +490,25 @@ class MainWindow(QMainWindow):
         self.guide_box.setVisible(bool(self.cfg.get("show_guide", True)))
         rl.addWidget(self.guide_box)
         rl.addWidget(self.viewport, 1)
+        self.viewport.setMinimumHeight(180)
+        self.vsplit.addWidget(top)
+        bottom = QScrollArea()                               # 아래쪽은 좁아지면 스크롤
+        bottom.setWidgetResizable(True)
+        bw = QWidget()
+        rl = QVBoxLayout(bw)                                 # 이 아래 줄들(보기 옵션·본 편집·타임라인·곡선 그래프)은 아래쪽 영역에 쌓인다
+        rl.setContentsMargins(0, 0, 0, 0)
+        bottom.setWidget(bw)
+        self.vsplit.addWidget(bottom)
+        try:
+            self.vsplit.setStretchFactor(0, 1)
+            self.vsplit.setStretchFactor(1, 0)
+            self.vsplit.setCollapsible(0, False)
+            self.vsplit.setSizes([int(1000 * (1 - float(self.cfg.get("vsplit_bottom", 0.42)))), int(1000 * float(self.cfg.get("vsplit_bottom", 0.42)))])
+        except (TypeError, AttributeError, ValueError):
+            pass
+        mv2_ = getattr(self.vsplit, "splitterMoved", None)
+        if mv2_ is not None and hasattr(mv2_, "connect"):
+            mv2_.connect(self._vsplit_moved)
         opts = QHBoxLayout()
         self._view_checks: Dict[str, object] = {}
         for text, attr, default, key in (("뼈대", "show_bones", True, "bones"), ("소스 겹쳐 보기", "show_ghost", True, "ghost"),
@@ -689,6 +720,16 @@ class MainWindow(QMainWindow):
     def _apply_split_ratio(self) -> None:
         w = max(int(self._split.width()), 200)
         self._split.setSizes([int(w * self._split_ratio), w - int(w * self._split_ratio)])
+
+    def _vsplit_moved(self, *_a) -> None:
+        a, b = self.vsplit.sizes()[:2]
+        if a + b > 0 and b > 0:
+            self.cfg["vsplit_bottom"] = round(min(max(b / (a + b), 0.10), 0.85), 3)
+
+    def _left_split_moved(self, *_a) -> None:
+        a = self._left_split.sizes()[0]
+        if a > 0:
+            self.cfg["clip_panel_w"] = int(a)
 
     def _split_moved(self, *_a) -> None:
         if not getattr(self, "_split_applied", False):
