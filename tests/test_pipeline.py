@@ -1,4 +1,4 @@
-"""파이프라인/CLI 엔드투엔드: GLB 소스 + GLB 타깃 -> 리타깃 -> BVH/GLB/JSON/FBX(가짜 Blender) 내보내기."""
+"""파이프라인/CLI 엔드투엔드: GLB 소스 + GLB 타깃 -> 리타겟 -> BVH/GLB/JSON/FBX(가짜 Blender) 내보내기."""
 import io
 import json
 import os

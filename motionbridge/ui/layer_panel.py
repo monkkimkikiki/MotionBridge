@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from typing import Optional
 
+import numpy as np
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QVBoxLayout,
 )
 
-from ..core import layeredit
+from ..core import layeredit, rangeedit
+from ..core.layers import apply_layers
+from .viewer_math import subtree_mask
 from .widgets import CollapsibleBox, NumField
 
 TITLE = "보정 레이어 스택 — 키프레임으로 고치기 (원본은 그대로)"
@@ -23,8 +27,8 @@ class LayerPanel(CollapsibleBox):
         self._warned = ""
         self._msg = ""
         v = QVBoxLayout(self)
-        note = QLabel("리타깃 결과 위에 레이어를 차곡차곡 쌓습니다. 아래 목록에서 한 줄을 고르면 '그 레이어까지만 적용된 상태'가 화면·곡선·내보내기에 그대로 반영됩니다 "
-                      "('원본'을 고르면 레이어가 하나도 적용되지 않은 리타깃 결과). 위쪽 레이어는 지워지지 않고 회색으로 남아, 다시 고르면 돌아옵니다.")
+        note = QLabel("리타겟 결과 위에 레이어를 차곡차곡 쌓습니다. 아래 목록에서 한 줄을 고르면 '그 레이어까지만 적용된 상태'가 화면·곡선·내보내기에 그대로 반영됩니다 "
+                      "('원본'을 고르면 레이어가 하나도 적용되지 않은 리타겟 결과). 위쪽 레이어는 지워지지 않고 회색으로 남아, 다시 고르면 돌아옵니다.")
         note.setWordWrap(True)
         note.setStyleSheet("color:#8aa")
         v.addWidget(note)
@@ -84,16 +88,76 @@ class LayerPanel(CollapsibleBox):
                             "'원본' 줄이 선택돼 있거나 레이어가 없으면 전체 구간 '본별 보정'에 기록됩니다 (레이어를 꺼도 남는 값). 크기(R)는 레이어에 기록되지 않습니다.")
         self.rec.toggled.connect(self._rec_toggled)
         v.addWidget(self.rec)
+        # ---- 키 찍기 / 지우기
+        sc = QHBoxLayout()
+        sc.addWidget(QLabel("대상 본"))
+        self.scope = QComboBox()
+        for key, name in (("one", "선택한 본만"), ("tree", "선택한 본 + 아래 본 전부"), ("all", "모든 본")):
+            self.scope.addItem(name, key)
+        self.scope.setToolTip("아래 '키 찍기·지우기'와 '구간 편집'이 어느 본에 적용될지. 뷰포트나 본 목록에서 본을 먼저 고르세요.")
+        sc.addWidget(self.scope, 1)
+        v.addLayout(sc)
         row = QHBoxLayout()
-        for text, tip, fn in (("◀ 이전 키", "선택한 본의 이전 키 프레임으로", lambda: self.jump(-1)), ("다음 키 ▶", "선택한 본의 다음 키 프레임으로", lambda: self.jump(1)),
-                              ("지금 프레임에 키", "선택한 본에 지금 보이는 값 그대로 키를 찍습니다 (이 프레임을 고정할 때)", self.key_now),
-                              ("키 지우기", "선택한 본의 지금 프레임 키를 지웁니다", self.delete_key),
-                              ("이 본 키 전부 지우기", "이 레이어에서 선택한 본의 키를 모두 지웁니다", self.clear_joint)):
+        for text, tip, fn in (("◀ 이전 키", "선택한 본의 이전 키 프레임으로", lambda: self.jump(-1)), ("다음 키 ▶", "선택한 본의 다음 키 프레임으로", lambda: self.jump(1))):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _c=False, f=fn: f())
             row.addWidget(b)
         v.addLayout(row)
+        row = QHBoxLayout()
+        for text, tip, fn in (("🔑 지금 보이는 값으로 키", "지금 프레임에 '지금 보이는 모습 그대로' 키를 찍어 고정합니다 (앞뒤 키와 블렌드되기 전에 이 프레임을 못 박을 때)", self.key_now),
+                              ("🔑 아래 값으로 키 (원본 가져오기)", "지금 프레임의 키를 '이 레이어 아래 상태(원본)의 값'으로 찍습니다 = 변화 0.\n"
+                                                           "맥스처럼 0프레임에 원본 키를 찍고 → 10프레임에서 각도를 고치고 → 15프레임에 다시 원본 키를 찍으면 10프레임 주변만 바뀌고 나머지는 원본으로 돌아갑니다.", self.key_original)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _c=False, f=fn: f())
+            row.addWidget(b)
+        v.addLayout(row)
+        row = QHBoxLayout()
+        for text, tip, fn in (("키 지우기", "지금 프레임의 키를 지웁니다 (앞뒤 키 사이가 자동으로 이어져요)", self.delete_key),
+                              ("이 본 키 전부 지우기", "이 레이어에서 대상 본의 키를 모두 지웁니다", self.clear_joint)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _c=False, f=fn: f())
+            row.addWidget(b)
+        v.addLayout(row)
+        # ---- 구간 편집 (튀는 부분 정리)
+        lab = QLabel("구간 편집 — 튀거나 떨리는 부분 정리 (대상 본, 맨 위 레이어에 기록)")
+        lab.setStyleSheet("font-weight:600")
+        v.addWidget(lab)
+        rr = QHBoxLayout()
+        rr.addWidget(QLabel("프레임"))
+        self.rng_a = QSpinBox()
+        self.rng_a.setRange(1, 1)
+        self.rng_b = QSpinBox()
+        self.rng_b.setRange(1, 1)
+        rr.addWidget(self.rng_a)
+        bn = QPushButton("지금")
+        bn.setToolTip("지금 프레임을 구간 시작으로")
+        bn.clicked.connect(lambda _c=False: self.rng_a.setValue(self._frame() + 1))
+        rr.addWidget(bn)
+        rr.addWidget(QLabel("~"))
+        rr.addWidget(self.rng_b)
+        bn = QPushButton("지금")
+        bn.setToolTip("지금 프레임을 구간 끝으로")
+        bn.clicked.connect(lambda _c=False: self.rng_b.setValue(self._frame() + 1))
+        rr.addWidget(bn)
+        v.addLayout(rr)
+        rr = QHBoxLayout()
+        for text, tip, mode in (("🧽 지우고 블렌드", "이 구간의 프레임을 지우고, 바로 앞·뒤 프레임 값을 자연스럽게 이어서 채웁니다 (수치로 못 고치는 튀는 프레임 제거용)", "blend"),
+                                ("📏 일직선으로", "구간의 시작·끝 값은 그대로 두고 그 사이를 일직선으로 이어 흔들림을 없앱니다", "line"),
+                                ("〰 떨림 정리", "구간의 자글자글한 떨림만 펴고, 구간 앞뒤는 서서히 원래 값으로 이어 붙입니다", "smooth")):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _c=False, m=mode: self.range_action(m))
+            rr.addWidget(b)
+        v.addLayout(rr)
+        rr = QHBoxLayout()
+        rr.addWidget(QLabel("떨림 정리 세기"))
+        self.smooth_strength = NumField(0.5, 8.0, 0.5, 2.0, 1, slider=False)
+        self.smooth_strength.setToolTip("클수록 더 많이 펴집니다 (앞뒤 몇 프레임을 평균 낼지). 보통 2~3")
+        rr.addWidget(self.smooth_strength)
+        v.addLayout(rr)
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet("color:#ffdc50")
@@ -136,7 +200,7 @@ class LayerPanel(CollapsibleBox):
         try:
             st = self.stack()
             self.lst.clear()
-            it = QListWidgetItem("원본 (리타깃 결과 · 레이어 없음)")
+            it = QListWidgetItem("원본 (리타겟 결과 · 레이어 없음)")
             self.lst.addItem(it)
             for i, l in enumerate(st.layers):
                 it = QListWidgetItem("%d. %s  (키 %d · 가중치 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight))
@@ -158,6 +222,7 @@ class LayerPanel(CollapsibleBox):
             self.fade.set_value(cur.fade if cur else 8)
             self.fade.setEnabled(cur is not None)
             self.btn_flat.setEnabled(self.app.pr.ready())
+            self.sync_range()
         finally:
             self._busy = False
         self._update_info()
@@ -277,7 +342,7 @@ class LayerPanel(CollapsibleBox):
 
     # ---- 합치기 · 자동 평탄화
     def _T(self) -> int:
-        a = self.app.pr.anim
+        a = self.app.pr.anim if self.app.pr.src is not None else None
         return int(a.n_frames) if a is not None else 0
 
     def _merge(self, a: int, b: int) -> None:
@@ -318,25 +383,98 @@ class LayerPanel(CollapsibleBox):
         self._changed()
 
     # ---- 키 조작
-    def key_now(self) -> None:
-        cur, j = self.layer(), self._joint()
+    def _targets(self) -> list:
+        """'대상 본' 설정에 따른 본 번호 목록."""
+        pr = self.app.pr
+        if pr.tgt is None:
+            return []
+        kind = self.scope.currentData() or "one"
+        j = self._joint()
+        if kind == "all":
+            pk = getattr(self.app.viewport, "pickable", None)
+            return sorted(int(x) for x in pk) if pk else list(range(pr.tgt.skeleton.n))
+        if j is None:
+            return []
+        if kind == "tree":
+            return [int(x) for x in np.flatnonzero(subtree_mask(pr.tgt.skeleton.parents, j))]
+        return [j]
+
+    def _need_targets(self):
+        cur, js = self.layer(), self._targets()
         why = layeredit.editable(cur)
-        if why or j is None:
-            self.app.statusBar().showMessage(why or "먼저 본을 고르세요")
+        if why or not js:
+            self.app.statusBar().showMessage(why or "먼저 본을 고르세요 (뷰포트의 점 또는 본 목록)")
+            return None, []
+        return cur, js
+
+    def key_now(self) -> None:
+        cur, js = self._need_targets()
+        if cur is None:
             return
-        cur.set_key(j, self._frame())
+        for j in js:
+            cur.set_key(j, self._frame())
+        self._msg = "지금 보이는 값으로 키 %d개를 찍었습니다 (프레임 %d)." % (len(js), self._frame() + 1)
+        self._changed()
+
+    def key_original(self) -> None:
+        """지금 프레임의 키를 '이 레이어 아래 상태(원본)의 값' = 변화 0 으로 찍는다."""
+        cur, js = self._need_targets()
+        if cur is None:
+            return
+        for j in js:
+            cur.set_key(j, self._frame(), rot=np.array([1.0, 0.0, 0.0, 0.0]), pos=np.zeros(3))
+        self._msg = "아래 값(원본)으로 키 %d개를 찍었습니다 (프레임 %d)." % (len(js), self._frame() + 1)
         self._changed()
 
     def delete_key(self) -> None:
-        cur, j = self.layer(), self._joint()
-        if cur is not None and j is not None and cur.remove_key(j, self._frame()):
+        cur, js = self.layer(), self._targets()
+        n = sum(1 for j in js if cur is not None and cur.remove_key(j, self._frame()))
+        if n:
             self._changed()
 
     def clear_joint(self) -> None:
-        cur, j = self.layer(), self._joint()
-        if cur is not None and j is not None and cur.frames(j):
-            cur.clear_joint(j)
+        cur, js = self.layer(), self._targets()
+        n = 0
+        for j in js:
+            if cur is not None and cur.frames(j):
+                cur.clear_joint(j)
+                n += 1
+        if n:
             self._changed()
+
+    # ---- 구간 편집
+    def sync_range(self) -> None:
+        T = max(self._T(), 1)
+        self.rng_a.setRange(1, T)
+        self.rng_b.setRange(1, T)
+
+    def range_action(self, mode: str, a: Optional[int] = None, b: Optional[int] = None) -> None:
+        """대상 본의 프레임 구간(a..b, 0부터)을 mode(blend/line/smooth)대로 고친다. 레이어가 없으면 새로 만든다."""
+        pr = self.app.pr
+        js = self._targets()
+        if pr.tgt is None or pr.src is None or not js:
+            self.app.statusBar().showMessage("먼저 소스 모션·타깃 모델을 열고 본을 고르세요")
+            return
+        if pr.result is None:
+            try:
+                pr.run(analyze_quality=False)
+            except Exception as e:  # noqa: BLE001
+                self.app.statusBar().showMessage("리타겟 결과가 있어야 합니다: %s" % e)
+                return
+        st = self.stack()
+        if st.current() is None:
+            st.add("구간 편집")
+        cur = st.current()
+        res = pr.result
+        base = res.base_anim if res.base_anim is not None else res.anim
+        below = apply_layers(base, st, upto=st.top - 1)
+        final = apply_layers(base, st)
+        if a is None or b is None:
+            a, b = self.rng_a.value() - 1, self.rng_b.value() - 1
+        n, msg = rangeedit.rewrite(cur, below, final, js, a, b, mode, float(self.smooth_strength.value()))
+        self._msg = msg
+        self.app.statusBar().showMessage(msg)
+        self._changed()
 
     def jump(self, step: int) -> None:
         cur, j = self.layer(), self._joint()
@@ -360,27 +498,31 @@ class LayerPanel(CollapsibleBox):
             self._warned = why
             self.app.statusBar().showMessage(why)
 
-    def on_rot_drag(self, j: int, q_view) -> None:
+    def on_rot_drag(self, j: int, q_view) -> bool:
         cur = self.layer()
         why = layeredit.editable(cur)
         ctx = self._ctx(j)
         if why or ctx is None:
-            self._warn(why or "리타깃 결과가 있어야 레이어를 고칠 수 있어요 (소스 모션과 타깃 모델을 모두 여세요)")
-            return
+            self._warn(why or "리타겟 결과가 있어야 레이어를 고칠 수 있어요 (소스 모션과 타깃 모델을 모두 여세요)")
+            return False
         f, Ft, Wp = ctx
         if layeredit.rot_edit(cur, j, f, q_view, Ft, Wp):
             self._after_drag()
+            return True
+        return False
 
-    def on_pos_drag(self, j: int, dview) -> None:
+    def on_pos_drag(self, j: int, dview) -> bool:
         cur = self.layer()
         why = layeredit.editable(cur)
         ctx = self._ctx(j)
         if why or ctx is None:
-            self._warn(why or "리타깃 결과가 있어야 레이어를 고칠 수 있어요 (소스 모션과 타깃 모델을 모두 여세요)")
-            return
+            self._warn(why or "리타겟 결과가 있어야 레이어를 고칠 수 있어요 (소스 모션과 타깃 모델을 모두 여세요)")
+            return False
         f, Ft, Wp = ctx
         if layeredit.pos_edit(cur, j, f, dview, Ft, Wp):
             self._after_drag()
+            return True
+        return False
 
     def _after_drag(self) -> None:
         self._warned = ""

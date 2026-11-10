@@ -4,7 +4,7 @@
     blender 내리그.blend --python blender_apply.py -- --motion 클립.motion.json --save 결과.blend
   또는 Blender 안의 Scripting 탭에서 이 파일을 열어 아래 RUN_ARGS 를 고친 뒤 실행.
 
-방법 (리타깃):
+방법 (리타겟):
   - 리그 뼈 이름을 자동으로 알아봅니다 (Mixamo, Unreal 마네킹, 3ds Max Biped, Rigify FK, UpperArm_L 식 이름 등).
     틀리거나 못 찾은 뼈는 --map 맵.json ( {"upperarm_L": "내뼈이름", ...} ) 으로 직접 지정할 수 있어요.
   - 리그의 기본 자세가 T자든 A자든 상관없이, 각 뼈가 가리키는 방향을 SMPL(모션)의 방향에 맞춘 뒤 회전을 옮깁니다.

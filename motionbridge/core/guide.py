@@ -21,7 +21,7 @@ class Guide:
 
 
 def compute(has_src: bool, has_tgt: bool, ready: bool, n_issues: int = 0, exported: bool = False, same_rig: bool = False) -> Guide:
-    """has_src/has_tgt: 모션·모델을 열었는가 · ready: 본이 연결되어 리타깃 결과가 나오는가 · n_issues: 자동 검수가 찾은 문제 수 · exported: 이번에 내보냈는가."""
+    """has_src/has_tgt: 모션·모델을 열었는가 · ready: 본이 연결되어 리타겟 결과가 나오는가 · n_issues: 자동 검수가 찾은 문제 수 · exported: 이번에 내보냈는가."""
     if not has_src:
         step, hint, action, button = "motion", "먼저 게임에서 뽑은 모션 파일(FBX · GLB · BVH)을 여세요. 파일을 이 창에 끌어다 놓아도 됩니다. 아직 파일이 없으면 '추출' 탭에서 게임 파일을 뽑을 수 있어요.", "open_source", "모션 파일 열기…"
     elif not has_tgt:
@@ -31,7 +31,7 @@ def compute(has_src: bool, has_tgt: bool, ready: bool, n_issues: int = 0, export
                                             "사람 모양이 아닌 캐릭터(몬스터)는 같은 스켈레톤이어야 그대로 적용됩니다."), "goto_mapping", "본 연결 화면 열기"
     elif not exported:
         extra = " 자동 검수가 확인해 볼 곳 %d군데를 찾았어요(‘검수’ 탭)." % n_issues if n_issues else ""
-        step, hint, action, button = "check", ("화면에서 모션이 자연스러운지 재생해 보세요.%s 발이 미끄러지거나 방향·크기가 이상하면 '리타깃' 탭에서 고치고, 팔·다리처럼 한 군데만 틀리면 "
+        step, hint, action, button = "check", ("화면에서 모션이 자연스러운지 재생해 보세요.%s 발이 미끄러지거나 방향·크기가 이상하면 '리타겟' 탭에서 고치고, 팔·다리처럼 한 군데만 틀리면 "
                                             "🦴 본 편집으로 직접 끌어 고치거나 '보정 레이어'로 키를 찍어 고치세요. 괜찮으면 내보내기로 가요." % extra), "goto_export", "다 됐어요 → 내보내기"
     else:
         step, hint, action, button = "export", "내보내기가 끝났어요! 출력 폴더의 ‘캐릭터 / Animations / 클립 이름’ 폴더에 파일들과 '사용법.txt'가 있습니다 (3ds Max · Blender 파일이 한곳에 들어 있어요).", "open_output", "출력 폴더 열기"

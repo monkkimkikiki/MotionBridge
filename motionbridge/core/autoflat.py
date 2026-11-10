@@ -52,7 +52,7 @@ def _gauss(a: np.ndarray, sigma: float) -> np.ndarray:
 
 def flatten_layer(anim, chains, plans, sigma: float = 2.5, pad: int = 3, tol_deg: float = 0.15, name: str = "자동 평탄화 (IK 접지 구간)"
                   ) -> Tuple[Optional[Layer], str]:
-    """(새 레이어 또는 None, 한국어 요약). anim: 지금 상태의 결과 모션. chains/plans: 리타깃 결과의 IK 체인과 접지 계획(같은 순서)."""
+    """(새 레이어 또는 None, 한국어 요약). anim: 지금 상태의 결과 모션. chains/plans: 리타겟 결과의 IK 체인과 접지 계획(같은 순서)."""
     T = anim.n_frames
     layer = Layer(name)
     runs_n = 0

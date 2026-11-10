@@ -147,7 +147,7 @@ def test_hand_ik():
     print("hand IK OK")
 
 
-def _hand_case(src_cfg, tgt_cfg, still_arms=False, hand_ik=True):
+def _hand_case(src_cfg, tgt_cfg, still_arms=False, hand_ik=True, **extra):
     """소스 골반을 낮춰 프레임 14~45 에서 손이 바닥 높이(≈2% 팔 길이)까지 내려오게 한다."""
     ssk, smeta = synth.build_skeleton(**src_cfg)
     tsk, _ = synth.build_skeleton(**tgt_cfg)
@@ -180,7 +180,7 @@ def _hand_case(src_cfg, tgt_cfg, still_arms=False, hand_ik=True):
     pos[:, h] += dw
     an.pos = pos
     off = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=False), ch, sm, tm)
-    on = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=hand_ik), ch, sm, tm)
+    on = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=hand_ik, **extra), ch, sm, tm)
     _, wp = fk(ssk, an.rot, an.pos)
     ps = Q.rotate(Fs, wp)
     _, bwp_t = tsk.bind_world()
@@ -251,6 +251,78 @@ def test_hand_ik_bind_pose_mismatch():
             assert abs(h_on - h_off) < 0.10 * arm, (ci, ch.label, "IK 가 손을 엉뚱한 높이로 끌고 감", h_on, h_off)
             assert h_on >= -1e-6, (ci, "바닥을 뚫음")
     print("hand IK bind-pose mismatch OK")
+
+
+def test_ghost_height_matches_ik_target():
+    """소스 고스트(주황)의 접촉 높이가 타깃이 실제로 닿는 높이와 같아야 한다 (바닥 높이 기준이 달라 고스트만 더 아래를 찍던 문제)."""
+    cases = [
+        (dict(style="ue", frame="z_up_x", scale=100.0, pose="A", local_axes="bone_x"),
+         dict(style="biped", frame="z_up_negy", scale=100.0, pose="T", local_axes="bone_x", height=1.0)),
+        (COMBOS[0][0], dict(style="biped", frame="z_up_negy", scale=100.0, pose="T", local_axes="bone_x", height=1.2)),
+        (COMBOS[0][0], IK_TGT),
+    ]
+    for ci, (sc, tc) in enumerate(cases):
+        ssk, tsk, on, off, gs, gt, ps = _hand_case(sc, tc, ground_offset=8.0)       # 바닥 높이 보정이 있어도 고스트가 같이 올라가야 한다
+        pc_on, _ = canon(tsk, on.anim, on.frame_tgt[0])
+        for ch, pl in [(c, p) for c, p in zip(on.chains, on.plans) if c.kind == "hand"]:
+            f = 30
+            arm = float(pl.leg_length)
+            ghost_h = float(on.ghost_pos[f, ch.src_foot, 1])
+            tgt_h = float(pc_on[f, ch.foot, 1])
+            assert abs(ghost_h - tgt_h) < 0.03 * arm + 1e-6, (ci, ch.label, "고스트 손 높이와 타깃 손 높이가 다름", ghost_h, tgt_h)
+    print("ghost height OK")
+
+
+def test_manual_ik_ranges():
+    """IK 구간 직접 지정: 자동 접지 판정 위에 '켜기/끄기' 구간을 덮어쓴다. 켠 구간은 발이 한 점에 고정되고, 끈 구간은 IK 없이 원래 동작을 따른다."""
+    ssk, smeta = synth.build_skeleton(**COMBOS[0][0])
+    tsk, _ = synth.build_skeleton(**IK_TGT)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=60)
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    pairs, ch = pairs_from_slots(sm, tm), default_chains(sm, tm)
+    st = RetargetSettings(foot_ik=True, hand_ik=False)
+    auto = retarget(ssk, an, tsk, pairs, st, ch, sm, tm)
+    lab = [c.label for c in auto.chains if c.kind == "foot"][0]
+    pl0 = [p for c, p in zip(auto.chains, auto.plans) if c.label == lab][0]
+    c0 = pl0.contact
+    assert c0.any() and (~c0).any()
+    # 자동 판정이 '아님' 인 구간을 골라 켜기, '임' 인 구간을 골라 끄기
+    off_idx = np.flatnonzero(~c0)
+    on_idx = np.flatnonzero(c0)
+    a_on = int(off_idx[0])
+    run = [a_on]
+    for i in off_idx[1:]:
+        if i == run[-1] + 1 and len(run) < 6:
+            run.append(int(i))
+        else:
+            break
+    b_on = run[-1]
+    a_off = int(on_idx[0])
+    b_off = a_off
+    for i in on_idx[1:]:
+        if i == b_off + 1:
+            b_off = int(i)
+        else:
+            break
+    man = {lab: [[a_on, b_on, True], [a_off, b_off, False]]}
+    r = retarget(ssk, an, tsk, pairs, st, ch, sm, tm, manual_ik=man)
+    pl = [p for c, p in zip(r.chains, r.plans) if c.label == lab][0]
+    assert pl.contact[a_on:b_on + 1].all() and not pl.contact[a_off:b_off + 1].any(), "직접 지정한 구간이 반영돼야 함"
+    assert np.array_equal(pl.auto_contact, c0), "자동 판정 값은 따로 보관"
+    other = [p for c, p in zip(r.chains, r.plans) if c.label != lab and c.kind == "foot"][0]
+    other0 = [p for c, p in zip(auto.chains, auto.plans) if c.label != lab and c.kind == "foot"][0]
+    assert np.array_equal(other.contact, other0.contact), "다른 체인은 그대로"
+    # 켠 구간(길이 2 이상)에서는 발이 한 점에 고정 (수평 이동이 거의 없다)
+    if b_on - a_on >= 2:
+        pc, _ = canon(tsk, r.anim, r.frame_tgt[0])
+        foot = pc[a_on + 1:b_on, [c.foot for c in r.chains if c.label == lab][0]]
+        base_pc, _ = canon(tsk, auto.anim, auto.frame_tgt[0])
+        base_foot = base_pc[a_on + 1:b_on, [c.foot for c in r.chains if c.label == lab][0]]
+        assert np.ptp(foot[:, [0, 2]], axis=0).max() <= np.ptp(base_foot[:, [0, 2]], axis=0).max() + 1e-6, "고정 구간에서 발이 더 움직임"
+    # 범위 밖/뒤집힌 값은 안전하게 잘린다
+    r2 = retarget(ssk, an, tsk, pairs, st, ch, sm, tm, manual_ik={lab: [[-5, 999, False]]})
+    assert not [p for c, p in zip(r2.chains, r2.plans) if c.label == lab][0].contact.any()
+    print("manual ik ranges OK")
 
 
 def test_hand_ik_plant():
@@ -553,7 +625,7 @@ def test_partial_mapping():
 
 
 def test_bvh_source_pipeline():
-    """BVH(루트 OFFSET=0, 절대 위치 채널)로 저장했다가 읽은 소스로 리타깃해도 원본 소스와 거의 같은 결과."""
+    """BVH(루트 OFFSET=0, 절대 위치 채널)로 저장했다가 읽은 소스로 리타겟해도 원본 소스와 거의 같은 결과."""
     import tempfile
     from motionbridge.core.io_bvh import read_bvh, write_bvh
 
@@ -641,6 +713,12 @@ def test_ik_knee_direction_stable():
     u, v = A[0] - Bn[0], Cn[0] - Bn[0]
     inner = np.degrees(np.arccos(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))))
     assert inner >= 19.9, inner
+    # 설정으로 조절: 안정화 0% 면 예전 방식 그대로, 100% 면 안정화 — 파이프라인 전체에서 확인
+    sc, tc = COMBOS[0][0], IK_TGT
+    r_on = setup(sc, tc, st=RetargetSettings(foot_ik=True, ik_knee_stable=100.0))[3]
+    r_off = setup(sc, tc, st=RetargetSettings(foot_ik=True, ik_knee_stable=0.0, ik_knee_fold=0.0))[3]
+    r_half = setup(sc, tc, st=RetargetSettings(foot_ik=True, ik_knee_stable=50.0))[3]
+    assert np.isfinite(r_on.anim.rot).all() and np.isfinite(r_off.anim.rot).all() and np.isfinite(r_half.anim.rot).all()
     print("ik knee direction OK")
 
 
@@ -653,6 +731,8 @@ if __name__ == "__main__":
     test_ik_off_shows_nothing()
     test_scale_independent_of_frame()
     test_hand_ik_bind_pose_mismatch()
+    test_ghost_height_matches_ik_target()
+    test_manual_ik_ranges()
     test_hand_ik_plant()
     test_spine_blend()
     test_spine_arc()

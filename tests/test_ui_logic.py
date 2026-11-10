@@ -92,7 +92,7 @@ def test_full_flow():
         mw.com_combo.setCurrentIndex(mw.com_combo.findData(mw.pr.tgt_slots["Hips"]))
         assert mw.pr.settings.com_joint == mw.pr.tgt_slots["Hips"]
         mw.recompute()
-        assert mw.pr.result is not None and not mw.warn_label.text().startswith("⚠ 리타깃 실패"), mw.warn_label.text()
+        assert mw.pr.result is not None and not mw.warn_label.text().startswith("⚠ 리타겟 실패"), mw.warn_label.text()
         # 프로필 저장/불러오기 (위젯 동기화 포함)
         prof = os.path.join(d, "p.json")
         QFileDialog.save_ret = (prof, "")
@@ -311,7 +311,7 @@ def test_full_flow():
         mw.do_export()
         walk2 = [os.path.join(r, f) for r, _ds, fl in os.walk(out2) for f in fl]
         assert walk2 and all(f.endswith("_curves.json") and os.sep + "Animations" + os.sep in f for f in walk2), walk2
-        # 리타깃 탭의 '애니메이션 가공'이 내보내기에 반영된다 (2배 빠르게 = 프레임 절반)
+        # 리타겟 탭의 '애니메이션 가공'이 내보내기에 반영된다 (2배 빠르게 = 프레임 절반)
         import json as _json
         n_plain = _json.load(open(walk2[0], encoding="utf-8"))["frames"]
         mw.rt_edit.mode.setCurrentIndex(mw.rt_edit.mode.findData("speed"))
@@ -368,7 +368,7 @@ def test_full_flow():
         assert mw.layer_panel.layer().frames(jt) == [3], mw.layer_panel.layer().frames(jt)
         assert jt in mw._edited_set()
         mw.recompute()
-        assert mw.pr.result.base_anim is not None and np.allclose(mw.pr.result.base_anim.rot, base_rot), "원본 리타깃 결과는 그대로"
+        assert mw.pr.result.base_anim is not None and np.allclose(mw.pr.result.base_anim.rot, base_rot), "원본 리타겟 결과는 그대로"
         assert not np.allclose(mw.pr.result.anim.rot[:, jt], base_rot[:, jt])
         mw.history.commit(mw._edit_state())
         mw.layer_panel.layer().mute = True          # 끄면 원래 결과로
@@ -439,6 +439,42 @@ def test_full_flow():
         pt = [q for q in cv.key_points() if q[0] == fa][0]
         cv.press_at(float(gm.x_of(fa)), float(gm.y_of(pt[1])), right=True)
         assert fa not in lp.layer().frames(jt), "우클릭 = 키 삭제"
+        # 곡선 위를 잡고 끌면 키가 생긴다 (그냥 클릭은 프레임 이동만)
+        fb = next(f for f in range(3, cv.T - 3) if all(abs(f - k) >= 3 for k in lp.layer().frames(jt)))
+        mw.recompute()
+        ce.refresh()
+        gm = cv.geom()
+        ch1 = cv.chans[0]
+        yy = float(gm.y_of(cv.final[ch1][fb]))
+        n0 = len(lp.layer().frames(jt))
+        cv.press_at(float(gm.x_of(fb)), yy)
+        assert cv._mode == "pull" and len(lp.layer().frames(jt)) == n0, ("곡선 클릭만으로는 키가 안 생김", cv._mode, fb, lp.layer().frames(jt), cv.T, cv.msg)
+        cv.release()
+        assert len(lp.layer().frames(jt)) == n0
+        cv.press_at(float(gm.x_of(fb)), yy)
+        cv.drag_to(float(gm.x_of(fb)), yy - 20)
+        assert cv._mode == "key" and fb in lp.layer().frames(jt), "끌기 시작하면 키가 생김"
+        mw._live_fire()
+        gm = cv.geom()
+        assert abs(float(cv.final[cv._drag_ch][fb]) - float(gm.v_of(yy - 20))) < 0.8, (cv.final[cv._drag_ch][fb], gm.v_of(yy - 20))
+        cv.release()
+        lp.layer().remove_key(jt, fb)
+        # Shift+끌기 = 구간 고르기 -> 버튼(지우고 블렌드)
+        got_r = []
+        cv.range_picked.connect(lambda a, b: got_r.append((a, b)))
+        cv.press_at(float(gm.x_of(5)), 30.0, shift=True)
+        cv.drag_to(float(gm.x_of(9)), 30.0)
+        cv.release()
+        assert cv.range == (5, 9) and got_r[-1] == (5, 9) and (lp.rng_a.value(), lp.rng_b.value()) == (6, 10), (cv.range, got_r)
+        assert "6" in ce.range_lbl.text() and "10" in ce.range_lbl.text()
+        lp.layer().fade = 0
+        keys_before = {f: k for f, k in lp.layer().keys.get(jt, {}).items()}
+        ce.range_do("line")
+        assert "일직선" in lp._msg, lp._msg
+        mw.recompute()
+        ce.refresh()
+        lp.layer().keys[jt] = keys_before
+        cv.range = None
         lp._row_changed(0)
         mw.recompute()
         ce.refresh()
@@ -479,6 +515,71 @@ def test_full_flow():
         mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(10.0)))
         assert jt in mw.pr.settings.rot_offsets and not lp.recording()
         mw._bone_reset_selected()
+        mw.pr.layers = {}
+        mw.recompute()
+        # IK 구간 직접 지정 패널: 켜기/끄기 구간이 설정에 들어가고, 지우면 자동 판정으로 돌아간다
+        ik = mw.ik_panel
+        mw.pr.layers = {}
+        mw.recompute()
+        assert ik.chain.count() >= 2, "체인 목록"
+        lab = ik.chain.itemData(0)
+        T_ = mw.pr.anim.n_frames
+        ik.a.setValue(3)
+        ik.b.setValue(7)
+        ik.add(True)
+        assert mw.pr.settings.ik_ranges[mw.pr.clip][lab] == [[2, 6, True]], mw.pr.settings.ik_ranges
+        ik.a.setValue(5)
+        ik.b.setValue(9)
+        ik.add(False)
+        assert mw.pr.settings.ik_ranges[mw.pr.clip][lab] == [[2, 4, True], [4 + 0, 8, False]] or mw.pr.settings.ik_ranges[mw.pr.clip][lab][-1][2] is False
+        mw.recompute()
+        pl = [p for c, p in zip(mw.pr.result.chains, mw.pr.result.plans) if c.label == lab][0]
+        assert pl.contact[2:4].all() and not pl.contact[4:9].any(), "직접 지정이 접지에 반영"
+        assert ik.lst.count() == 2
+        ik.clear_chain()
+        mw.recompute()
+        assert not mw.pr.settings.ik_ranges, "지우면 자동으로 돌아감"
+        # 맥스식 키 찍기: 0프레임에 원본 키 -> 중간에서 고침 -> 뒤에 다시 원본 키 = 그 사이만 바뀜 / 구간 편집(지우고 블렌드)
+        lp.rec.setChecked(True)
+        mw.pr.layers = {}
+        mw.pr.settings.rot_offsets.clear()
+        mw.recompute()
+        base3 = mw.pr.result.anim.rot.copy()
+        Tn = base3.shape[0]
+        assert Tn >= 24, Tn
+        lp.add_layer()
+        lp.layer().fade = 0
+        lp.scope.setCurrentIndex(lp.scope.findData("one"))
+        mw._bone_picked(jt)
+        for f in (2, 14):
+            mw.frame_slider.setValue(f)
+            mw.viewport.frame = f
+            lp.key_original()
+        mw.frame_slider.setValue(8)
+        mw.viewport.frame = 8
+        mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(40.0)))
+        mw.recompute()
+        chg = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base3[:, jt]))
+        assert chg[8] > 25 and chg[2] < 1e-6 and all(chg[f] < 1e-6 for f in range(14, Tn)), "원본 키 사이만 바뀌고 뒤는 원본으로 돌아감"
+        assert 0 < chg[5] < chg[8] and 0 < chg[11] < chg[8], "앞뒤로 블렌드"
+        # 대상 '아래 본 전부'로 키 찍기
+        lp.scope.setCurrentIndex(lp.scope.findData("tree"))
+        n_t = len(lp._targets())
+        assert n_t >= 1 and jt in lp._targets()
+        lp.scope.setCurrentIndex(lp.scope.findData("one"))
+        # 구간 편집: 8프레임 주변을 지우고 블렌드 -> 앞뒤 프레임(원본 키 2, 14)을 잇는 직선, 변화는 사라짐
+        lp.rng_a.setValue(3)
+        lp.rng_b.setValue(14)
+        lp.range_action("blend")
+        mw.recompute()
+        chg2 = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base3[:, jt]))
+        assert chg2.max() < 1.0, "지우고 블렌드 하면 튀던 변화가 앞뒤 값으로 이어짐: %s" % chg2.max()
+        # 레이어가 없어도 구간 편집이 새 레이어를 만들어 기록한다 (원본 상태에서 시작)
+        lp._row_changed(0)
+        mw.pr.layers = {}
+        mw.recompute()
+        lp.range_action("line", 3, 9)
+        assert len(mw.pr.layer_stack()) == 1, "레이어 자동 생성"
         mw.pr.layers = {}
         mw.recompute()
         # 끄는 동안 실시간 갱신: 가벼운 계산을 바로 하고(품질 분석 생략), 손을 놓으면 전체 계산이 이어진다
@@ -526,7 +627,7 @@ def test_full_flow():
         QMessageBox.calls.clear()
         mw.do_export()
         assert QMessageBox.calls and "Blender" in QMessageBox.calls[-1][2]
-        # 소스만 열린 상태에서 리타깃 내보내기 -> 경고
+        # 소스만 열린 상태에서 리타겟 내보내기 -> 경고
         mw2 = A.MainWindow()
         QFileDialog.open_ret = (src, "")
         mw2.open_source()

@@ -151,7 +151,7 @@ def test_errors():
 
 
 def test_psa_as_source():
-    """PSA -> 소스 모션 -> 내 모델(GLB) 리타깃 -> BVH, 전체 경로."""
+    """PSA -> 소스 모션 -> 내 모델(GLB) 리타겟 -> BVH, 전체 경로."""
     import test_pipeline as TP
 
     sk, anims = make()

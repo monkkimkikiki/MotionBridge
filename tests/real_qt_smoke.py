@@ -182,8 +182,8 @@ with tempfile.TemporaryDirectory() as d:
     shift = _Qt.KeyboardModifier.ShiftModifier
     LB = _Qt.MouseButton.LeftButton
 
-    def _ev(kind, x, y, btn, btns):
-        return QMouseEvent(kind, QPointF(x, y), QPointF(x, y), btn, btns, shift)
+    def _ev(kind, x, y, btn, btns, mods=None):
+        return QMouseEvent(kind, QPointF(x, y), QPointF(x, y), btn, btns, shift if mods is None else mods)
 
     before = tuple(mw.pr.settings.place_offset)
     vp.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, 400, 480, LB, LB))
@@ -246,11 +246,25 @@ with tempfile.TemporaryDirectory() as d:
         f_, v_, _id = pts[0]
         g_ = ce.canvas.geom()
         px_, py_ = float(g_.x_of(f_)), float(g_.y_of(v_))
-        ce.canvas.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, px_, py_, LB, LB))
-        ce.canvas.mouseMoveEvent(_ev(QEvent.Type.MouseMove, px_, py_ - 15, _Qt.MouseButton.NoButton, LB))
-        ce.canvas.mouseReleaseEvent(_ev(QEvent.Type.MouseButtonRelease, px_, py_ - 15, LB, _Qt.MouseButton.NoButton))
+        ce.canvas.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, px_, py_, LB, LB, _Qt.KeyboardModifier.NoModifier))
+        ce.canvas.mouseMoveEvent(_ev(QEvent.Type.MouseMove, px_, py_ - 15, _Qt.MouseButton.NoButton, LB, _Qt.KeyboardModifier.NoModifier))
+        ce.canvas.mouseReleaseEvent(_ev(QEvent.Type.MouseButtonRelease, px_, py_ - 15, LB, _Qt.MouseButton.NoButton, _Qt.KeyboardModifier.NoModifier))
         app.processEvents()
         check(not ce.canvas.grab().isNull(), "곡선 그래프: 키 끌기 뒤 다시 그리기")
+    # 곡선 그래프: Shift+끌기 구간 선택 + 버튼, 곡선 위 끌기로 키 만들기 (진짜 Qt 이벤트)
+    ce.canvas._size = None
+    g2 = ce.canvas.geom()
+    LB2 = _Qt.MouseButton.LeftButton
+    SH = _Qt.KeyboardModifier.ShiftModifier
+    ce.canvas.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, float(g2.x_of(2)), 40.0, LB2, LB2, SH))
+    ce.canvas.mouseMoveEvent(_ev(QEvent.Type.MouseMove, float(g2.x_of(6)), 40.0, _Qt.MouseButton.NoButton, LB2, SH))
+    ce.canvas.mouseReleaseEvent(_ev(QEvent.Type.MouseButtonRelease, float(g2.x_of(6)), 40.0, LB2, _Qt.MouseButton.NoButton))
+    app.processEvents()
+    check(ce.canvas.range == (2, 6) and not ce.canvas.grab().isNull() and "3" in ce.range_lbl.text(), "곡선 그래프: Shift+끌기로 구간 선택 (%s)" % (ce.canvas.range,))
+    for m_, bt_ in ce.btns.items():
+        check(bt_.text() != "", "구간 버튼 있음: %s" % m_)
+    ce.canvas.range = None
+    ce.range_lbl.setText("")
     for sp in ("local", "screen", "world"):
         mw.space_combo.setCurrentIndex(mw.space_combo.findData(sp))
         check(mw.viewport.gizmo_space == sp and not mw.viewport.grab().isNull(), "기즈모 좌표계 %s 로 그리기" % sp)

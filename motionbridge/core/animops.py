@@ -341,7 +341,7 @@ def apply_edit(anim: Animation, opt: Optional[EditOptions], units_per_meter: flo
     if opt.frames or opt.seconds or opt.fps or abs(opt.speed - 1.0) > 1e-9:
         a = resample(a, speed=opt.speed, frames=opt.frames, seconds=opt.seconds, fps=opt.fps)
         if abs(opt.speed - 1.0) > 2.0 and not (opt.frames or opt.seconds):
-            info.notes.append("속도를 크게 바꿨습니다. 발 접지가 어긋나면 리타깃의 발 고정 옵션을 확인하세요.")
+            info.notes.append("속도를 크게 바꿨습니다. 발 접지가 어긋나면 리타겟의 발 고정 옵션을 확인하세요.")
     if opt.loop_frames > 0:
         a = loop_blend(a, opt.loop_frames, skel_parents)
     info.frames_after, info.fps_after = a.n_frames, float(a.fps)

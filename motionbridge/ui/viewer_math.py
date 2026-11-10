@@ -1,7 +1,7 @@
 """3D 뷰어의 계산 부분 (Qt 비의존). 궤도 카메라, 투영, 장면 구성.
 
 뷰어는 항상 '표준 프레임'(Y-up, +Z 전방)에서 타깃 단위로 그린다.
-  * 타깃(내 모델)  : fk(타깃 스켈레톤, 리타깃 결과) 를 Ft 로 돌린 위치
+  * 타깃(내 모델)  : fk(타깃 스켈레톤, 리타겟 결과) 를 Ft 로 돌린 위치
   * 소스(고스트)   : 소스 표준 프레임 위치 * k  (같은 스케일로 겹쳐 보기)
 """
 from __future__ import annotations
@@ -578,3 +578,54 @@ def wire_segments(dm: DisplayMesh, v: np.ndarray) -> np.ndarray:
     """와이어프레임 선분 (E,2,3). dm 은 want_edges=True 로 만든 것이어야 한다."""
     e = dm.edges if dm.edges is not None else np.zeros((0, 2), int)
     return np.stack([v[e[:, 0]], v[e[:, 1]]], axis=1) if len(e) else np.zeros((0, 2, 3))
+
+
+# --------------------------------------------------------------------------- 끄는 동안 즉시 미리보기
+def subtree_mask(parents, j: int) -> np.ndarray:
+    """본 j 와 그 아래 모든 본 (부모 번호가 자식보다 작지 않아도 동작)."""
+    par = np.asarray(parents)
+    n = len(par)
+    m = np.zeros(n, bool)
+    m[j] = True
+    for _ in range(n):
+        new = m | np.array([(p >= 0 and m[p]) for p in par])
+        if (new == m).all():
+            break
+        m = new
+    return m
+
+
+def _own(vd: "ViewData") -> None:
+    """미리보기는 배열을 직접 고치므로, 다른 곳과 공유하는 배열(바인드 포즈 캐시 등)을 건드리지 않게 한 번 복사한다."""
+    if not getattr(vd, "_preview_owned", False):
+        vd.tgt_wr, vd.tgt_wp, vd.tgt_pos = vd.tgt_wr.copy(), vd.tgt_wp.copy(), vd.tgt_pos.copy()
+        vd._preview_owned = True
+
+
+def preview_rot(vd: "ViewData", f: int, parents, j: int, q_view) -> bool:
+    """본 j 를 프레임 f 에서 q_view(표준 프레임 월드 회전)만큼 더 돌린 모습을 바로 보여 준다 (본 j 의 위치를 축으로, 아래 본 전부).
+    전체 리타겟을 다시 계산하기 전에 화면만 먼저 갱신하는 것이고, 곧 이어지는 정식 계산이 이 값을 같은 결과로 덮어쓴다."""
+    if vd is None or vd.tgt_wr is None or vd.Ft is None or not (0 <= f < vd.tgt_wr.shape[0]) or not (0 <= j < vd.tgt_wr.shape[1]):
+        return False
+    _own(vd)
+    m = subtree_mask(parents, j)
+    Ft = np.asarray(vd.Ft, dtype=float)
+    d_w = Q.mul(Q.conj(Ft), Q.mul(np.asarray(q_view, dtype=float), Ft))        # 파일 프레임 월드 회전 변화
+    pivot = vd.tgt_wp[f, j].copy()
+    vd.tgt_wr[f][m] = Q.mul(d_w, vd.tgt_wr[f][m])
+    vd.tgt_wp[f][m] = pivot + Q.rotate(d_w, vd.tgt_wp[f][m] - pivot)
+    vd.tgt_pos[f][m] = Q.rotate(Ft, vd.tgt_wp[f][m])
+    return True
+
+
+def preview_move(vd: "ViewData", f: int, parents, j: int, dview) -> bool:
+    """본 j 를 프레임 f 에서 dview(표준 프레임 월드 이동)만큼 더 옮긴 모습 (아래 본 전부 같이 이동)."""
+    if vd is None or vd.tgt_wr is None or vd.Ft is None or not (0 <= f < vd.tgt_wr.shape[0]) or not (0 <= j < vd.tgt_wr.shape[1]):
+        return False
+    _own(vd)
+    m = subtree_mask(parents, j)
+    Ft = np.asarray(vd.Ft, dtype=float)
+    dw = Q.rotate(Q.conj(Ft), np.asarray(dview, dtype=float))
+    vd.tgt_wp[f][m] = vd.tgt_wp[f][m] + dw
+    vd.tgt_pos[f][m] = Q.rotate(Ft, vd.tgt_wp[f][m])
+    return True

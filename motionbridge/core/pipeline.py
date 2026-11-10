@@ -1,4 +1,4 @@
-"""UI 와 CLI 가 함께 쓰는 작업 단위: 소스/타깃 불러오기, 매핑, 리타깃 실행, 프로필 저장, 내보내기."""
+"""UI 와 CLI 가 함께 쓰는 작업 단위: 소스/타깃 불러오기, 매핑, 리타겟 실행, 프로필 저장, 내보내기."""
 from __future__ import annotations
 
 import dataclasses
@@ -83,8 +83,9 @@ class Project:
         self.log: List[str] = []
         self.edit_info: Optional[animops.EditInfo] = None
         self.edits: Dict[int, frameedit.FrameEdit] = {}  # 클립별 프레임 조각 편집(영상 편집기식)
-        self.layers: Dict[int, LayerStack] = {}  # 클립별 보정 레이어(비파괴 키프레임 수정) — 리타깃 결과 위에 얹는다
+        self.layers: Dict[int, LayerStack] = {}  # 클립별 보정 레이어(비파괴 키프레임 수정) — 리타겟 결과 위에 얹는다
         self._rig_cache: Tuple[int, int, Optional[RigMatch], str] = (0, 0, None, "")
+        self._base_cache = None   # (입력 키, 레이어 적용 전 리타겟 결과)
         self.rig_note = ""   # 같은 스켈레톤으로 못 알아본 이유 (이름은 거의 같은데 모양이 안 맞을 때 화면에 알린다)
 
     # ------------------------------------------------------------------ 불러오기
@@ -179,7 +180,7 @@ class Project:
         if not (self.settings.same_rig and self.src and self.tgt):
             return None
         if is_humanoid(self.src_slots) and is_humanoid(self.tgt_slots):
-            return None      # 양쪽 다 사람이면 사람 리타깃(발 IK 포함)을 쓴다. 같은 이름 규칙이어도 프로필/매핑을 바꿔 쓸 수 있게
+            return None      # 양쪽 다 사람이면 사람 리타겟(발 IK 포함)을 쓴다. 같은 이름 규칙이어도 프로필/매핑을 바꿔 쓸 수 있게
         a, b, m, note = self._rig_cache
         if a != id(self.src.skeleton) or b != id(self.tgt.skeleton):
             m, note = explain_rig(self.src.skeleton, self.tgt.skeleton)
@@ -269,13 +270,27 @@ class Project:
     def ready(self) -> bool:
         return bool(self.src and self.tgt and self.pairs())
 
+    def _base_key(self):
+        """레이어를 얹기 전 리타겟 결과가 달라지는 모든 입력 (이것이 같으면 결과를 그대로 재사용한다)."""
+        e = self.edits.get(self.clip)
+        return (self.clip, id(self.src), id(self.tgt), id(self.src.animations[self.clip]), repr(self.settings),
+                repr(e.pieces) if e is not None else None, tuple(self.pairs()), repr(self.chains()),
+                tuple(sorted(self.src_slots.items())), tuple(sorted(self.tgt_slots.items())))
+
     def run(self, clip: Optional[int] = None, analyze_quality: bool = True) -> RetargetResult:
         if not (self.src and self.tgt):
             raise ValueError("소스 모션과 타깃 모델을 먼저 불러오세요.")
         if clip is not None:
             self.clip = clip
-        res = retarget(self.src.skeleton, self.anim, self.tgt.skeleton, self.pairs(), self.settings, self.chains(), self.src_slots, self.tgt_slots, rig=self.rig())
-        motionfx.apply(res, self.tgt.skeleton, self.tgt_slots, self.settings)
+        # 레이어만 바뀐 경우(키를 끌 때)에는 무거운 리타겟 계산을 다시 하지 않고, 레이어를 얹기 전의 결과를 재사용한다.
+        key = self._base_key()
+        if self._base_cache is not None and self._base_cache[0] == key:
+            res0 = self._base_cache[1]
+        else:
+            res0 = retarget(self.src.skeleton, self.anim, self.tgt.skeleton, self.pairs(), self.settings, self.chains(), self.src_slots, self.tgt_slots, rig=self.rig(), manual_ik=self.settings.ik_ranges.get(self.clip))
+            motionfx.apply(res0, self.tgt.skeleton, self.tgt_slots, self.settings)
+            self._base_cache = (key, res0)
+        res = dataclasses.replace(res0, warnings=list(res0.warnings))
         st = self.layers.get(self.clip)
         if st is not None and st.has_effect():
             res.base_anim = res.anim
@@ -294,6 +309,7 @@ class Project:
         st["scale_offsets"] = {tn[j]: float(v) for j, v in self.settings.scale_offsets.items() if j < len(tn)}
         st["com_joint"] = tn[self.settings.com_joint] if (self.tgt and 0 <= self.settings.com_joint < len(tn)) else None
         st["hip_offset"] = list(self.settings.hip_offset)
+        st.pop("ik_ranges", None)     # 프레임 번호는 그 클립에만 맞는 값이라 프로필(여러 클립에 재사용)에는 넣지 않는다
         sn = self.src.skeleton.names if self.src else []
         return {
             "format": "motionbridge-profile-1",
@@ -349,7 +365,7 @@ class Project:
         fields = {f.name for f in dataclasses.fields(RetargetSettings)}
         base = dataclasses.asdict(RetargetSettings())
         for k, v in st.items():
-            if k in fields and k not in ("rot_offsets", "pos_offsets", "scale_offsets", "com_joint"):
+            if k in fields and k not in ("rot_offsets", "pos_offsets", "scale_offsets", "com_joint", "ik_ranges"):
                 base[k] = tuple(v) if k in ("hip_offset", "place_offset") else v
         base["rot_offsets"] = {}
         for nm, v in ro.items():
@@ -369,6 +385,7 @@ class Project:
             else:
                 warns.append("크기 보정의 '%s' 본이 타깃에 없음" % nm)
         base["com_joint"] = tidx.get(com, -1) if com else -1
+        base["ik_ranges"] = self.settings.ik_ranges      # 직접 지정한 IK 구간은 프로필이 아니라 클립에 속하므로 그대로 둔다
         self.settings = RetargetSettings(**base)
         self.result = None
         return warns
@@ -392,7 +409,7 @@ class Project:
         if not self.src:
             raise ValueError("먼저 소스 모션을 불러오세요.")
         if opt.what == "retargeted" and not self.tgt:
-            raise ValueError("리타깃 결과를 내보내려면 타깃 모델이 필요합니다.")
+            raise ValueError("리타겟 결과를 내보내려면 타깃 모델이 필요합니다.")
         os.makedirs(opt.out_dir, exist_ok=True)
         self.backups = []
         clips = list(opt.clips) if opt.clips is not None else [self.clip]
@@ -539,7 +556,7 @@ class Project:
                 out.append(p)
             if "fbx" in fmts:
                 if opt.what != "retargeted":
-                    warns.append("FBX 는 리타깃 결과(타깃 모델 파일 기준)에서만 지원합니다. 소스는 BVH/GLB 를 쓰세요.")
+                    warns.append("FBX 는 리타겟 결과(타깃 모델 파일 기준)에서만 지원합니다. 소스는 BVH/GLB 를 쓰세요.")
                 else:
                     p = os.path.join(pdir, "%s_%s.fbx" % (base, preset_key))
                     with tempfile.TemporaryDirectory(prefix="mb_") as d:

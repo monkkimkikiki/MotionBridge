@@ -35,6 +35,29 @@ def project(d):
     return pr
 
 
+def test_base_cache():
+    """레이어만 바뀌면 리타겟을 다시 계산하지 않고(같은 결과 재사용), 설정/매핑/프레임 편집이 바뀌면 다시 계산한다."""
+    import time
+    with tempfile.TemporaryDirectory() as d:
+        pr = project(d)
+        r0 = pr.run(0)
+        base_id = id(pr._base_cache[1])
+        lay = pr.layer_stack().add()
+        lay.set_key(pr.tgt_slots["Hips"], 3, pos=np.array([0.0, 4.0, 0.0]))
+        r1 = pr.run(0)
+        assert id(pr._base_cache[1]) == base_id, "레이어만 바뀌었는데 다시 계산함"
+        assert not np.allclose(r1.anim.pos, r0.anim.pos) and np.allclose(r1.base_anim.rot, r0.anim.rot), "결과는 레이어가 반영돼야 함"
+        assert r0.warnings is not r1.warnings
+        pr.settings.root_yaw_deg = 30.0
+        pr.run(0)
+        assert id(pr._base_cache[1]) != base_id, "설정이 바뀌면 다시 계산해야 함"
+        pr.settings.root_yaw_deg = 0.0
+        t0 = time.perf_counter(); pr.run(0); t_hit = time.perf_counter() - t0
+        pr._base_cache = None
+        t0 = time.perf_counter(); pr.run(0); t_miss = time.perf_counter() - t0
+    print("base cache OK (%.1fms vs %.1fms)" % (t_hit * 1000, t_miss * 1000))
+
+
 def test_layer_fade():
     """키를 하나만 찍으면 그 프레임만 고쳐지고 앞뒤는 fade 프레임에 걸쳐 원래 값으로 돌아간다 (맥스 바이패드 레이어처럼)."""
     X = np.array([1.0, 0, 0])
@@ -335,7 +358,7 @@ def test_project_auto_flatten():
         pr = project(d)
         rng = np.random.default_rng(5)
         res = pr.run(0)
-        # 잔떨림을 리타깃 결과 대신 소스에 심을 수 없으니, 설정으로는 평탄화할 게 있는지만 본다 (없거나 있거나 둘 다 정상 응답)
+        # 잔떨림을 리타겟 결과 대신 소스에 심을 수 없으니, 설정으로는 평탄화할 게 있는지만 본다 (없거나 있거나 둘 다 정상 응답)
         lay, msg = pr.auto_flatten(2.5)
         assert isinstance(msg, str) and msg
         if lay is not None:
@@ -478,6 +501,7 @@ if __name__ == "__main__":
     test_drag_to_key()
     test_layer_basics()
     test_layer_fade()
+    test_base_cache()
     test_new_key_starts_from_visible_value()
     test_apply_non_destructive_and_fk()
     test_position_layer_and_export()

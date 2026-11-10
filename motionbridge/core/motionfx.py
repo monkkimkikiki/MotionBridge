@@ -1,4 +1,4 @@
-"""리타깃 결과에 거는 모션빌더식 후처리: 부위별 모션 세기(Reach 대용), 튀는 프레임 제거(Peak Removal), 부드럽게(Butterworth 대용),
+"""리타겟 결과에 거는 모션빌더식 후처리: 부위별 모션 세기(Reach 대용), 튀는 프레임 제거(Peak Removal), 부드럽게(Butterworth 대용),
 좌우 반전(Mirror Animation). 입력은 타깃 모델의 로컬 회전/위치 Animation 이고 Qt 를 쓰지 않는다.
 
 적용 순서: 부위 세기 -> 튀는 프레임 -> 부드럽게 -> 좌우 반전. (보정 레이어는 이 뒤에 얹는다: core/layers)

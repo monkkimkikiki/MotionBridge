@@ -527,7 +527,7 @@ class MainWindow(QMainWindow):
         return dlg.changed
 
     def send_clip_to_tool(self, metas):
-        """클립 하나를 추출/리타깃 도구(MotionBridge 영상찾기)로 바로 보낸다. 후보 고르기는 그쪽에서 한다."""
+        """클립 하나를 추출/리타겟 도구(MotionBridge 영상찾기)로 바로 보낸다. 후보 고르기는 그쪽에서 한다."""
         from ..core import handoff
         from .mocap_dialog import _send_tool_job
         if len(metas) != 1:

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "motionbridge"
 version = "0.1.0"
-description = "게임 모션을 내 모델에 리타깃하고 Max/Maya/Blender 로 내보내는 도구"
+description = "게임 모션을 내 모델에 리타겟하고 Max/Maya/Blender 로 내보내는 도구"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.24"]
 

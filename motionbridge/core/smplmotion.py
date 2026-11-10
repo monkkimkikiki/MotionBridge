@@ -22,7 +22,7 @@ SMPL22_NAMES = [
     "Neck", "L_Collar", "R_Collar", "Head", "L_Shoulder", "R_Shoulder", "L_Elbow", "R_Elbow", "L_Wrist", "R_Wrist",
 ]
 SMPL22_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19]
-CM = 100.0  # BVH/FBX 쪽에서 흔한 단위(cm)로 내보낸다. 크기는 리타깃에서 자동으로 맞춘다.
+CM = 100.0  # BVH/FBX 쪽에서 흔한 단위(cm)로 내보낸다. 크기는 리타겟에서 자동으로 맞춘다.
 
 
 def axis_angle_to_quat(aa: np.ndarray) -> np.ndarray:

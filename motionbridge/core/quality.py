@@ -1,4 +1,4 @@
-"""리타깃 결과 자동 검수: 발 미끄러짐, 지면 관통, 다리 과신장, 회전 튐, 루프 이음새."""
+"""리타겟 결과 자동 검수: 발 미끄러짐, 지면 관통, 다리 과신장, 회전 튐, 루프 이음새."""
 from __future__ import annotations
 
 from dataclasses import dataclass

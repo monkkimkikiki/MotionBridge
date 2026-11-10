@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QWidget
 
 from ..core import quat as Q
 from . import gizmo_math as GZ
+from . import viewer_math as VM
 from .viewer_math import (QUALITY, pick_quality, COLORS, DRAW_ORDER, OrbitCamera, ViewData, build_display_mesh, build_scene, drag_placement, overlay_names, render_surface,
                           skin_display, wire_segments)
 
@@ -120,6 +121,17 @@ class Viewport(QWidget):
     def set_frame(self, f: int) -> None:
         self.frame = int(f)
         self.update()
+
+    def preview_rot(self, j: int, q_view) -> None:
+        """본을 끄는 즉시 화면의 현재 프레임만 바로 갱신한다 (전체 계산은 뒤따라 오면서 같은 값으로 덮어쓴다)."""
+        if self.vd is not None and self.pr is not None and self.pr.tgt is not None:
+            if VM.preview_rot(self.vd, min(self.frame, self.vd.n_frames - 1), self.pr.tgt.skeleton.parents, int(j), q_view):
+                self.update()
+
+    def preview_move(self, j: int, dview) -> None:
+        if self.vd is not None and self.pr is not None and self.pr.tgt is not None:
+            if VM.preview_move(self.vd, min(self.frame, self.vd.n_frames - 1), self.pr.tgt.skeleton.parents, int(j), dview):
+                self.update()
 
     # --------------------------------------------------------------- 메시
     def _display_meshes(self, kind: str):

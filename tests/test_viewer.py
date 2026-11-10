@@ -385,7 +385,52 @@ def test_overlay_names():
     print("overlay names OK")
 
 
+def test_preview_matches_recompute():
+    """본을 끌 때 즉시 보여 주는 미리보기가, 이어서 하는 정식 계산(레이어 키)과 같은 모습이어야 한다."""
+    from motionbridge.core import layeredit
+    from motionbridge.ui.viewer_math import preview_move, preview_rot
+    with tempfile.TemporaryDirectory() as d:
+        src, src2, tgt, _, _ = TP.make_inputs(d)
+        pr = Project()
+        pr.load_source(src)
+        pr.load_target(tgt)
+        pr.run()
+        vd = ViewData.build(pr)
+        par = pr.tgt.skeleton.parents
+        j = pr.tgt_slots["L_UpperArm"]
+        f = 6
+        q = Q.from_axis_angle(np.array([0.3, 1.0, 0.2]) / np.linalg.norm([0.3, 1.0, 0.2]), np.radians(35.0))
+        before = vd.tgt_pos.copy()
+        assert preview_rot(vd, f, par, j, q)
+        lay = pr.layer_stack().add()
+        lay.fade = 0
+        res = pr.result
+        wr, wp = __import__("motionbridge.core.model", fromlist=["fk"]).fk(pr.tgt.skeleton, res.anim.rot, res.anim.pos)
+        p_ = int(par[j])
+        layeredit.rot_edit(lay, j, f, q, vd.Ft, wr[f][p_] if p_ >= 0 else None)
+        pr.run()
+        truth = ViewData.build(pr)
+        assert np.allclose(vd.tgt_pos[f], truth.tgt_pos[f], atol=1e-6 * max(vd.height, 1.0)), np.abs(vd.tgt_pos[f] - truth.tgt_pos[f]).max()
+        assert np.allclose(vd.tgt_pos[f - 1], before[f - 1]), "다른 프레임은 건드리지 않는다"
+        # 이동
+        vd2 = ViewData.build(pr)
+        dv = np.array([2.0, 1.0, -3.0])
+        pr.layer_stack().layers.clear()
+        pr.layer_stack().top = 0
+        pr.run()
+        vd3 = ViewData.build(pr)
+        assert preview_move(vd3, f, par, j, dv)
+        lay = pr.layer_stack().add()
+        lay.fade = 0
+        layeredit.pos_edit(lay, j, f, dv, vd3.Ft, wr[f][p_] if p_ >= 0 else None)
+        pr.run()
+        t2 = ViewData.build(pr)
+        assert np.allclose(vd3.tgt_pos[f], t2.tgt_pos[f], atol=1e-6 * max(vd3.height, 1.0)), np.abs(vd3.tgt_pos[f] - t2.tgt_pos[f]).max()
+    print("preview matches OK")
+
+
 if __name__ == "__main__":
+    test_preview_matches_recompute()
     test_overlay_names()
     test_material_colors()
     test_heavy_mesh_performance()

@@ -84,7 +84,7 @@ for rotated in (False, True):
 # 사람 매핑으로 그냥 돌리면 어떻게 되는지 (참고): 매핑된 본이 거의 없어서 못 돌린다
 try:
     retarget(src, anim_for(src), convert(src, M, S, "Limb_%d", False), [], RetargetSettings(), [], auto_map(src), {})
-    check(False, "매핑 없이 일반 리타깃은 오류여야 함")
+    check(False, "매핑 없이 일반 리타겟은 오류여야 함")
 except ValueError:
     pass
 
@@ -119,7 +119,7 @@ check(pr.rig() is None and "모양이 맞지 않" in pr.rig_note, "프로젝트�
 pr.tgt = SimpleNamespace(skeleton=tgt, animations=[], path="m.glb", notes=[], meshes=[])
 check(pr.rig() is not None and pr.rig_note == "", "다시 맞으면 이유 지움")
 
-# 사람 모양이면(양쪽 골반·다리·팔이 잡힘) 기존 사람 리타깃을 그대로 쓴다
+# 사람 모양이면(양쪽 골반·다리·팔이 잡힘) 기존 사람 리타겟을 그대로 쓴다
 pr.settings.same_rig = True
 hum = {k: 1 for k in ("Hips", "L_UpLeg", "R_UpLeg", "L_Foot", "R_Foot", "L_UpperArm", "R_UpperArm")}
 pr.src_slots, pr.tgt_slots = dict(hum), dict(hum)

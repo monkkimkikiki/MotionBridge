@@ -32,6 +32,7 @@ from ..core.pipeline import ExportOptions, Project
 from . import gizmo_math as GZ
 from .help_text import EXTRACT_HELP, FIRST_STEPS
 from .curve_editor import CurveEditor
+from .ik_panel import IKRangePanel
 from .layer_panel import LayerPanel
 from .viewer import MESH_MODES, Viewport
 from .retimebar import RetimeBar
@@ -60,7 +61,7 @@ class _LinkSignals(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("MotionBridge %s — 모션 리타깃" % __version__)
+        self.setWindowTitle("MotionBridge %s — 모션 리타겟" % __version__)
         self.pr = Project()
         self.cfg = bridge.load_config()
         if not isinstance(self.cfg.get("collapsed"), dict):
@@ -186,7 +187,7 @@ class MainWindow(QMainWindow):
             ("프레임 편집", "retime_longer", "대상 구간 1프레임 길게 (느리게)", "retime_len:1", ("=",)),
             ("프레임 편집", "retime_shorter", "대상 구간 1프레임 짧게 (빠르게)", "retime_len:-1", ("-",)),
             ("편집", "automap", "자동 매핑 다시 하기", "_automap", ("Ctrl+M",)),
-            ("편집", "reset_settings", "리타깃 설정 모두 기본값으로", "_reset_settings", ("Ctrl+Shift+R",)),
+            ("편집", "reset_settings", "리타겟 설정 모두 기본값으로", "_reset_settings", ("Ctrl+Shift+R",)),
             ("보기", "play", "재생 / 정지", "toggle_play", ("Space",)),
             ("보기", "prev", "이전 프레임", "step_frame:-1", (",",)),
             ("보기", "next", "다음 프레임", "step_frame:1", (".",)),
@@ -206,7 +207,7 @@ class MainWindow(QMainWindow):
             ("보기", "mesh_cycle", "메시 보기 방식 순환", "mesh_cycle", ("M",)),
             ("탭", "tab0", "0. 게임에서 추출", "goto_tab:0", ("Ctrl+1",)),
             ("탭", "tab1", "1. 파일·매핑", "goto_tab:1", ("Ctrl+2",)),
-            ("탭", "tab2", "2. 리타깃 조절", "goto_tab:2", ("Ctrl+3",)),
+            ("탭", "tab2", "2. 리타겟 조절", "goto_tab:2", ("Ctrl+3",)),
             ("탭", "tab3", "3. 품질 검수", "goto_tab:3", ("Ctrl+4",)),
             ("탭", "tab4", "4. 내보내기", "goto_tab:4", ("Ctrl+5",)),
             ("탭", "tab5", "영상으로 찾기", "goto_tab:5", ("Ctrl+6",)),
@@ -270,7 +271,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "단축키", "\n".join(rows))
 
     def show_about(self) -> None:
-        QMessageBox.information(self, "MotionBridge", "MotionBridge %s\n게임 모션 → 내 모델 리타깃 / Max·Maya·Blender 내보내기" % __version__)
+        QMessageBox.information(self, "MotionBridge", "MotionBridge %s\n게임 모션 → 내 모델 리타겟 / Max·Maya·Blender 내보내기" % __version__)
 
     # ---- 단축키 동작
     def toggle_play(self) -> None:
@@ -386,7 +387,7 @@ class MainWindow(QMainWindow):
         self.tabs = ChromeTabs()  # 크롬식 탭 줄: 누르면 전환 · 끌어내면 별도 창 · 다른 창 탭 줄에 놓으면 합쳐짐
         self.tabs.addTab(self._tab_extract(), "추출", "0. 게임에서 추출")
         self.tabs.addTab(self._tab_files(), "파일·매핑", "1. 파일·매핑")
-        self.tabs.addTab(self._tab_retarget(), "리타깃", "2. 리타깃 조절")
+        self.tabs.addTab(self._tab_retarget(), "리타겟", "2. 리타겟 조절")
         self.tabs.addTab(self._tab_quality(), "검수", "3. 품질 검수")
         self.tabs.addTab(self._tab_export(), "내보내기", "4. 내보내기")
         self.vidfind = VidFindTab(self)
@@ -487,7 +488,7 @@ class MainWindow(QMainWindow):
         bl = QHBoxLayout()
         self.cb_bone_edit = QCheckBox("🦴 본 편집")
         self.cb_bone_edit.setToolTip("켜면 뷰포트에서 본(점)을 클릭해 고르고, 3ds Max 처럼 Q 선택 / W 이동 / E 회전 / R 크기 키로 도구를 바꿔 직접 고칩니다.\n"
-                                     "하위 본 전체가 같이 움직이고, 값은 [리타깃]의 '본별 보정'(회전·위치·크기)에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
+                                     "하위 본 전체가 같이 움직이고, 값은 [리타겟]의 '본별 보정'(회전·위치·크기)에 기록돼 미리보기·내보내기에 똑같이 반영됩니다 (Ctrl+Z 로 되돌리기).\n"
                                      "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.")
         self.cb_bone_edit.toggled.connect(self._bone_edit_toggled)
         bl.addWidget(self.cb_bone_edit)
@@ -592,7 +593,7 @@ class MainWindow(QMainWindow):
         bar.setSpacing(4)
         self.mode_btns: Dict[str, QPushButton] = {}
         for key, text, tip in (("animref", "AnimRef", "게임 영상에서 모션 클립을 모으고 정리합니다"),
-                               ("motionbridge", "MotionBridge", "추출 · 영상찾기 · 매핑 · 리타깃 · 검수 · 내보내기")):
+                               ("motionbridge", "MotionBridge", "추출 · 영상찾기 · 매핑 · 리타겟 · 검수 · 내보내기")):
             b_ = QPushButton(text)
             b_.setCheckable(True)
             b_.setToolTip(tip)
@@ -1290,7 +1291,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(tip)
         prow = QHBoxLayout()
         b = QPushButton("프로필 저장…")
-        b.setToolTip("매핑과 리타깃 설정을 이름 기준으로 저장 — 같은 리그에 다시 쓸 수 있습니다")
+        b.setToolTip("매핑과 리타겟 설정을 이름 기준으로 저장 — 같은 리그에 다시 쓸 수 있습니다")
         b.clicked.connect(self.save_profile)
         prow.addWidget(b)
         b = QPushButton("프로필 불러오기…")
@@ -1363,7 +1364,7 @@ class MainWindow(QMainWindow):
             f.addRow(lab, nf)
         f.addRow("루트 회전(Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
         f.addRow(self._chk("transfer_root_motion", "제자리(인플레이스) — 수평 이동 제거", "체크하면 캐릭터가 앞으로 나아가지 않고 제자리에서 움직입니다", invert=True))
-        f.addRow(self._chk("same_rig", "같은 스켈레톤이면 본 이름대로 그대로 적용 (사람 모양이 아닌 캐릭터)", "몬스터처럼 사람 본(골반·팔·다리)이 아닌 캐릭터는 사람 기준 매핑·좌표축 추정이 엉뚱하게 돌아갑니다. 소스 모션과 타깃 메시가 같은 스켈레톤(본 이름·계층·모양이 같음)이면 그 추정을 건너뛰고 본 이름대로 1:1 로 적용합니다. 꺼 두면 항상 사람 기준 리타깃을 씁니다."))
+        f.addRow(self._chk("same_rig", "같은 스켈레톤이면 본 이름대로 그대로 적용 (사람 모양이 아닌 캐릭터)", "몬스터처럼 사람 본(골반·팔·다리)이 아닌 캐릭터는 사람 기준 매핑·좌표축 추정이 엉뚱하게 돌아갑니다. 소스 모션과 타깃 메시가 같은 스켈레톤(본 이름·계층·모양이 같음)이면 그 추정을 건너뛰고 본 이름대로 1:1 로 적용합니다. 꺼 두면 항상 사람 기준 리타겟을 씁니다."))
         f.addRow(self._chk("start_at_origin", "시작 위치를 모델 원점에 맞춤", "게임 모션은 월드 좌표에서 시작하는 경우가 많습니다. 켜면 첫 프레임의 수평 위치를 모델이 서 있는 자리로 옮기고 이동량만 따라갑니다. 끄면 원본 절대 위치를 그대로 씁니다."))
         self.com_combo = QComboBox()
         self.com_combo.currentIndexChanged.connect(self._com_changed)
@@ -1387,6 +1388,10 @@ class MainWindow(QMainWindow):
         f.addRow("바닥 높이 보정", self._num("ground_offset", -50, 50, 0.1, 2, tip="타깃 단위. 발목 기준 바닥 높이를 올리거나 내림"))
         self.ground_field = self._fields["ground_offset"][0]
         f.addRow(self._chk("hip_drop", "다리가 모자라면 골반 낮추기"))
+        f.addRow("무릎·팔꿈치 방향 고정", self._num("ik_knee_stable", 0, 100, 5, 0, " %", tip="다리가 거의 펴졌을 때 IK 가 무릎을 옆이나 뒤로 돌려 이상한 각도로 꺾는 것을 막고, 무릎이 원래 향하던 쪽(앞)을 유지시킵니다.\n"
+                                                                    "100% = 항상 그쪽을 유지 (기본) · 50% = 반쯤 · 0% = 막지 않음 (원본 자세에서 읽은 방향 그대로. 몬스터처럼 무릎이 옆으로 꺾이는 모델은 낮추세요)"))
+        f.addRow("무릎·팔꿈치 과하게 접힘 방지", self._num("ik_knee_fold", 0, 100, 5, 0, " %", tip="발이 골반 바로 아래·안쪽으로 끌려올 때 무릎이 완전히 접혀 뒤집히는 것을 막는 정도입니다.\n"
+                                                                    "100% = 안쪽 각도 20° 아래로는 못 접힘 (기본) · 0% = 제한 없음"))
         adv = CollapsibleBox("접지 판정 세부값 — 보통 건드릴 필요 없음")
         adv.setToolTip("발이 땅에 닿았는지 판정하는 기준과 골반 낮추기 한계입니다. 기본값으로 대부분 맞고, 발이 땅에서 뜨거나 미끄러지는 클립이 있을 때만 만져 보세요.")
         fa = QFormLayout(adv)
@@ -1405,6 +1410,9 @@ class MainWindow(QMainWindow):
         except TypeError:                            # 시험용 가짜 Qt
             pass
         lay.addWidget(g)
+
+        self.ik_panel = IKRangePanel(self)
+        lay.addWidget(self.ik_panel)
 
         g = CollapsibleBox("좌표축 (자동 인식이 틀릴 때만)")
         f = QFormLayout(g)
@@ -1495,9 +1503,9 @@ class MainWindow(QMainWindow):
             f.addRow(motionfx.PARTS[key][0], nf)
         lay.addWidget(g)
 
-        # 영상 찾기 탭의 '추출할 애니메이션 가공'과 같은 기능 — 내보낼 때 리타깃 결과에 적용된다
+        # 영상 찾기 탭의 '추출할 애니메이션 가공'과 같은 기능 — 내보낼 때 리타겟 결과에 적용된다
         self.rt_edit = EditPanel("애니메이션 가공 (선택) — 늘리기 · fps · 구간 · 루프 · 키 압축", self.cfg, "rt_edit")
-        self.rt_edit.setToolTip("내보낼 때 리타깃 결과(또는 소스 모션)에 적용됩니다. 아무것도 안 고르면 가공하지 않습니다. "
+        self.rt_edit.setToolTip("내보낼 때 리타겟 결과(또는 소스 모션)에 적용됩니다. 아무것도 안 고르면 가공하지 않습니다. "
                                 "내보내기 탭의 '추가 가공'과 함께 쓰면 두 설정이 합쳐집니다(같은 항목은 내보내기 탭 값이 우선).")
         self.rt_edit_note = QLabel("")
         self.rt_edit_note.setWordWrap(True)
@@ -1517,7 +1525,7 @@ class MainWindow(QMainWindow):
         return sc
 
     def _rt_edit_changed(self) -> None:
-        """리타깃 탭 가공 패널: 값 기억 + 현재 클립이 어떻게 바뀌는지 한 줄로 보여준다."""
+        """리타겟 탭 가공 패널: 값 기억 + 현재 클립이 어떻게 바뀌는지 한 줄로 보여준다."""
         try:
             self.rt_edit.save()
         except Exception:
@@ -1539,14 +1547,14 @@ class MainWindow(QMainWindow):
         self.rt_edit_note.setText(txt)
 
     def _export_edit(self):
-        """리타깃 탭 가공 + 내보내기 탭 가공을 합친 옵션."""
+        """리타겟 탭 가공 + 내보내기 탭 가공을 합친 옵션."""
         return animops.merge_edit(self.rt_edit.options(), self.edit_panel.options())
 
     # ------------------------------------------------------------------ 탭 3
     def _tab_quality(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        self.quality_summary = QLabel("리타깃 결과가 있으면 문제 구간을 자동으로 찾아 줍니다.")
+        self.quality_summary = QLabel("리타겟 결과가 있으면 문제 구간을 자동으로 찾아 줍니다.")
         self.quality_summary.setWordWrap(True)
         lay.addWidget(self.quality_summary)
         self.issue_list = QListWidget()
@@ -1599,8 +1607,8 @@ class MainWindow(QMainWindow):
 
         g = CollapsibleBox("무엇을 내보낼까")
         v = QVBoxLayout(g)
-        self.rb_retarget = QRadioButton("리타깃 결과 (내 모델용)")
-        self.rb_source = QRadioButton("원본 모션 그대로 (리타깃 없음 — 크리처/구조물용)")
+        self.rb_retarget = QRadioButton("리타겟 결과 (내 모델용)")
+        self.rb_source = QRadioButton("원본 모션 그대로 (리타겟 없음 — 크리처/구조물용)")
         self.rb_retarget.setChecked(True)
         v.addWidget(self.rb_retarget)
         v.addWidget(self.rb_source)
@@ -1632,7 +1640,7 @@ class MainWindow(QMainWindow):
         for key, text, tip in (("bvh", "BVH", "Max/Maya/Blender 모두 읽는 모션 파일 (대상 프로그램별 축·단위 적용)"),
                                ("glb", "GLB (glTF)", "메시·스킨·애니메이션 포함 가능"),
                                ("bip", "3ds Max Biped (.ms)", "FBX 를 거치지 않고 Biped 에 바로 넣는 MaxScript + 데이터. 3ds Max 에서 스크립트를 실행하면 Biped 를 만들고 .bip 로 저장합니다 (대상 프로그램 선택과 무관, 3ds Max 전용)"),
-                               ("fbx", "FBX (Blender 필요)", "내 모델 파일을 Blender 로 열어 모션을 입힌 뒤 FBX 로 저장 — 리타깃 결과 전용")):
+                               ("fbx", "FBX (Blender 필요)", "내 모델 파일을 Blender 로 열어 모션을 입힌 뒤 FBX 로 저장 — 리타겟 결과 전용")):
             cb = QCheckBox(text)
             cb.setToolTip(tip)
             cb.setChecked(key == "bvh")
@@ -2491,9 +2499,11 @@ class MainWindow(QMainWindow):
         """뷰포트에서 본을 끌어 돌린 만큼을 '본별 회전 보정'에 더한다 (루트 Yaw 가 있으면 그만큼 되돌려서 화면에 보이는 방향대로 돈다).
         보정 레이어 키 기록이 켜져 있으면 대신 그 레이어의 현재 프레임 키로 기록한다."""
         if self.layer_panel.recording():
-            self.layer_panel.on_rot_drag(j, q_view)
+            if self.layer_panel.on_rot_drag(j, q_view):
+                self.viewport.preview_rot(j, q_view)       # 전체 계산을 기다리지 않고 지금 프레임을 바로 갱신
             return
         self.layer_panel.note_base_edit()
+        self.viewport.preview_rot(j, q_view)
         st = self.pr.settings
         yaw = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
         d = Q.mul(Q.conj(yaw), Q.mul(np.asarray(q_view, float), yaw))
@@ -2522,9 +2532,11 @@ class MainWindow(QMainWindow):
         if self.pr.tgt is None:
             return
         if self.layer_panel.recording():
-            self.layer_panel.on_pos_drag(j, dview)
+            if self.layer_panel.on_pos_drag(j, dview):
+                self.viewport.preview_move(j, dview)
             return
         self.layer_panel.note_base_edit()
+        self.viewport.preview_move(j, dview)
         st = self.pr.settings
         dview = np.asarray(dview, dtype=float)
         vf = self._bone_view_frame()
@@ -2631,6 +2643,8 @@ class MainWindow(QMainWindow):
         self.retime_bar.refresh()
         if getattr(self, "layer_panel", None) is not None:
             self.layer_panel.refresh()
+        if getattr(self, "ik_panel", None) is not None:
+            self.ik_panel.refresh()
         self._update_info(err)
         self._update_quality()
         self._maybe_refresh_bone_ui()
@@ -2656,14 +2670,14 @@ class MainWindow(QMainWindow):
         elif self.pr.src and self.pr.tgt and not self.pr.pairs():
             lines.append("<span style='color:#e0a050'>자동 매핑된 본이 없습니다. 아래 표에서 직접 연결하세요.</span>")
         if err:
-            warns.append("리타깃 실패: " + err)
+            warns.append("리타겟 실패: " + err)
         self.info_label.setText("<br>".join(lines))
         self.warn_label.setText("\n".join(w if w.startswith("ℹ") else "⚠ " + w for w in warns))
 
     def _update_quality(self) -> None:
         self.issue_list.clear()
         if self.pr.result is None:
-            self.quality_summary.setText("리타깃 결과가 있으면 문제 구간을 자동으로 찾아 줍니다.")
+            self.quality_summary.setText("리타겟 결과가 있으면 문제 구간을 자동으로 찾아 줍니다.")
             return
         issues = self.pr.issues
         counts = {"error": 0, "warn": 0, "info": 0}
@@ -2763,7 +2777,7 @@ class MainWindow(QMainWindow):
             return
         what = "retargeted" if self.rb_retarget.isChecked() else "source"
         if what == "retargeted" and not self.pr.ready():
-            QMessageBox.warning(self, "내보내기", "리타깃하려면 타깃 모델과 매핑이 필요합니다.")
+            QMessageBox.warning(self, "내보내기", "리타겟하려면 타깃 모델과 매핑이 필요합니다.")
             return
         presets = [k for k, cb in self.cb_preset.items() if cb.isChecked()]
         fmts = [k for k, cb in self.cb_fmt.items() if cb.isChecked()]

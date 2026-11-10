@@ -1,4 +1,4 @@
-"""Blender 안에서 실행하는 스크립트: 모델을 열고, 리타깃된 월드 포즈를 본 포즈(키프레임)로 굽고, FBX 로 내보낸다.
+"""Blender 안에서 실행하는 스크립트: 모델을 열고, 리타겟된 월드 포즈를 본 포즈(키프레임)로 굽고, FBX 로 내보낸다.
 
 사용: blender -b --python blender_apply.py -- <모델 파일> <payload.npz> <출력.fbx> <옵션 JSON 문자열>
 

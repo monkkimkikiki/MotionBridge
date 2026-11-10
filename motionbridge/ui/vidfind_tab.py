@@ -533,7 +533,7 @@ class VidFindTab(QWidget):
                                   "모두 지금 목록(위쪽 %d개)에서 맞는 애니메이션을 고르고 서로의 이유를 보며 고칩니다. 합의 순위로 목록을 다시 줄 세웁니다." % MAX_PANEL_NAMES)
         self.btn_panel.clicked.connect(lambda *_a: self.open_panel())
         v.addWidget(self.btn_panel)
-        self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타깃 작업)")
+        self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타겟 작업)")
         self.btn_view.setMinimumHeight(34)
         self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 엽니다. 뷰포트로 끌어다 놓아도 같고, 탭은 옮기지 않습니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
                                  "같은 스켈레톤(같은 캐릭터)의 애니메이션만 함께 열립니다.")

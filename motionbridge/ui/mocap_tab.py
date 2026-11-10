@@ -43,7 +43,7 @@ class MocapTab(QWidget):
         outer.addWidget(sc)
 
         intro = QLabel("<b>AI 모캡</b> — 영상 한 편에서 사람의 3D 모션을 뽑습니다(무료 오픈소스). 결과는 SMPL 뼈대(22개 관절)의 BVH 로 저장되어 "
-                       "바로 소스 모션으로 열리고, 매핑·리타깃은 평소처럼 합니다. 연구·비영리용 라이선스입니다 (상업 이용 금지).")
+                       "바로 소스 모션으로 열리고, 매핑·리타겟은 평소처럼 합니다. 연구·비영리용 라이선스입니다 (상업 이용 금지).")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 

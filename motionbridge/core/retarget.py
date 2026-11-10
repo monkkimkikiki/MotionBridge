@@ -1,4 +1,4 @@
-"""모션 리타깃 엔진.
+"""모션 리타겟 엔진.
 
 방식 (표준 프레임 = Y-up, +Z 전방, +X 왼쪽 에서 계산)
   1. 매핑된 각 본의 '월드 회전 변화량' D(t) = Rs(t) * Rs_bind^-1 을 구해 타깃 바인드 회전에 적용한다.
@@ -75,10 +75,14 @@ class RetargetSettings:
     scale_offsets: Dict[int, float] = field(default_factory=dict)
     # 소스와 타깃이 같은 스켈레톤(본 이름·계층·모양이 같음)이고 사람 모양이 아니면 사람 본 매핑·좌표축 추정을 거치지 않고 본 이름대로 그대로 적용한다 (core/rigmatch)
     same_rig: bool = True
+    # IK 구간 직접 지정: 클립 번호 -> {체인 라벨: [[시작, 끝, 켬/끔], ...]} (프레임은 0부터, 끝 포함). 자동 접지 판정 위에 덮어쓴다
+    ik_ranges: Dict[int, Dict[str, list]] = field(default_factory=dict)
     # 모션빌더식 후처리 (core/motionfx): 부위별 모션 세기(부위 -> 0..1.5), 튀는 프레임 제거 기준(도, 0=끔), 부드럽게(프레임, 0=끔), 좌우 반전
     fx_parts: Dict[str, float] = field(default_factory=dict)
     fx_spike_deg: float = 0.0
     fx_spike_len: int = 6        # 튀는 구간으로 볼 최대 프레임 수
+    ik_knee_stable: float = 100.0   # % — 무릎/팔꿈치 방향 안정화 (0 = 현재 자세에서 읽은 방향 그대로, 100 = 꺾임이 충분한 앞뒤 프레임의 방향을 이어 씀)
+    ik_knee_fold: float = 100.0     # % — 무릎/팔꿈치 과접힘 방지 (0 = 제한 없음, 100 = 안쪽 각도 20° 미만으로 접히지 않음)
     fx_smooth: float = 0.0
     fx_mirror: bool = False
 
@@ -91,6 +95,7 @@ class ChainPlan:
     target: np.ndarray  # (T,3) 표준 프레임, IK 목표 발목 위치
     fail: np.ndarray  # (T,) bool 다리가 닿지 않은 프레임
     leg_length: float = 0.0
+    auto_contact: Optional[np.ndarray] = None  # 직접 지정한 구간을 반영하기 전, 자동으로 판정한 접지 (T,) bool
     applied: bool = False  # 이 체인에 IK 가 실제로 적용됐는가 (꺼져 있거나 손이 바닥에 안 닿으면 False — 뷰포트 IK 표시도 이때는 그리지 않는다)
 
 
@@ -241,9 +246,11 @@ def retarget(
     src_slots: Optional[Dict[str, int]] = None,
     tgt_slots: Optional[Dict[str, int]] = None,
     rig=None,
+    manual_ik: Optional[Dict[str, list]] = None,
 ) -> RetargetResult:
     """rig: core.rigmatch.RigMatch. 주면 '같은 스켈레톤' 모드 — pairs 는 rig.pairs 를 쓰고, 소스→타깃 좌표축·스케일은 rig 에서 가져오며
-    본 방향 보정은 하지 않고 발 IK 도 쓰지 않는다 (사람이 아닌 캐릭터에서 사람 기준 추정이 엉뚱하게 돌아가는 것을 막는다)."""
+    본 방향 보정은 하지 않고 발 IK 도 쓰지 않는다 (사람이 아닌 캐릭터에서 사람 기준 추정이 엉뚱하게 돌아가는 것을 막는다).
+    manual_ik: {체인 라벨: [[시작, 끝, 켬(True)/끔(False)], ...]} 자동 접지 판정 위에 덮어쓰는, 직접 지정한 IK 구간 (프레임 번호는 0부터, 끝 포함)."""
     st = st or RetargetSettings()
     chains = [] if rig is not None else list(chains or [])
     warnings: List[str] = []
@@ -511,6 +518,16 @@ def retarget(
     def chain_lengths(ch: IKChain):
         return float(np.linalg.norm(bpt[ch.lower] - bpt[ch.upper])), float(np.linalg.norm(bpt[ch.foot] - bpt[ch.lower]))
 
+    def with_manual(label: str, contact: np.ndarray) -> np.ndarray:
+        """자동 판정 위에 직접 지정한 구간을 덮는다 (나중에 지정한 것이 우선)."""
+        c = np.asarray(contact, dtype=bool).copy()
+        for rng in (manual_ik or {}).get(label, []):
+            a, b, on = int(rng[0]), int(rng[1]), bool(rng[2])
+            a, b = max(min(a, b), 0), min(max(a, b), T - 1)
+            if b >= a:
+                c[a:b + 1] = on
+        return c
+
     def plan_chains(Wp: np.ndarray) -> List[ChainPlan]:
         plans: List[ChainPlan] = []
         for ch in valid_chains:
@@ -529,6 +546,8 @@ def retarget(
                 contact = hand_contact(sc[:, 1] - ground_src, st.hand_contact_height * Ls, st.hand_release_height * Ls)
             else:
                 contact = clean_mask((sc[:, 1] - ymin < st.contact_height * Ls) & (sp < st.contact_speed * Ls))
+            auto_c = contact
+            contact = with_manual(ch.label, contact)
             fkc = Q.rotate(Ft, Wp[:, ch.foot])
             Dc = bpt[ch.foot] + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
             def ramp_weights(mask: np.ndarray):
@@ -564,7 +583,7 @@ def retarget(
                 goal[:, 1] = floor_y + k * np.maximum(hs, 0.0)
                 target = fkc * (1 - w)[:, None] + goal * w[:, None]
                 target[:, 1] = np.where(w > 1e-9, np.maximum(target[:, 1], floor_y), target[:, 1])
-                plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg))
+                plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg, auto_c))
                 continue
 
             goal = Dc.copy()
@@ -577,7 +596,7 @@ def retarget(
             target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
             if st.ground_clamp:
                 target[:, 1] = np.maximum(target[:, 1], bpt[ch.foot, 1] + st.ground_offset)
-            plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg))
+            plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg, auto_c))
         return plans
 
     zero = np.zeros(T)
@@ -622,7 +641,10 @@ def retarget(
             pu0 = tgt.parents[ch.upper]
             Rref = Q.mul(Ft, Wr[:, pu0]) if pu0 >= 0 else np.tile(np.asarray(Ft, dtype=float), (T, 1))
             pole, prel = stable_pole(A, B, Cc, Rref)
-            Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2, pole=pole, pole_rel=prel)
+            stab = float(np.clip(st.ik_knee_stable, 0.0, 100.0)) / 100.0
+            prel = 1.0 - stab * (1.0 - prel)             # 0% 면 신뢰도 1 = 예전처럼 현재 자세의 방향만 쓴다
+            Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2, pole=pole, pole_rel=prel,
+                                       min_fold_deg=20.0 * float(np.clip(st.ik_knee_fold, 0.0, 100.0)) / 100.0)
             pl.fail = fail
             q1 = Q.between(B - A, Bn - A)
             Cpre = Bn + Q.rotate(q1, Cc - B)
@@ -690,7 +712,10 @@ def retarget(
         g = Q.rotate(yaw_q, k * (ps - bps[pair_of[com]] - rootoff[:, None, :]))
         g[..., 0] += bpt[com][0] + place[0] + hip_off[0]
         g[..., 2] += bpt[com][2] + place[2] + hip_off[2]
-        g[..., 1] = ps[..., 1] * k + hip_off[1]   # 골반 높이 보정도 같이 반영해서, 소스와 타깃을 겹쳐 볼 때 어긋나 보이지 않게
+        # 높이: 손/발 IK 가 쓰는 것과 같은 기준으로 맞춘다 — '소스 바닥(가장 낮은 매핑 본의 바인드 높이)'을 '타깃 바닥'에 올리고 그 위 높이만 k 배.
+        # (예전에는 소스 절대 높이 x k 를 그대로 써서, 두 바닥 높이가 다르면 고스트가 타깃보다 낮게/높게 떠서 '원본은 더 아래를 찍는데 타깃은 다른 곳을 찍는' 것처럼 보였다.)
+        # 골반 높이 보정(hip_offset)도 같이 반영해서 소스와 타깃을 겹쳐 볼 때 어긋나 보이지 않게 한다.
+        g[..., 1] = ground_tgt + st.ground_offset + k * (ps[..., 1] - ground_src) + hip_off[1]
         ghost = g
     return RetargetResult(
         anim, float(k), (Fs, desc_s), (Ft, desc_t), plans, drop, warnings, list(pairs), com, corr, ps,

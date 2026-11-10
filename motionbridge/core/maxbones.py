@@ -79,7 +79,7 @@ def write_data(path: str, d: dict) -> None:
             f.write(" ".join("%.5f" % v for v in vals) + "\n")
 
 
-SCRIPT = r'''-- MotionBridge -> 3ds Max 일반 본(Maya 식 관절)  (자동 생성 파일, 리타깃 결과)
+SCRIPT = r'''-- MotionBridge -> 3ds Max 일반 본(Maya 식 관절)  (자동 생성 파일, 리타겟 결과)
 -- 사용법: 3ds Max 에서 [Scripting > Run Script...] 로 이 파일을 실행하세요.
 --   * 같은 폴더의 "__DATA__" 를 읽어서, 스키닝된 템플릿 .max 를 열고 이름이 같은 본에 모션 키를 넣은 뒤
 --     템플릿이 있는 폴더에 "<이 파일 이름>.max" 로 다른 이름 저장합니다 (원본은 그대로, 같은 이름이 있으면 _2, _3 …).

@@ -52,7 +52,7 @@ def cmd_retarget(args) -> int:
     pr.load_source(args.source)
     if args.what == "retargeted" or args.target:
         if not args.target:
-            _p("오류: 리타깃하려면 --target 이 필요합니다.")
+            _p("오류: 리타겟하려면 --target 이 필요합니다.")
             return 2
         pr.load_target(args.target)
     if args.profile:
@@ -200,7 +200,7 @@ def cmd_blender(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="motionbridge", description="MotionBridge %s — 모션 리타깃/내보내기" % __version__)
+    ap = argparse.ArgumentParser(prog="motionbridge", description="MotionBridge %s — 모션 리타겟/내보내기" % __version__)
     sub = ap.add_subparsers(dest="cmd")
 
     m = sub.add_parser("mesh", help="추출한 메시(.psk/.pskx/.glb)를 FBX/OBJ/GLB 로 변환 (리깅 포함/없음 선택)")
@@ -217,11 +217,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--blender")
     a.set_defaults(fn=cmd_info)
 
-    r = sub.add_parser("retarget", help="모션을 내 모델에 리타깃하고 내보내기")
+    r = sub.add_parser("retarget", help="모션을 내 모델에 리타겟하고 내보내기")
     r.add_argument("--source", required=True, help="모션이 들어 있는 파일 (fbx/glb/bvh/blend)")
     r.add_argument("--target", help="내 모델 파일 (what=retargeted 일 때 필수)")
     r.add_argument("--out", required=True, help="출력 폴더")
-    r.add_argument("--what", choices=["retargeted", "source"], default="retargeted", help="source: 리타깃 없이 원본 모션만 변환")
+    r.add_argument("--what", choices=["retargeted", "source"], default="retargeted", help="source: 리타겟 없이 원본 모션만 변환")
     r.add_argument("--clip", default="0", help="클립 번호 또는 all")
     r.add_argument("--presets", nargs="+", default=["blender"], choices=list(PRESETS))
     r.add_argument("--formats", nargs="+", default=["bvh"], choices=["bvh", "glb", "fbx", "bip"])

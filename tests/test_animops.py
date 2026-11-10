@@ -242,7 +242,7 @@ def test_project_frame_edits():
         assert p.is_edited() and p.anim.n_frames == T0 - 10
         assert p.edited(0) is not p.src.animations[0]
         res = p.run(analyze_quality=False)
-        assert res.anim.n_frames == T0 - 10, "리타깃도 편집된 모션으로"
+        assert res.anim.n_frames == T0 - 10, "리타겟도 편집된 모션으로"
         if len(p.src.animations) > 1:
             assert not p.is_edited(1), "다른 클립은 영향 없음"
         e.undo()
