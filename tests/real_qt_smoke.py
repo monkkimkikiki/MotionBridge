@@ -410,5 +410,29 @@ try:
 except Exception as _e:  # noqa: BLE001
     check(False, "접기 박스 스모크 예외: %r" % (_e,))
 
+# 영상찾기 'AI 회의' 두 버튼: 눌렀을 때 예외 없이 안내/대화상자가 떠야 한다 (가짜 Qt 로는 못 잡는 실제 위젯 오류)
+try:
+    from PySide6.QtWidgets import QDialog as _QD, QMessageBox as _QM
+
+    _vt = mw.vidfind
+    _warns = []
+    _QM.warning = staticmethod(lambda *a, **k: _warns.append(str(a[2]) if len(a) > 2 else ""))
+    _QD.exec = lambda self: 0     # 대화상자는 '취소'로 닫는다
+    _vt.clear_sources()
+    _vt.start_guess_panel()
+    check(_warns and "추가" in _warns[-1], "AI 회의로 추측: 영상이 없으면 안내 (%s)" % (_warns[-1:] or ["없음"]))
+    _vt._add_source("/v/a.mp4")
+    _vt.win._extract_args = lambda: ("h", "r", "ue", None, None)
+    _vt.start_guess_panel()       # 참가자 고르는 창을 만드는 중 예외가 나면 여기서 터진다
+    check(True, "AI 회의로 추측: 참가자 창 구성 오류 없음")
+    _vt._add_source("/v/a.mp4")
+    _vt.anim_list.addItem("AS_X")
+    _vt.open_panel()
+    check(True, "AI 회의로 찾기: 참가자 창 구성 오류 없음")
+except Exception as _e:  # noqa: BLE001
+    import traceback
+    traceback.print_exc()
+    check(False, "AI 회의 버튼 스모크 예외: %r" % (_e,))
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

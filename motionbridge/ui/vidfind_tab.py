@@ -1617,7 +1617,9 @@ class VidFindTab(QWidget):
         d = QDialog(self)
         d.setWindowTitle(title)
         lay = QVBoxLayout(d)
-        lay.addWidget(wrappable(QLabel("회의에 참가할 AI 를 고르세요. 이미지를 보는 AI 가 한 명 이상 필요합니다. 모델과 키는 위 '인식 방식' 설정을 따릅니다.\n" + info)))
+        intro = QLabel("회의에 참가할 AI 를 고르세요. 이미지를 보는 AI 가 한 명 이상 필요합니다. 모델과 키는 위 '인식 방식' 설정을 따릅니다.\n" + info)
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
         opts = [("ollama", "Ollama 비전 모델 (설정의 모델, 예: qwen2.5vl:7b) — 이미지 봄", True),
                 ("ollama2", "Ollama 두 번째 비전 모델 — 이미지 봄", False),
                 ("gptoss", "GPT-OSS-20B — 글 전용 (다른 AI 의 묘사를 읽고 추론)", True),

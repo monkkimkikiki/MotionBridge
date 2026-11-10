@@ -177,6 +177,20 @@ def _build_cue4parse(raw: dict):
     return skel, anims
 
 
+def _pose_consistency(skel: Skeleton, anims: List[Animation]) -> float:
+    """첫 프레임의 자세가 파일 자신의 기준 자세(ref pose)와 얼마나 일치하는지 (낮을수록 일관됨, 단위: 도 + 위치 오차 가중).
+
+    같은 파일이면 대부분의 본이 첫 프레임에서 기준 자세에 가까워야 한다. 해석(켤레/손 방향)이 틀리면 회전은 같아도
+    위치가 거울처럼 뒤집혀 어긋나므로, 사람 모양이 아닌 몬스터에서도 올바른 해석을 가려낼 수 있다."""
+    if not anims:
+        return 1e9
+    a = anims[0]
+    d = np.abs(np.sum(a.rot[0] * skel.rest_rot, axis=-1)).clip(0.0, 1.0)
+    rot = float(np.median(np.degrees(2.0 * np.arccos(d))))
+    pe = np.linalg.norm(a.pos[0] - skel.offsets, axis=1)
+    return rot + float(np.percentile(pe, 90)) / max(1.0, float(np.median(np.linalg.norm(skel.offsets, axis=1)) + 1e-6))
+
+
 def read_psa(path: str, conj: Optional[Tuple[bool, bool]] = None, fmt: str = "cue4parse") -> Model:
     """PSA 읽기.
 
@@ -191,7 +205,13 @@ def read_psa(path: str, conj: Optional[Tuple[bool, bool]] = None, fmt: str = "cu
         if sc >= 0.5:
             notes.append("PSA: CUE4Parse 형식으로 해석 (사람 모양 점수 %.2f)" % sc)
             return Model(path=path, skeleton=skel, animations=anims, meshes=[], notes=notes)
-        notes.append("⚠ CUE4Parse 형식으로는 사람 모양이 아니어서(점수 %.2f) 일반 방식으로 다시 해석합니다." % sc)
+        # 사람 모양이 아니어도(몬스터·동물) 이 도구가 추출한 PSA 는 CUE4Parse 배치다 — 파일 자신의 기준 자세와 맞는 해석을 고른다
+        c_err = _pose_consistency(skel, anims)
+        g_err = min(_pose_consistency(*_build(raw, cr, co)) for cr in (False, True) for co in (False, True))
+        if c_err <= g_err + 1.0:
+            notes.append("PSA: CUE4Parse 형식으로 해석 (사람 모양은 아님[점수 %.2f]이지만 첫 프레임이 파일의 기준 자세와 일치: 오차 %.1f ≤ 일반 방식 %.1f)" % (sc, c_err, g_err))
+            return Model(path=path, skeleton=skel, animations=anims, meshes=[], notes=notes)
+        notes.append("⚠ CUE4Parse 형식으로는 사람 모양이 아니고 기준 자세와도 안 맞아(점수 %.2f, 오차 %.1f > %.1f) 일반 방식으로 다시 해석합니다." % (sc, c_err, g_err))
     if conj is None:
         best, best_s = None, -1.0
         scores = []

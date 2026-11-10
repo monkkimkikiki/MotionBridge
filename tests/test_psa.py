@@ -120,6 +120,23 @@ def test_cue4parse_layout():
     print("cue4parse layout OK")
 
 
+def test_creature_not_humanoid():
+    """사람 모양이 아닌 뼈대(몬스터: 본 이름을 알아볼 수 없음)도 CUE4Parse 배치로 제대로 읽어야 한다 (TarredVestige 증상:
+    사람 판정이 0점이면 엉뚱한 일반 해석으로 떨어져 위치가 거울처럼 뒤집히고 회전이 어긋났다)."""
+    import copy
+    sk, anims = make()
+    sk = copy.deepcopy(sk)
+    sk.names = ["seg%d_r" % i if i else "root" for i in range(len(sk.names))]
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "creature.psa")
+        simulate_cue4parse_writer(p, sk, anims)
+        m = read_psa(p)
+        assert "CUE4Parse" in m.notes[0] and "사람 모양은 아님" in m.notes[0], m.notes
+        for a0, a1 in zip(anims, m.animations):
+            same_motion(sk, a0, m.skeleton, a1)
+    print("creature layout OK")
+
+
 def test_errors():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "bad.psa")
@@ -188,6 +205,7 @@ if __name__ == "__main__":
     test_load_source_many()
     test_roundtrip_all_conventions()
     test_cue4parse_layout()
+    test_creature_not_humanoid()
     test_errors()
     test_psa_as_source()
     print("test_psa ALL OK")
