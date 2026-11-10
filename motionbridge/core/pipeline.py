@@ -11,7 +11,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import animops, bridge, biped, frameedit, layout, maxbones, maxrun, safesave, export as X
+from . import animops, bridge, biped, frameedit, layout, maxbones, maxrun, motionfx, safesave, export as X
+from .layers import LayerStack, apply_layers
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
 from .model import Animation, Model
@@ -82,6 +83,7 @@ class Project:
         self.log: List[str] = []
         self.edit_info: Optional[animops.EditInfo] = None
         self.edits: Dict[int, frameedit.FrameEdit] = {}  # 클립별 프레임 조각 편집(영상 편집기식)
+        self.layers: Dict[int, LayerStack] = {}  # 클립별 보정 레이어(비파괴 키프레임 수정) — 리타깃 결과 위에 얹는다
         self._rig_cache: Tuple[int, int, Optional[RigMatch], str] = (0, 0, None, "")
         self.rig_note = ""   # 같은 스켈레톤으로 못 알아본 이유 (이름은 거의 같은데 모양이 안 맞을 때 화면에 알린다)
 
@@ -94,6 +96,7 @@ class Project:
         self.src_slots = auto_map(m.skeleton)
         self.clip = 0
         self.edits = {}
+        self.layers = {}
         self.result = None
         self.log += m.notes
         return m
@@ -130,6 +133,7 @@ class Project:
         self.src_slots = auto_map(base.skeleton)
         self.clip = 0
         self.edits = {}
+        self.layers = {}
         self.result = None
         self.log += base.notes
         return base, skipped
@@ -160,6 +164,7 @@ class Project:
         self.src, self.src_slots = None, {}
         self.clip = 0
         self.edits = {}
+        self.layers = {}
         self.result, self.issues = None, []
 
     # ------------------------------------------------------------------ 매핑
@@ -212,6 +217,28 @@ class Project:
             e = self.edits[ci] = frameedit.FrameEdit(n)
         return e
 
+    def layer_stack(self, ci: Optional[int] = None) -> LayerStack:
+        """클립 ci(기본: 현재 클립)의 보정 레이어 묶음 (없으면 만든다)."""
+        ci = self.clip if ci is None else ci
+        return self.layers.setdefault(ci, LayerStack())
+
+    def save_layers(self, path: str, ci: Optional[int] = None) -> None:
+        names = self.tgt.skeleton.names if self.tgt else []
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"format": "motionbridge-layers-1", "layers": self.layer_stack(ci).to_list(names)}, f, ensure_ascii=False, indent=1)
+
+    def load_layers(self, path: str, ci: Optional[int] = None) -> List[str]:
+        if not self.tgt:
+            raise ValueError("타깃 모델을 먼저 불러오세요.")
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if d.get("format") != "motionbridge-layers-1":
+            raise ValueError("MotionBridge 보정 레이어 파일이 아닙니다.")
+        warns: List[str] = []
+        self.layers[self.clip if ci is None else ci] = LayerStack.from_list(d.get("layers", []), self.tgt.skeleton.names, warns)
+        self.result = None
+        return warns
+
     def edited(self, ci: int) -> Animation:
         """소스 클립 ci 에 프레임 편집을 적용한 모션 (편집하지 않았으면 원본 그대로)."""
         base = self.src.animations[ci]
@@ -235,6 +262,12 @@ class Project:
         if clip is not None:
             self.clip = clip
         res = retarget(self.src.skeleton, self.anim, self.tgt.skeleton, self.pairs(), self.settings, self.chains(), self.src_slots, self.tgt_slots, rig=self.rig())
+        motionfx.apply(res, self.tgt.skeleton, self.tgt_slots, self.settings)
+        st = self.layers.get(self.clip)
+        if st is not None and st.has_effect():
+            res.base_anim = res.anim
+            res.anim = apply_layers(res.anim, st)
+            res.warnings.append("ℹ 보정 레이어 %d개의 키 %d개가 적용됨" % (sum(1 for l in st.layers if not l.mute and l.weight > 0 and l.n_keys()), st.total_keys()))
         self.result = res
         self.issues = analyze(self.tgt.skeleton, res, self.settings) if analyze_quality else []
         return res
@@ -380,17 +413,18 @@ class Project:
                 model_path = self.src.path
             upm = X.guess_units_per_meter(skel, F)
             char = self.export_char(ci, opt) if opt.organize else None
-            adir = os.path.join(opt.out_dir, char, layout.ANIM_DIR) if char else opt.out_dir
+            aroot = os.path.join(opt.out_dir, char, layout.ANIM_DIR) if char else opt.out_dir
             mdir = os.path.join(opt.out_dir, char, layout.MODEL_DIR) if char else opt.out_dir
-            os.makedirs(adir, exist_ok=True)
             keys = None
             if opt.edit is not None and opt.edit.active():
                 anim, keys, info = animops.apply_edit(anim, opt.edit, upm, skel.parents)
                 self.edit_info = info
                 warns += ["[%s] %s" % (anim_src.name, w) for w in info.notes]
             policy = safesave.norm(opt.on_exist)
-            if policy == safesave.NEW_NAME:     # 이미 있는 파일과 겹치지 않는 이름(base_2 …)을 먼저 고른다
-                base = _free_base(base, [adir, mdir] + [os.path.join(adir, d) for d in layout.PROGRAM_DIRS.values()])
+            if policy == safesave.NEW_NAME:     # 이미 있는 파일/클립 폴더와 겹치지 않는 이름(base_2 …)을 먼저 고른다
+                base = _free_base(base, [aroot, mdir])
+            adir = layout.clip_dir(aroot, base) if char else opt.out_dir      # 정리 켬: 출력 / 캐릭터 / Animations / <클립 이름> /  (맥스·블렌더·마야 파일을 함께)
+            os.makedirs(adir, exist_ok=True)
             if policy == safesave.KEEP_OLD:     # 임시 폴더에 만들고, 이미 있는 파일은 '_old_날짜' 로 보관한 뒤 제자리로 옮긴다
                 stage = tempfile.mkdtemp(prefix="mb_exp_", dir=opt.out_dir)
                 try:
@@ -408,8 +442,8 @@ class Project:
                             self.backups.append(bk)
                         os.replace(f, dst)
                         files.append(dst)
-                        k = {v: kk for kk, v in layout.PROGRAM_DIRS.items()}.get(os.path.basename(os.path.dirname(dst)))
-                        if opt.organize and k:
+                        k = layout.guide_key(dst)
+                        if opt.organize and k and under_a:
                             layout.write_guide(os.path.dirname(dst), k)
                 finally:
                     shutil.rmtree(stage, ignore_errors=True)
@@ -428,12 +462,11 @@ class Project:
         return files, warns
 
     def _pdir(self, opt, adir: str, key: str) -> str:
-        """모션 파일을 둘 프로그램 폴더(3dsMax/Blender/Maya/기타). '캐릭터별 폴더로 정리'가 꺼져 있으면 그대로 adir."""
-        d = layout.program_dir(adir, key, bool(opt.organize))
-        os.makedirs(d, exist_ok=True)
+        """모션 파일을 둘 폴더: 클립 폴더 하나에 프로그램 구분 없이 함께 둔다 (adir). 정리가 켜져 있으면 그 프로그램 설명을 '사용법.txt' 에 덧붙인다."""
+        os.makedirs(adir, exist_ok=True)
         if opt.organize:
-            layout.write_guide(d, key)
-        return d
+            layout.write_guide(adir, key)
+        return adir
 
     def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns, keys=None, adir=None, mdir=None) -> List[str]:
         out: List[str] = []
@@ -486,7 +519,7 @@ class Project:
                 warns.append(str(e))
         for preset_key in opt.presets:
             preset = X.PRESETS[preset_key]
-            pdir = self._pdir(opt, adir, preset_key if preset_key in layout.PROGRAM_DIRS else "etc")
+            pdir = self._pdir(opt, adir, preset_key if preset_key in layout.GUIDES else "etc")
             if "bvh" in fmts:
                 p = os.path.join(pdir, "%s_%s.bvh" % (base, preset_key))
                 warns += X.export_bvh(p, skel, anim, F, preset, upm)

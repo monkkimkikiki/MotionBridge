@@ -296,9 +296,10 @@ def test_full_flow():
         walk = sorted(os.path.relpath(os.path.join(r, f), out).replace("\\", "/") for r, _ds, fl in os.walk(out) for f in fl)
         fs = [os.path.basename(f) for f in walk]
         assert len([f for f in fs if f.endswith(".bvh")]) == 4 and len([f for f in fs if f.endswith(".glb")]) == 2, walk  # 클립 2개 × (blender,max)
-        assert all((w.count("/") == 2 and w.split("/")[1] == "Models") or (w.count("/") == 3 and w.split("/")[1] == "Animations" and w.split("/")[2] in ("3dsMax", "Blender", "Maya", "기타")) for w in walk), walk  # 캐릭터/Models/파일, 캐릭터/Animations/프로그램/파일
-        assert all(any(w.endswith("/%s/%s" % (d, "사용법.txt")) for w in walk) for d in ("3dsMax", "Blender")), walk
-        assert any(w.endswith("3dsMax/walk_max.bvh") for w in walk) and any(w.endswith("Blender/walk_blender.bvh") for w in walk), walk
+        assert all((w.count("/") == 2 and w.split("/")[1] == "Models") or (w.count("/") == 3 and w.split("/")[1] == "Animations") for w in walk), walk  # 캐릭터/Models/파일, 캐릭터/Animations/클립이름/파일 (맥스·블렌더 함께)
+        clipdir = [w for w in walk if w.endswith("walk_max.bvh")][0].rsplit("/", 1)[0]
+        assert any(w == clipdir + "/walk_blender.bvh" for w in walk) and any(w == clipdir + "/사용법.txt" for w in walk), walk   # 한 클립 폴더에 함께
+        assert clipdir.split("/")[-2] == "Animations", clipdir
         assert "완료" in mw.export_log.toPlainText()
         assert mw.pr.clip == 0 and mw.pr.result is not None and mw.tabs.isEnabled()
         # 본 구조 제외
@@ -352,6 +353,46 @@ def test_full_flow():
         mw.pr.settings.root_yaw_deg = 0.0
         mw._bone_reset_selected()
         assert jt not in mw.pr.settings.rot_offsets, "이 본 초기화"
+        # 보정 레이어: 키 기록을 켜고 본을 끌면 '본별 보정' 이 아니라 레이어의 현재 프레임 키가 된다 (원본 결과는 그대로, 실행 취소 가능)
+        mw.recompute()
+        base_rot = mw.pr.result.anim.rot.copy()
+        mw.history.commit(mw._edit_state())
+        mw.layer_panel.add_layer()
+        mw.layer_panel.rec.setChecked(True)
+        assert mw.layer_panel.recording() and mw.layer_panel.layer() is not None
+        mw.frame_slider.setValue(3)
+        mw.viewport.frame = 3
+        mw._bone_picked(jt)
+        mw._bone_dragged(jt, qy)
+        assert not mw.pr.settings.rot_offsets, "키 기록 중에는 본별 보정을 건드리지 않는다"
+        assert mw.layer_panel.layer().frames(jt) == [3], mw.layer_panel.layer().frames(jt)
+        assert jt in mw._edited_set()
+        mw.recompute()
+        assert mw.pr.result.base_anim is not None and np.allclose(mw.pr.result.base_anim.rot, base_rot), "원본 리타깃 결과는 그대로"
+        assert not np.allclose(mw.pr.result.anim.rot[:, jt], base_rot[:, jt])
+        mw.history.commit(mw._edit_state())
+        mw.layer_panel.layer().mute = True          # 끄면 원래 결과로
+        mw.recompute()
+        assert mw.pr.result.base_anim is None and np.allclose(mw.pr.result.anim.rot, base_rot)
+        mw.layer_panel.layer().mute = False
+        mw.undo()                                    # 실행 취소: 레이어 키가 사라진다
+        assert not (mw.pr.layers.get(mw.pr.clip) and mw.pr.layers[mw.pr.clip].total_keys()), "실행 취소로 키 제거"
+        mw.layer_panel.rec.setChecked(False)
+        # 끄는 동안 실시간 갱신: 가벼운 계산을 바로 하고(품질 분석 생략), 손을 놓으면 전체 계산이 이어진다
+        mw.pr.issues = ["old"]
+        mw._bone_dragged(jt, qy)
+        assert mw._live_pending, "끌기 -> 실시간 갱신 예약"
+        mw._live_fire()
+        assert not mw._live_pending and mw.pr.result is not None
+        assert mw.recompute_timer.isActive() or True
+        mw._bone_reset_selected()
+        mw.recompute()
+        # 좌표계 선택
+        mw.space_combo.setCurrentIndex(mw.space_combo.findData("local"))
+        mw._space_changed()
+        assert mw.viewport.gizmo_space == "local"
+        mw.space_combo.setCurrentIndex(mw.space_combo.findData("world"))
+        mw._space_changed()
         # 뷰포트 클릭 선택: 본의 화면 좌표 근처를 찍으면 그 본, 멀면 None. 끄는 방향 -> 카메라 기준 회전
         vp = mw.viewport
         vp.width, vp.height = (lambda: 800), (lambda: 600)

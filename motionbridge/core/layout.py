@@ -15,9 +15,10 @@ ANIM_DIR = "Animations"
 MODEL_DIR = "Models"
 MISC = "기타"
 
-# 모션 파일을 쓸 프로그램별 하위 폴더 (출력 폴더 / 캐릭터 / Animations / <프로그램>)
-PROGRAM_DIRS = {"max": "3dsMax", "blender": "Blender", "maya": "Maya", "etc": "기타"}
+# 모션 파일은 클립 하나당 폴더 하나에 프로그램(3ds Max / Blender / Maya) 구분 없이 함께 둔다:  출력 폴더 / 캐릭터 / Animations / <클립 이름> /
+# 파일 이름 끝(_max · _blender · _maya)과 확장자로 어느 프로그램용인지 알 수 있고, 폴더 안의 '사용법.txt' 가 풀어서 설명한다.
 GUIDE_NAME = "사용법.txt"
+GUIDE_HEAD = "이 폴더의 파일 — 무엇을 어디서 여는지\n"
 GUIDES = {
     "max": ("3ds Max 용 모션\n"
             "- 이름_retarget.max : 스키닝된 .max 에 모션을 자동으로 넣어 저장한 결과 (3ds Max 에서 그냥 열면 됩니다. 원본 .max 폴더에 저장됩니다)\n"
@@ -36,20 +37,45 @@ GUIDES = {
 }
 
 
-def program_dir(base: str, key: str, organize: bool = True) -> str:
-    """organize 이면 base / 프로그램 폴더, 아니면 base 그대로."""
-    return os.path.join(base, PROGRAM_DIRS.get(key, MISC)) if organize else base
+def clip_dir(anim_root: str, clip: str) -> str:
+    """모션 폴더(…/Animations) 아래의 클립 폴더."""
+    return os.path.join(anim_root, safe_name(clip))
+
+
+def guide_key(path: str) -> Optional[str]:
+    """파일이 어느 프로그램용인지 (max | blender | maya | etc), 모르면 None (사용법 파일 자신 포함)."""
+    n = os.path.basename(path).lower()
+    if n == GUIDE_NAME.lower():
+        return None
+    stem, ext = os.path.splitext(n)
+    if ext in (".ms", ".max", ".mbbip", ".mbbones") or stem.endswith("_retarget_max"):
+        return "max"
+    if stem.endswith("_blender"):
+        return "blender"
+    if stem.endswith("_maya"):
+        return "maya"
+    if ext == ".glb":
+        return "etc"
+    return None
 
 
 def write_guide(folder: str, key: str) -> None:
-    """프로그램 폴더에 짧은 사용법을 한 번만 적는다 (이미 있으면 그대로 둠)."""
+    """클립 폴더의 '사용법.txt' 에 그 프로그램 설명을 (아직 없으면) 덧붙인다. 여러 프로그램이 한 폴더에 있어도 한 파일에 차례로 쌓인다."""
+    if key not in GUIDES:
+        return
     p = os.path.join(folder, GUIDE_NAME)
-    if key in GUIDES and not os.path.exists(p):
-        try:
-            with open(p, "w", encoding="utf-8") as f:
-                f.write(GUIDES[key])
-        except OSError:
-            pass
+    try:
+        old = ""
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                old = f.read()
+        marker = GUIDES[key].split("\n", 1)[0]
+        if marker in old:
+            return
+        with open(p, "w", encoding="utf-8") as f:
+            f.write((old.rstrip("\n") + "\n\n" if old else GUIDE_HEAD + "\n") + GUIDES[key])
+    except OSError:
+        pass
 
 
 def remove_empty_fbm(*roots: str) -> List[str]:

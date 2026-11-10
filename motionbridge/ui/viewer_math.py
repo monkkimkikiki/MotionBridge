@@ -237,10 +237,9 @@ class ViewData:
                     vd.ik_target[p.label] = p.target
                     vd.bad[p.label] = p.fail
             else:
-                from ..core.mapping import DEFAULT_FRAME, detect_frame
+                from ..core.retarget import _resolve_frame
 
-                det = detect_frame(tk, pr.tgt_slots)
-                Ft = det[0] if det else DEFAULT_FRAME
+                Ft = _resolve_frame(tk, pr.settings.tgt_up, pr.settings.tgt_fwd, pr.tgt_slots)[0]   # 수동으로 고른 축도 반영
                 # 애니메이션이 없으면 바인드 포즈
                 bwr, bwp = tk.bind_world()
                 wr, wp = bwr[None], bwp[None]
@@ -252,11 +251,11 @@ class ViewData:
             vd.tgt_parents = reduced_parents(tk.parents, pr.tgt_slots, mf)
         elif pr.src is not None:
             sk = pr.src.skeleton
-            from ..core.mapping import DEFAULT_FRAME, detect_frame
+            from ..core.retarget import _resolve_frame
 
-            det = detect_frame(sk, pr.src_slots)
-            Fs = det[0] if det else DEFAULT_FRAME
             a = pr.anim
+            # 사람이면 본 매핑으로, 몬스터처럼 사람 본이 없으면 이동 방향/기준 자세로 앞쪽을 추정한다. 수동으로 고른 축이 있으면 그대로 따른다.
+            Fs = _resolve_frame(sk, pr.settings.src_up, pr.settings.src_fwd, pr.src_slots, a)[0]
             wr, wp = fk(sk, a.rot, a.pos)
             vd.ghost_pos = Q.rotate(Fs, wp)
             vd.ghost_parents = reduced_parents(sk.parents, pr.src_slots, mf)

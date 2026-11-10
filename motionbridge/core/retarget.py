@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import quat as Q
-from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_frame, estimate_up, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
+from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_creature_frame, detect_frame, estimate_up, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
 from .model import Animation, Skeleton, fk
 
 
@@ -75,6 +75,11 @@ class RetargetSettings:
     scale_offsets: Dict[int, float] = field(default_factory=dict)
     # 소스와 타깃이 같은 스켈레톤(본 이름·계층·모양이 같음)이고 사람 모양이 아니면 사람 본 매핑·좌표축 추정을 거치지 않고 본 이름대로 그대로 적용한다 (core/rigmatch)
     same_rig: bool = True
+    # 모션빌더식 후처리 (core/motionfx): 부위별 모션 세기(부위 -> 0..1.5), 튀는 프레임 제거 기준(도, 0=끔), 부드럽게(프레임, 0=끔), 좌우 반전
+    fx_parts: Dict[str, float] = field(default_factory=dict)
+    fx_spike_deg: float = 0.0
+    fx_smooth: float = 0.0
+    fx_mirror: bool = False
 
 
 @dataclass
@@ -106,6 +111,7 @@ class RetargetResult:
     ik_applied: bool = False
     ghost_pos: Optional[np.ndarray] = None  # (T,Js,3) 타깃 표준 프레임·타깃 단위의 소스 고스트(타깃에 겹치도록 배치·회전 반영)
     scale_cum: Optional[np.ndarray] = None  # (Jt,) 본별 누적 크기 배율 (크기 보정이 없으면 None). 메시 스키닝이 쓴다
+    base_anim: Optional[Animation] = None  # 보정 레이어를 얹기 전의 결과 (레이어가 없으면 None)
 
 
 # --------------------------------------------------------------------------- 유틸
@@ -165,13 +171,21 @@ def two_bone_ik(A, B, C, T, l1, l2, pole_fallback=(0.0, 0.0, 1.0)):
     return Bn, Cn, fail
 
 
-def _resolve_frame(skel: Skeleton, up: str, fwd: str, slots: Optional[Dict[str, int]]):
+def _resolve_frame(skel: Skeleton, up: str, fwd: str, slots: Optional[Dict[str, int]], anim=None):
     if up != "auto" and fwd != "auto":
         return frame_from_axes(up, fwd), "수동 상방 %s / 전방 %s" % (up, fwd)
     if slots:
         det = detect_frame(skel, slots)
         if det is not None:
             return det
+        if "Hips" not in slots:         # 사람 본 이름이 없는 몬스터류: 앞쪽을 추정해 정면을 보게 한다
+            cr = detect_creature_frame(skel, anim)
+            if cr is not None:
+                return cr
+    elif slots is not None and anim is not None:
+        cr = detect_creature_frame(skel, anim)
+        if cr is not None:
+            return cr
     return DEFAULT_FRAME.copy(), "기본(상방 +Y / 전방 +Z)"
 
 
@@ -238,7 +252,7 @@ def retarget(
         Ft, desc_t = _resolve_frame(tgt, st.tgt_up, st.tgt_fwd, None)
         Fs, desc_s = Q.mul(Ft, rig.q), "같은 스켈레톤(타깃 좌표축에 맞춤)"
     else:
-        Fs, desc_s = _resolve_frame(src, st.src_up, st.src_fwd, src_slots)
+        Fs, desc_s = _resolve_frame(src, st.src_up, st.src_fwd, src_slots, sanim)
         if st.src_up == "auto" and st.src_fwd == "auto" and src_slots:
             Fs, desc_s, note = refine_frame_with_anim(src, sanim, src_slots, Fs, desc_s)
             if note:

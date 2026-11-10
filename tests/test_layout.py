@@ -85,16 +85,24 @@ def test_export_with_layout():
 def test_program_dirs_and_fbm():
     import tempfile
     with tempfile.TemporaryDirectory() as d:
-        a = layout.program_dir(os.path.join(d, "C", "Animations"), "max")
-        assert a.endswith(os.path.join("Animations", "3dsMax")) and layout.program_dir("x", "blender").endswith("Blender") and layout.program_dir("x", "maya").endswith("Maya")
-        assert layout.program_dir("x", "max", organize=False) == "x"
+        a = layout.clip_dir(os.path.join(d, "C", "Animations"), "Swordman Attack1")
+        assert a.endswith(os.path.join("Animations", "Swordman Attack1")), a
         os.makedirs(a)
+        # 파일 이름으로 프로그램을 알아본다
+        for n, k in (("x_retarget.ms", "max"), ("x_retarget.mbbip", "max"), ("x_retarget.max", "max"), ("x_retarget_max.log", "max"), ("x_blender.fbx", "blender"),
+                     ("x_blender.bvh", "blender"), ("x_maya.fbx", "maya"), ("x.glb", "etc"), ("x_curves.json", None), ("사용법.txt", None), ("a.txt", None)):
+            assert layout.guide_key(os.path.join(a, n)) == k, (n, layout.guide_key(n))
+        # 한 폴더에 여러 프로그램의 설명이 차례로 쌓이고, 같은 프로그램은 두 번 쓰지 않는다
+        layout.write_guide(a, "max")
+        layout.write_guide(a, "blender")
         layout.write_guide(a, "max")
         g = os.path.join(a, layout.GUIDE_NAME)
-        assert os.path.exists(g) and ".ms" in open(g, encoding="utf-8").read()
-        open(g, "w", encoding="utf-8").write("내가 고친 것")
-        layout.write_guide(a, "max")    # 이미 있으면 덮어쓰지 않는다
-        assert open(g, encoding="utf-8").read() == "내가 고친 것"
+        txt = open(g, encoding="utf-8").read()
+        assert ".ms" in txt and "Blender" in txt and txt.count("3ds Max 용 모션") == 1 and txt.startswith("이 폴더의 파일"), txt
+        mine = txt + "\n내가 덧붙인 메모"
+        open(g, "w", encoding="utf-8").write(mine)
+        layout.write_guide(a, "blender")    # 이미 있으면 그대로
+        assert open(g, encoding="utf-8").read() == mine
         # 빈 .fbm 만 지운다 (텍스처가 든 것은 유지)
         e, f = os.path.join(a, "x.fbm"), os.path.join(a, "y.fbm")
         os.makedirs(e)

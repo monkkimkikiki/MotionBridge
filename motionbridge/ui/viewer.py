@@ -71,6 +71,7 @@ class Viewport(QWidget):
         self.show_bones = True
         self.show_ik = True
         self.bone_edit = False          # 켜면 왼쪽 클릭으로 본을 고르고, 고른 본을 끌어 돌린다
+        self.gizmo_space = "world"      # 기즈모 좌표계: world | local | screen (3ds Max 의 참조 좌표계)
         self.bone_tool = "rotate"       # 본 편집 도구 (3ds Max 와 같은 키): select(Q) | move(W) | rotate(E) | scale(R)
         self._drag_axis = -1            # 축 핸들을 잡고 끄는 중이면 0/1/2 (X/Y/Z)
         self.pickable = set()           # 고를 수 있는 타깃 본 번호 (매핑된 본)
@@ -307,7 +308,7 @@ class Viewport(QWidget):
             p.setFont(QFont("", 10))
             hint = {"select": "Q 선택: 점을 눌러 고르기", "move": "W 이동: 화살표=한 축 · 중심=자유 이동", "rotate": "E 회전: 고리=한 축 · 점 끌기=자유 회전 (Alt=비틀기)",
                     "scale": "R 크기: 오른쪽/위로 끌면 커짐"}.get(self.bone_tool, "")
-            p.drawText(12, int(h) - 46, "선택한 본: %s   [%s]   (빈 곳 끌기: 카메라)" % (self.joint_names.get(self.selected_joint, str(self.selected_joint)), hint))
+            p.drawText(12, int(h) - 46, "선택한 본: %s   [%s] · 좌표계: %s   (빈 곳 끌기: 카메라)" % (self.joint_names.get(self.selected_joint, str(self.selected_joint)), hint, GZ.SPACE_NAMES.get(self.gizmo_space, "")))
 
     def _selected_pos(self):
         vd = self.vd
@@ -317,6 +318,17 @@ class Viewport(QWidget):
         j = int(self.selected_joint)
         return vd.tgt_pos[f][j] if j < vd.tgt_pos.shape[1] else None
 
+    def _gizmo_axes(self):
+        """지금 좌표계에서의 기즈모 세 축 (표준 프레임, 행 3개)."""
+        local = None
+        vd = self.vd
+        if self.gizmo_space == "local" and vd is not None and vd.tgt_wr is not None and vd.Ft is not None and self.selected_joint is not None:
+            f = min(self.frame, vd.tgt_wr.shape[0] - 1)
+            j = int(self.selected_joint)
+            if j < vd.tgt_wr.shape[1]:
+                local = Q.mul(vd.Ft, vd.tgt_wr[f][j])
+        return GZ.space_axes(self.gizmo_space, self.cam, local)
+
     def _draw_gizmo(self, p: QPainter, w: float, h: float) -> None:
         """선택한 본에 이동/회전/크기 기즈모를 그린다 (축 색: X 빨강 · Y 초록 · Z 파랑, 잡고 있는 축은 노랑)."""
         pos = self._selected_pos()
@@ -325,13 +337,14 @@ class Viewport(QWidget):
             return
         cols = [QColor(235, 80, 80), QColor(90, 210, 100), QColor(90, 140, 245)]
         active = self._drag_axis if getattr(self, "_drag", "camera").startswith("bone") else -1
-        c, tips, L = GZ.handle_tips(self.cam, pos, w, h)
+        axes = self._gizmo_axes()
+        c, tips, L = GZ.handle_tips(self.cam, pos, w, h, axes=axes)
         if not np.all(np.isfinite(c)):
             return
         if tool == "rotate":
             R = GZ.world_len(self.cam, pos, GZ.RING_PX, w, h)
             for i in range(3):
-                xy, _z = self.cam.project(GZ.ring_world(pos, i, R), w, h)
+                xy, _z = self.cam.project(GZ.ring_world(pos, i, R, axes=axes), w, h)
                 p.setPen(QPen(QColor(255, 220, 80) if i == active else cols[i], 2.2 if i == active else 1.6))
                 pts = [QPointF(float(a), float(b)) for a, b in xy if np.isfinite(a) and np.isfinite(b)]
                 if len(pts) > 1:
@@ -370,6 +383,11 @@ class Viewport(QWidget):
             return Q.from_axis_angle(-f, np.radians(dx * k))
         return Q.mul(Q.from_axis_angle(u, np.radians(dx * k)), Q.from_axis_angle(r, np.radians(dy * k)))
 
+    def set_gizmo_space(self, space: str) -> None:
+        if space in GZ.SPACES:
+            self.gizmo_space = space
+            self.update()
+
     def keyPressEvent(self, ev):
         key = ev.key()
         K = Qt.Key
@@ -392,14 +410,15 @@ class Viewport(QWidget):
             tool, pos = self.bone_tool, self._selected_pos()
             self._drag_axis = -1
             if pos is not None and tool in ("move", "rotate", "scale"):      # 이미 고른 본의 기즈모 핸들부터 잡는다
+                axes = self._gizmo_axes()
                 if tool == "move":
-                    ax = GZ.hit_axis(self.cam, pos, x, y, w, h)
+                    ax = GZ.hit_axis(self.cam, pos, x, y, w, h, axes=axes)
                     mode = "bone_move_axis"
                 elif tool == "rotate":
-                    ax = GZ.hit_ring(self.cam, pos, x, y, w, h)
+                    ax = GZ.hit_ring(self.cam, pos, x, y, w, h, axes=axes)
                     mode = "bone_rot_axis"
                 else:
-                    ax = GZ.hit_axis(self.cam, pos, x, y, w, h)
+                    ax = GZ.hit_axis(self.cam, pos, x, y, w, h, axes=axes)
                     mode = "bone_scale"
                 if ax >= 0:
                     self._drag, self._drag_axis = mode, ax
@@ -449,11 +468,12 @@ class Viewport(QWidget):
                 roll = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 self.bone_dragged.emit(j, self._bone_delta(dx, dy, roll))
             elif pos3 is not None and mode == "bone_rot_axis" and self._drag_axis >= 0:
-                ang = GZ.ring_angle(self.cam, pos3, self._drag_axis, pos.x() - dx, pos.y() - dy, pos.x(), pos.y(), w, h)
+                axes = self._gizmo_axes()
+                ang = GZ.ring_angle(self.cam, pos3, self._drag_axis, pos.x() - dx, pos.y() - dy, pos.x(), pos.y(), w, h, axes=axes)
                 if ang:
-                    self.bone_dragged.emit(j, Q.from_axis_angle(GZ.AXES[self._drag_axis], ang))
+                    self.bone_dragged.emit(j, Q.from_axis_angle(axes[self._drag_axis], ang))
             elif pos3 is not None and mode == "bone_move_axis" and self._drag_axis >= 0:
-                self.bone_moved.emit(j, GZ.axis_move_delta(self.cam, pos3, self._drag_axis, dx, dy, w, h))
+                self.bone_moved.emit(j, GZ.axis_move_delta(self.cam, pos3, self._drag_axis, dx, dy, w, h, axes=self._gizmo_axes()))
             elif pos3 is not None and mode == "bone_move_free":
                 self.bone_moved.emit(j, GZ.plane_move_delta(self.cam, pos3, dx, dy, w, h))
             elif mode == "bone_scale":

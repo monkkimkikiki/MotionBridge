@@ -86,7 +86,52 @@ def test_gizmo():
     print("gizmo OK")
 
 
+def test_gizmo_spaces():
+    """월드/로컬/화면 좌표계: 축 방향, 그 축을 따른 이동·회전, 눌러 잡기가 모두 그 좌표계를 따른다."""
+    cam = OrbitCamera()
+    w, h = 800.0, 600.0
+    p = np.array([0.0, 1.0, 0.0])
+    assert np.allclose(G.space_axes("world", cam), np.eye(3))
+    r, u, f = cam.basis()
+    sa = G.space_axes("screen", cam)
+    assert np.allclose(sa[0], r) and np.allclose(sa[1], u) and np.allclose(sa[2], -f)
+    # 로컬: 본이 Y 축으로 90° 돌아 있으면 로컬 X 축은 월드 -Z
+    q = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(90))
+    la = G.space_axes("local", cam, q)
+    assert np.allclose(la[0], [0, 0, -1], atol=1e-9) and np.allclose(la[1], [0, 1, 0], atol=1e-9) and np.allclose(la[2], [1, 0, 0], atol=1e-9), la
+    assert np.allclose(G.space_axes("local", cam, None), np.eye(3))          # 회전을 모르면 월드로 대신한다
+    for ax_set in (la, sa):
+        for i in range(3):          # 이동은 그 좌표계의 축 방향으로만 일어난다
+            d = G.axis_move_delta(cam, p, i, 25.0, -10.0, w, h, axes=ax_set)
+            if np.linalg.norm(d) > 1e-12:
+                assert np.linalg.norm(d - ax_set[i] * float(d @ ax_set[i])) < 1e-9, (i, d)
+        # 화살표 끝을 누르면 같은 좌표계의 축이 잡힌다
+        c, tips, _L = G.handle_tips(cam, p, w, h, axes=ax_set)
+        for i in range(3):
+            v = tips[i] - c
+            if np.hypot(*v) < 30:
+                continue
+            q2 = c + v * 0.9
+            got = G.hit_axis(cam, p, float(q2[0]), float(q2[1]), w, h, axes=ax_set)
+            assert got in (i, 0, 1, 2) and got != -1, (i, got)
+        # 회전 고리: 각 고리 위의 점은 그 축에 수직인 평면 위에 있다
+        for i in range(3):
+            pts = G.ring_world(p, i, 0.5, axes=ax_set)
+            assert np.allclose((pts - p) @ ax_set[i], 0.0, atol=1e-9)
+            assert np.allclose(np.linalg.norm(pts - p, axis=1), 0.5)
+    # 화면 좌표계의 화면 안쪽 축(Z) 이동은 시선 방향이라 화면에서는 거의 안 보인다 -> 0 에 가깝게 처리
+    d = G.axis_move_delta(cam, p, 2, 25.0, 0.0, w, h, axes=sa)
+    assert np.linalg.norm(d) < 1e-6
+    # 화면 X(오른쪽)로 끌면 그만큼 화면 오른쪽으로 간다
+    d = G.axis_move_delta(cam, p, 0, 25.0, 0.0, w, h, axes=sa)
+    a0 = cam.project(p.reshape(1, 3), w, h)[0][0]
+    a1 = cam.project((p + d).reshape(1, 3), w, h)[0][0]
+    assert abs((a1[0] - a0[0]) - 25.0) < 0.5 and abs(a1[1] - a0[1]) < 0.5, (a0, a1)
+    print("gizmo spaces OK")
+
+
 if __name__ == "__main__":
+    test_gizmo_spaces()
     test_pos_offset()
     test_scale_offset()
     test_gizmo()

@@ -22,11 +22,16 @@ from .. import __version__
 from ..core import quat as Q
 from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
+from ..core import guide as guide_mod
 from ..core.history import History
+from ..core.layers import LayerStack
+from ..core import motionfx
 from ..core.loader import FILE_FILTER
 from ..core.mapping import FINGERS, SLOT_ORDER, slot_label
 from ..core.pipeline import ExportOptions, Project
-from .help_text import EXTRACT_HELP
+from . import gizmo_math as GZ
+from .help_text import EXTRACT_HELP, FIRST_STEPS
+from .layer_panel import LayerPanel
 from .viewer import MESH_MODES, Viewport
 from .retimebar import RetimeBar
 from .viewer_math import QUALITY_NAMES, ViewData
@@ -75,6 +80,12 @@ class MainWindow(QMainWindow):
         self.recompute_timer.setSingleShot(True)
         self.recompute_timer.setInterval(120)
         self.recompute_timer.timeout.connect(self._timer_fire)
+        # 뷰포트에서 본을 끌 때: 마우스를 놓기 전에도 결과가 따라오도록 쓰는 짧은 간격의 계산 (끝나면 위의 느린 타이머가 전체 계산·실행 취소 기록을 마무리)
+        self.live_timer = QTimer(self)
+        self.live_timer.setSingleShot(True)
+        self.live_timer.timeout.connect(self._live_fire)
+        self._live_pending = False
+        self._live_gap = 0.0      # 직전 계산이 오래 걸렸으면 그 절반만큼 쉬었다가 다음 계산 (무거운 모델에서 화면이 밀리지 않게)
         self.history = History()
         self._actions: Dict[str, tuple] = {}  # 키 -> (QAction, 단축키 목록)
         self.play_timer = QTimer(self)
@@ -199,6 +210,8 @@ class MainWindow(QMainWindow):
             ("탭", "tab4", "4. 내보내기", "goto_tab:4", ("Ctrl+5",)),
             ("탭", "tab5", "영상으로 찾기", "goto_tab:5", ("Ctrl+6",)),
             ("탭", "tab8", "AI 모캡", "goto_tab:8", ("Ctrl+7",)),
+            ("도움말", "first_steps", "처음 쓰는 방법", "show_first_steps", ()),
+            ("도움말", "toggle_guide", "안내 줄 보이기/숨기기", "toggle_guide", ()),
             ("도움말", "shortcuts", "단축키 목록", "show_shortcuts", ("F1",)),
             ("도움말", "about", "정보", "show_about", ()),
         ]
@@ -298,12 +311,14 @@ class MainWindow(QMainWindow):
     def _edit_state(self) -> dict:
         """실행 취소 기록 한 칸: 설정 + 본 매핑 + 클립별 프레임 편집(조각 목록; 손대지 않은 것은 뺀다)."""
         edits = {ci: copy.deepcopy(e.pieces) for ci, e in self.pr.edits.items() if not e.is_untouched()}
-        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots), "edits": edits}
+        layers = {ci: st.snapshot() for ci, st in self.pr.layers.items() if len(st)}
+        return {"settings": copy.deepcopy(self.pr.settings), "src": dict(self.pr.src_slots), "tgt": dict(self.pr.tgt_slots), "edits": edits, "layers": layers}
 
     def _apply_edit_state(self, st: dict) -> None:
         self.pr.settings = copy.deepcopy(st["settings"])
         self.pr.src_slots = dict(st["src"])
         self.pr.tgt_slots = dict(st["tgt"])
+        self.pr.layers = {ci: LayerStack.from_snapshot(sn) for ci, sn in st.get("layers", {}).items()}
         want = st.get("edits", {})
         before = {ci: e.pieces for ci, e in self.pr.edits.items() if not e.is_untouched()}
         for ci in list(self.pr.edits):
@@ -322,6 +337,25 @@ class MainWindow(QMainWindow):
             self._fill_mapping()
         self.recompute_timer.stop()
         self.recompute()
+
+    def schedule_live(self) -> None:
+        """끄는 동안 바로 보여 주기: 가벼운 계산을 이어서(쉬는 간격은 직전 계산 시간에 맞춤) 하고, 손을 멈추면 평소처럼 전체 계산."""
+        if self._syncing:
+            return
+        self.recompute_timer.start()                 # 끝난 뒤 한 번 더 전체 계산 + 실행 취소 기록
+        self._live_pending = True
+        if not self.live_timer.isActive():
+            self.live_timer.start(int(self._live_gap))
+
+    def _live_fire(self) -> None:
+        if not self._live_pending:
+            return
+        self._live_pending = False
+        import time as _t
+        t0 = _t.perf_counter()
+        self.recompute(live=True)
+        ms = (_t.perf_counter() - t0) * 1000.0
+        self._live_gap = min(80.0, 0.5 * ms)
 
     def _timer_fire(self) -> None:
         self.history.commit(self._edit_state())  # 조절이 잠깐 멈추면 한 단계로 확정
@@ -377,6 +411,38 @@ class MainWindow(QMainWindow):
         self.viewport.key_action.connect(self._viewport_key)
         self.viewport.asset_dropped.connect(lambda kind, paths: self.extract_for_char(paths, kind))  # 에셋 목록에서 끌어다 놓으면 바로 열기
         self.viewport.asset_dropped_from.connect(self._asset_dropped_from)
+        self.guide_box = QWidget()
+        gl = QVBoxLayout(self.guide_box)
+        gl.setContentsMargins(6, 4, 6, 4)
+        gl.setSpacing(3)
+        self.guide_steps = QLabel("")
+        self.guide_steps.setTextFormat(Qt.TextFormat.RichText)
+        gl.addWidget(self.guide_steps)
+        grow = QHBoxLayout()
+        self.guide_hint = QLabel("")
+        self.guide_hint.setWordWrap(True)
+        grow.addWidget(self.guide_hint, 1)
+        self.guide_btn = QPushButton("")
+        self.guide_btn.clicked.connect(lambda *_a: self._guide_action())
+        grow.addWidget(self.guide_btn)
+        b = QPushButton("？ 처음이세요?")
+        b.setToolTip("MotionBridge 가 무엇을 하는지, 처음 쓰는 순서를 쉬운 말로 설명합니다")
+        b.clicked.connect(lambda *_a: self.show_first_steps())
+        grow.addWidget(b)
+        self.guide_close = QPushButton("숨기기")
+        self.guide_close.setToolTip("안내 줄을 숨깁니다 (도움말 메뉴에서 다시 켤 수 있어요)")
+        self.guide_close.clicked.connect(lambda *_a: self.set_guide_visible(False))
+        grow.addWidget(self.guide_close)
+        gl.addLayout(grow)
+        self.guide_box.setStyleSheet("QWidget#guide{background:#242a36;border:1px solid #3a4560;border-radius:6px}")
+        self.guide_box.setObjectName("guide")
+        try:
+            self.guide_box.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)   # 테두리·배경이 그려지게
+        except (AttributeError, TypeError):
+            pass
+        self._exported = False
+        self.guide_box.setVisible(bool(self.cfg.get("show_guide", True)))
+        rl.addWidget(self.guide_box)
         rl.addWidget(self.viewport, 1)
         opts = QHBoxLayout()
         self._view_checks: Dict[str, object] = {}
@@ -436,6 +502,17 @@ class MainWindow(QMainWindow):
             self.tool_buttons[tool] = b
             bl.addWidget(b)
         self.tool_buttons["rotate"].setChecked(True)
+        bl.addWidget(QLabel("좌표계"))
+        self.space_combo = QComboBox()
+        for k in GZ.SPACES:
+            self.space_combo.addItem(GZ.SPACE_NAMES[k], k)
+        self.space_combo.setToolTip("기즈모 축의 기준 (3ds Max 의 참조 좌표계와 같습니다).\n"
+                                    "월드(World): 화면의 X·Y·Z 축 고정 / 로컬(Local): 선택한 본 자신의 축을 따라 / 화면(Screen): 카메라가 보는 화면의 가로·세로 기준.\n"
+                                    "축 핸들로 이동·회전할 때 적용되고, 점·중심을 끌어 자유롭게 바꾸는 동작은 영향받지 않습니다.")
+        self.space_combo.setCurrentIndex(max(self.space_combo.findData(self.cfg.get("gizmo_space", "world")), 0))
+        self.viewport.set_gizmo_space(self.space_combo.currentData() or "world")
+        self.space_combo.currentIndexChanged.connect(self._space_changed)
+        bl.addWidget(self.space_combo)
         self.bone_sel_label = QLabel("")
         self.bone_sel_label.setStyleSheet("color:#ffdc50")
         bl.addWidget(self.bone_sel_label, 1)
@@ -1382,6 +1459,28 @@ class MainWindow(QMainWindow):
         v.addWidget(b)
         lay.addWidget(g)
 
+        self.layer_panel = LayerPanel(self)
+        lay.addWidget(self.layer_panel)
+
+        g = CollapsibleBox("모션 다듬기 — 모션빌더식 (좌우 반전 · 부드럽게 · 튀는 프레임 · 부위별 세기)")
+        f = QFormLayout(g)
+        f.addRow(self._chk("fx_mirror", "좌우 반전 (Mirror)", "모션을 거울처럼 뒤집습니다. 왼팔이 하던 동작을 오른팔이 하고 몸 전체가 반대로 움직입니다. 타깃 모델이 좌우 대칭이어야 해요.\n"
+                           "※ 화면의 발 고정(IK) 표시와 소스 고스트는 반전 전 기준 그대로 보입니다."))
+        f.addRow("부드럽게", self._num("fx_smooth", 0.0, 10.0, 0.5, 1, " 프레임", tip="떨리는 모션(AI 모캡 등)을 시간 방향으로 다듬습니다. 0 = 끔. 값이 클수록 부드럽지만 빠른 동작이 둔해지고 발 고정이 조금 미끄러질 수 있어요."))
+        f.addRow("튀는 프레임 제거", self._num("fx_spike_deg", 0.0, 180.0, 5.0, 0, " °", tip="한 프레임만 이 각도 이상 튀는 회전을 앞뒤 값으로 고칩니다 (모캡의 순간 튐). 0 = 끔. 보통 40~60° 에서 시작하세요."))
+        lb = QLabel("부위별 모션 세기 — 100% = 그대로, 0% = 기준 자세로 고정, 100% 초과 = 과장")
+        lb.setWordWrap(True)
+        lb.setStyleSheet("color:#8aa")
+        f.addRow(lb)
+        self.fx_part_fields = {}
+        for key in motionfx.PART_ORDER:
+            nf = NumField(0.0, 1.5, 0.05, self.pr.settings.fx_parts.get(key, 1.0), 2, slider=True)
+            nf.setToolTip("%s의 움직임 세기. 예: 팔 0%% = 팔은 가만히, 몸통 50%% = 허리를 덜 비틀기." % motionfx.PARTS[key][0])
+            nf.changed.connect(lambda v, k=key: self._fx_part_changed(k, v))
+            self.fx_part_fields[key] = nf
+            f.addRow(motionfx.PARTS[key][0], nf)
+        lay.addWidget(g)
+
         # 영상 찾기 탭의 '추출할 애니메이션 가공'과 같은 기능 — 내보낼 때 리타깃 결과에 적용된다
         self.rt_edit = EditPanel("애니메이션 가공 (선택) — 늘리기 · fps · 구간 · 루프 · 키 압축", self.cfg, "rt_edit")
         self.rt_edit.setToolTip("내보낼 때 리타깃 결과(또는 소스 모션)에 적용됩니다. 아무것도 안 고르면 가공하지 않습니다. "
@@ -1461,10 +1560,11 @@ class MainWindow(QMainWindow):
 
         g = CollapsibleBox("폴더 정리")
         h = QHBoxLayout(g)
-        self.cb_organize = QCheckBox("캐릭터별 폴더로 정리 (캐릭터 / Animations / 3dsMax·Blender·Maya, Models)")
+        self.cb_organize = QCheckBox("캐릭터별 폴더로 정리 (캐릭터 / Animations / 클립 이름 / 맥스·블렌더 파일 함께, Models)")
         self.cb_organize.setChecked(bool(self.cfg.get("export_organize", True)))
-        self.cb_organize.setToolTip("끄면 출력 폴더에 파일이 한꺼번에 쌓입니다. 켜면 '출력 폴더 / 캐릭터 이름 / Animations / 3dsMax · Blender · Maya' 로 "
-                                    "프로그램별로 나눠 담고(각 폴더에 '사용법.txt' 가 들어갑니다), 메시가 든 GLB·본 구조 JSON 은 '… / Models' 에 둡니다.")
+        self.cb_organize.setToolTip("끄면 출력 폴더에 파일이 한꺼번에 쌓입니다. 켜면 '출력 폴더 / 캐릭터 이름 / Animations / 클립 이름' 폴더 하나에 "
+                                    "3ds Max·Blender·Maya 파일을 함께 넣고(파일 이름 끝 _max · _blender · _maya 로 구분, 폴더 안 '사용법.txt' 에 무엇을 어디서 여는지 적힙니다), "
+                                    "메시가 든 GLB·본 구조 JSON 은 '… / Models' 에 둡니다.")
         h.addWidget(self.cb_organize)
         h.addWidget(QLabel("캐릭터 폴더 이름"))
         self.char_edit = QLineEdit(self.cfg.get("export_char", ""))
@@ -1773,6 +1873,7 @@ class MainWindow(QMainWindow):
     def _after_unload(self, which: str) -> None:
         self._syncing = True
         if which == "source":
+            self._exported = False
             self.clip_combo.clear()
         else:
             self.rot_combo.clear()
@@ -1902,18 +2003,33 @@ class MainWindow(QMainWindow):
         setattr(self.pr.settings, key, value)
         self.schedule()
 
+    def _fx_part_changed(self, key: str, v: float) -> None:
+        if self._syncing:
+            return
+        d = dict(self.pr.settings.fx_parts)
+        if abs(float(v) - 1.0) < 1e-6:
+            d.pop(key, None)
+        else:
+            d[key] = round(float(v), 3)
+        self.pr.settings.fx_parts = d
+        self.schedule()
+
     # ---- 좌표축 빠른 수정
     def _frame_now(self, side: str):
         """지금 그 쪽(src/tgt)에 쓰이는 프레임(월드->표준). 결과가 있으면 그 값, 없으면 직접 감지."""
-        from ..core.mapping import DEFAULT_FRAME, detect_frame
+        from ..core.mapping import DEFAULT_FRAME
+        from ..core.retarget import _resolve_frame
 
         res = self.pr.result
         if res is not None:
             return (res.frame_src if side == "src" else res.frame_tgt)[0]
         m = self.pr.src if side == "src" else self.pr.tgt
         slots = self.pr.src_slots if side == "src" else self.pr.tgt_slots
-        det = detect_frame(m.skeleton, slots) if m is not None else None
-        return det[0] if det else DEFAULT_FRAME
+        if m is None:
+            return DEFAULT_FRAME
+        st = self.pr.settings
+        return _resolve_frame(m.skeleton, st.src_up if side == "src" else st.tgt_up, st.src_fwd if side == "src" else st.tgt_fwd, slots,
+                              self.pr.anim if side == "src" else None)[0]
 
     def axis_quick(self, side: str, op: str) -> bool:
         """축 빠른 수정: op 는 yaw90 / yaw180 / flip_up / pitch90 / auto. 지금 쓰이는 축에서 시작해 한 번 돌린다."""
@@ -2043,6 +2159,8 @@ class MainWindow(QMainWindow):
             elif isinstance(wd, QComboBox):
                 i = wd.findData(v)
                 wd.setCurrentIndex(max(i, 0))
+        for k, nf in getattr(self, "fx_part_fields", {}).items():
+            nf.set_value(st.fx_parts.get(k, 1.0))
         for i, nf in enumerate(self.hip_fields):
             nf.set_value(st.hip_offset[i])
         for i, nf in enumerate(self.place_fields):
@@ -2113,12 +2231,16 @@ class MainWindow(QMainWindow):
         self.schedule()
 
     def _edited(self, j: int) -> bool:
-        st = self.pr.settings
-        return j in st.rot_offsets or j in st.pos_offsets or j in st.scale_offsets
+        return j in self._edited_set()
 
     def _edited_set(self) -> set:
         st = self.pr.settings
-        return set(st.rot_offsets) | set(st.pos_offsets) | set(st.scale_offsets)
+        out = set(st.rot_offsets) | set(st.pos_offsets) | set(st.scale_offsets)
+        ls = self.pr.layers.get(self.pr.clip)
+        if ls is not None:
+            for lay in ls.layers:
+                out.update(lay.joints())
+        return out
 
     def _sync_bone_fields(self, j) -> None:
         """선택한 본의 회전/위치/크기 보정 값을 왼쪽 입력칸에 채운다 (신호는 보내지 않는다)."""
@@ -2188,6 +2310,67 @@ class MainWindow(QMainWindow):
         self._bone_sig = None
         self._maybe_refresh_bone_ui()
         self.viewport.update()
+
+    # ---- 처음 쓰는 사람용 안내 줄
+    def set_guide_visible(self, on: bool) -> None:
+        self.guide_box.setVisible(bool(on))
+        self.cfg["show_guide"] = bool(on)
+        try:
+            bridge.save_config(self.cfg)
+        except Exception:
+            pass
+
+    def current_guide(self):
+        pr = self.pr
+        n_issues = len(pr.issues) if pr.issues else 0
+        return guide_mod.compute(pr.src is not None, pr.tgt is not None, bool(pr.src and pr.tgt and pr.ready()), n_issues, bool(self._exported))
+
+    def _update_guide(self) -> None:
+        if not hasattr(self, "guide_steps"):
+            return
+        g = self.current_guide()
+        col = {"done": "#7ad07a", "now": "#ffdc50", "todo": "#7b8496"}
+        mark = {"done": "✔ ", "now": "▶ ", "todo": ""}
+        self.guide_steps.setText("  ›  ".join('<span style="color:%s;font-weight:%s">%s%s</span>' % (col[st], "bold" if st == "now" else "normal", mark[st], nm) for _k, nm, st in g.states))
+        self.guide_hint.setText(g.hint)
+        self.guide_btn.setText(g.button)
+        self.guide_btn.setVisible(bool(g.button))
+
+    def _guide_action(self) -> None:
+        a = self.current_guide().action
+        if a == "open_source":
+            self.open_source()
+        elif a == "open_target":
+            self.open_target()
+        elif a == "goto_mapping":
+            self.goto_tab(1)
+        elif a == "goto_export":
+            self.goto_tab(4)
+        elif a == "open_output":
+            out = self.out_edit.text().strip() if hasattr(self, "out_edit") else ""
+            if out and os.path.isdir(out):
+                osopen.open_in_explorer(out)
+            else:
+                self.statusBar().showMessage("출력 폴더가 아직 없습니다")
+
+    def toggle_guide(self) -> None:
+        self.set_guide_visible(not self.guide_box.isVisible())
+
+    def show_first_steps(self) -> None:
+        QMessageBox.information(self, "처음 쓰는 방법", FIRST_STEPS)
+
+    def _space_changed(self, *_a) -> None:
+        sp = self.space_combo.currentData() or "world"
+        self.viewport.set_gizmo_space(sp)
+        self.cfg["gizmo_space"] = sp
+        try:
+            bridge.save_config(self.cfg)
+        except Exception:
+            pass
+
+    def _sync_layer_edited(self) -> None:
+        self._bone_sig = None
+        self._maybe_refresh_bone_ui()
 
     def _bone_label(self, j: int) -> str:
         names = self.pr.tgt.skeleton.names if self.pr.tgt else []
@@ -2289,7 +2472,11 @@ class MainWindow(QMainWindow):
         self._bone_drag_open = True
 
     def _bone_dragged(self, j: int, q_view) -> None:
-        """뷰포트에서 본을 끌어 돌린 만큼을 '본별 회전 보정'에 더한다 (루트 Yaw 가 있으면 그만큼 되돌려서 화면에 보이는 방향대로 돈다)."""
+        """뷰포트에서 본을 끌어 돌린 만큼을 '본별 회전 보정'에 더한다 (루트 Yaw 가 있으면 그만큼 되돌려서 화면에 보이는 방향대로 돈다).
+        보정 레이어 키 기록이 켜져 있으면 대신 그 레이어의 현재 프레임 키로 기록한다."""
+        if self.layer_panel.recording():
+            self.layer_panel.on_rot_drag(j, q_view)
+            return
         st = self.pr.settings
         yaw = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
         d = Q.mul(Q.conj(yaw), Q.mul(np.asarray(q_view, float), yaw))
@@ -2303,7 +2490,7 @@ class MainWindow(QMainWindow):
         self.viewport.edited_joints = self._edited_set()
         self._sync_bone_fields(j)
         self.btn_bone_reset.setEnabled(self._edited(j))
-        self.schedule()
+        self.schedule_live()
 
     def _bone_view_frame(self):
         """지금 보이는 프레임의 타깃 월드 회전(파일 프레임)과 표준 프레임 변환 Ft (본 이동 끌기를 로컬 벡터로 바꿀 때 쓴다)."""
@@ -2316,6 +2503,9 @@ class MainWindow(QMainWindow):
     def _bone_moved(self, j: int, dview) -> None:
         """뷰포트에서 본을 끌어 옮긴 만큼(표준 프레임 월드 이동)을 '본별 위치 보정'(바인드 포즈 기준)에 더한다."""
         if self.pr.tgt is None:
+            return
+        if self.layer_panel.recording():
+            self.layer_panel.on_pos_drag(j, dview)
             return
         st = self.pr.settings
         dview = np.asarray(dview, dtype=float)
@@ -2343,9 +2533,12 @@ class MainWindow(QMainWindow):
         self.viewport.edited_joints = self._edited_set()
         self._sync_bone_fields(j)
         self.btn_bone_reset.setEnabled(self._edited(j))
-        self.schedule()
+        self.schedule_live()
 
     def _bone_scaled(self, j: int, factor: float) -> None:
+        if self.layer_panel.recording():
+            self.statusBar().showMessage("크기(R)는 보정 레이어에 기록되지 않습니다 — 키 기록을 끄면 '본별 크기 보정'으로 적용돼요")
+            return
         st = self.pr.settings
         new = float(np.clip(st.scale_offsets.get(j, 1.0) * float(factor), 0.05, 20.0))
         if abs(new - 1.0) > 1e-4:
@@ -2355,7 +2548,7 @@ class MainWindow(QMainWindow):
         self.viewport.edited_joints = self._edited_set()
         self._sync_bone_fields(j)
         self.btn_bone_reset.setEnabled(self._edited(j))
-        self.schedule()
+        self.schedule_live()
 
     def set_bone_tool(self, tool: str, enable: bool = False) -> None:
         """본 편집 도구 바꾸기 (3ds Max 키: Q 선택 · W 이동 · E 회전 · R 크기). enable=True 면 본 편집이 꺼져 있을 때 켠다."""
@@ -2393,11 +2586,12 @@ class MainWindow(QMainWindow):
         if not self._syncing:
             self.recompute_timer.start()
 
-    def recompute(self, reframe: bool = False) -> None:
+    def recompute(self, reframe: bool = False, live: bool = False) -> None:
+        """live=True: 본을 끄는 중의 가벼운 갱신 (품질 분석·목록/안내 갱신을 건너뛴다)."""
         err = None
         if self.pr.ready():
             try:
-                self.pr.run()
+                self.pr.run(analyze_quality=not live)
             except Exception as e:  # noqa: BLE001
                 self.pr.result, self.pr.issues, err = None, [], str(e)
         else:
@@ -2411,7 +2605,12 @@ class MainWindow(QMainWindow):
         self.frame_slider.blockSignals(False)
         self.viewport.set_data(self.pr, self.vd, reframe=reframe)
         self._frame_changed(self.frame_slider.value())
+        if live:
+            return
+        self._update_guide()
         self.retime_bar.refresh()
+        if getattr(self, "layer_panel", None) is not None:
+            self.layer_panel.refresh()
         self._update_info(err)
         self._update_quality()
         self._maybe_refresh_bone_ui()
@@ -2599,6 +2798,7 @@ class MainWindow(QMainWindow):
                 self.export_log.appendPlainText("이전 파일 보관: " + bk)
             for wmsg in warns:
                 self.export_log.appendPlainText("경고: " + wmsg)
+            self._exported = bool(files)
             self.recompute()
             self.statusBar().showMessage("내보내기 완료: %d개" % len(files))
 

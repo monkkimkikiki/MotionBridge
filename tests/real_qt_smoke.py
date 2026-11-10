@@ -193,6 +193,42 @@ with tempfile.TemporaryDirectory() as d:
     after = tuple(mw.pr.settings.place_offset)
     check(after != before and vp._drag == "camera", "Shift+드래그 -> 애니메이션 위치가 바뀜: %s -> %s" % (before, after))
     mw._place_reset()
+    # 보정 레이어 패널 / 기즈모 좌표계 / 시작 안내 줄 / 실시간 갱신이 진짜 Qt 에서 동작한다
+    lp = mw.layer_panel
+    lp.add_layer()
+    app.processEvents()
+    check(lp.lst.count() == 1 and mw.pr.layer_stack().current() is not None, "레이어 패널: 새 레이어 -> 목록에 나타남")
+    lp.lst.item(0).setCheckState(_Qt.CheckState.Unchecked)
+    check(mw.pr.layer_stack().layers[0].mute, "레이어 목록 체크 해제 -> 끔")
+    lp.lst.item(0).setCheckState(_Qt.CheckState.Checked)
+    check(not mw.pr.layer_stack().layers[0].mute, "다시 체크 -> 켬")
+    mw.cb_bone_edit.setChecked(True)
+    jt0 = sorted(mw.viewport.pickable)[0]
+    mw._bone_picked(jt0)
+    lp.rec.setChecked(True)
+    check(lp.recording() and mw.viewport.bone_tool == "rotate", "키 기록 켜기 -> 회전 도구")
+    mw.frame_slider.setValue(5)
+    from motionbridge.core import quat as _Qq  # noqa: E402
+    import numpy as _np  # noqa: E402
+
+    mw._bone_dragged(jt0, _Qq.from_axis_angle(_np.array([0.0, 1.0, 0.0]), _np.radians(25.0)))
+    app.processEvents()
+    check(mw.pr.layer_stack().current().frames(jt0) == [5] and not mw.pr.settings.rot_offsets, "끌기 -> 현재 프레임에 레이어 키 (본별 보정은 그대로)")
+    check("키 1" in lp.lst.item(0).text(), "레이어 목록의 키 개수 갱신: " + lp.lst.item(0).text())
+    mw._live_fire()
+    check(not mw._live_pending, "실시간 갱신 한 번 처리")
+    lp.rec.setChecked(False)
+    for sp in ("local", "screen", "world"):
+        mw.space_combo.setCurrentIndex(mw.space_combo.findData(sp))
+        check(mw.viewport.gizmo_space == sp and not mw.viewport.grab().isNull(), "기즈모 좌표계 %s 로 그리기" % sp)
+    check(mw.guide_box.isVisible() or not mw.cfg.get("show_guide", True), "시작 안내 줄 표시")
+    check("확인하고 다듬기" in mw.guide_steps.text() and mw.guide_btn.text() != "", "안내 줄: 지금 단계/버튼 (%s)" % mw.guide_btn.text())
+    mw.set_guide_visible(False)
+    check(not mw.guide_box.isVisible(), "안내 줄 숨기기")
+    mw.set_guide_visible(True)
+    mw._rot_reset()
+    mw.pr.layers = {}
+    lp.refresh()
     # 진행 창(추측 중): X/취소/Esc = 취소 신호 한 번, 정상 종료는 신호 없음
     from motionbridge.ui.widgets import BusyDialog  # noqa: E402
 

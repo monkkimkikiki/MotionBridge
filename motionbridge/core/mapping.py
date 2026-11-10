@@ -411,6 +411,58 @@ def detect_frame(skel: Skeleton, slots: Dict[str, int]) -> Optional[Tuple[np.nda
 DEFAULT_FRAME = frame_from_axes("+Y", "+Z")
 
 
+def detect_creature_frame(skel: Skeleton, anim=None) -> Optional[Tuple[np.ndarray, str]]:
+    """사람 본 이름이 없는 뼈대(몬스터 등)의 앞쪽을 추정한다. 상방은 +Y 로 두고 앞(+Z 가 되도록)만 정한다. 못 정하면 None.
+
+    1) 좌우축: 기준 자세가 좌우 대칭인 가로축(X 또는 Z) -> 앞뒤축은 그 수직.
+    2) 앞/뒤: 클립 동안 몸이 뚜렷하게 이동하면 이동 방향, 아니면 가지가 많이 갈라진 쪽(머리·팔 쪽)을 앞으로 본다.
+    ※ 추정이므로 틀릴 수 있다 — 좌표축 빠른 수정(90°/180° 돌리기)으로 바로잡을 수 있다."""
+    from .model import fk
+    if skel.n < 4:
+        return None
+    _, bwp = skel.bind_world()
+    c = bwp.mean(axis=0)
+    pts = bwp - c
+    size = float(np.linalg.norm(np.ptp(pts, axis=0)))
+    if size < 1e-9:
+        return None
+
+    def mirror_err(ax: int) -> float:
+        m = pts.copy()
+        m[:, ax] *= -1.0
+        d = np.linalg.norm(m[:, None, :] - pts[None, :, :], axis=2).min(axis=1)
+        return float(d.mean()) / size
+
+    ex, ez = mirror_err(0), mirror_err(2)
+    if min(ex, ez) > 0.9 * max(ex, ez) or max(ex, ez) < 1e-6:
+        return None                      # 어느 쪽으로도 대칭이 뚜렷하지 않다
+    fwd_ax = 2 if ex <= ez else 0        # X 로 대칭이면 좌우 = X, 앞뒤 = Z
+    sign = 0.0
+    why = ""
+    if anim is not None and anim.n_frames >= 2:
+        _, wp = fk(skel, anim.rot, anim.pos)
+        cen = wp.mean(axis=1)
+        mv = cen[-1] - cen[0]
+        mv[1] = 0.0
+        if float(np.linalg.norm(mv)) > 0.25 * size and abs(mv[fwd_ax]) > 0.5 * float(np.linalg.norm(mv)):
+            sign = 1.0 if mv[fwd_ax] > 0 else -1.0
+            why = "이동 방향"
+    if sign == 0.0:
+        leaves = [j for j in range(skel.n) if skel.is_leaf(j)]
+        pos = float(sum(1 for j in leaves if pts[j, fwd_ax] > 0.05 * size))
+        neg = float(sum(1 for j in leaves if pts[j, fwd_ax] < -0.05 * size))
+        if pos == neg:
+            return None
+        sign = 1.0 if pos > neg else -1.0
+        why = "갈라진 끝이 많은 쪽"
+    fwd = np.zeros(3)
+    fwd[fwd_ax] = sign
+    up = np.array([0.0, 1.0, 0.0])
+    left = np.cross(up, fwd)
+    return frame_from_vectors(left, up, fwd), "상방 +Y / 전방 %s%s (추정: %s)" % ("+" if sign > 0 else "-", "XYZ"[fwd_ax], why)
+
+
+
 # ---------------------------------------------------------------------------- 축 빠른 수정 / 진단
 def _axis_name(v: np.ndarray) -> str:
     return max(AXES, key=lambda k: float(np.dot(AXES[k], v)))
