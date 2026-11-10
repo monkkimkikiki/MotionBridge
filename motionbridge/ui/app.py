@@ -12,7 +12,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton,
     QScrollArea, QSlider, QSplitter, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
     QWidget, QLineEdit, QButtonGroup, QAbstractItemView, QTreeWidget, QTreeWidgetItem,
@@ -35,7 +35,7 @@ from .mocap_tab import MocapTab
 from .char_assets import CharAssetPanel
 from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
-from .widgets import BusyDialog, EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
+from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 AXIS_LABEL = {"auto": "자동"}
@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MotionBridge %s — 모션 리타깃" % __version__)
         self.pr = Project()
         self.cfg = bridge.load_config()
+        if not isinstance(self.cfg.get("collapsed"), dict):
+            self.cfg["collapsed"] = {}
+        CollapsibleBox.bind(self.cfg["collapsed"], lambda: bridge.save_config(self.cfg))   # 섹션 접힘 상태 기억
         self.pr.blender = self.cfg.get("blender")
         self.vd: Optional[ViewData] = None
         self._worker: Optional[Worker] = None
@@ -572,7 +575,7 @@ class MainWindow(QMainWindow):
         sc.setWidget(w)
         lay = QVBoxLayout(w)
 
-        g = QGroupBox("1) 게임 폴더")
+        g = CollapsibleBox("1) 게임 폴더")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         self.ex_game = QLineEdit(self.cfg.get("game_dir", ""))
@@ -597,7 +600,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.ex_summary)
         lay.addWidget(g)
 
-        g = QGroupBox("2) 추출 설정")
+        g = CollapsibleBox("2) 추출 설정")
         f = QFormLayout(g)
         self.ex_aes = QLineEdit()
         self.ex_aes.setPlaceholderText("검사 후, 암호화된 게임일 때만 입력")
@@ -628,7 +631,7 @@ class MainWindow(QMainWindow):
         self._update_helper_label()
         lay.addWidget(g)
 
-        g = QGroupBox("3) 에셋 찾기 / 추출")
+        g = CollapsibleBox("3) 에셋 찾기 / 추출")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         h.addWidget(QLabel("종류"))
@@ -728,13 +731,13 @@ class MainWindow(QMainWindow):
         v.addWidget(self.btn_extract)
         lay.addWidget(g)
 
-        g = QGroupBox("3-2) 에셋 찾기 · 캐릭터/스켈레톤 보기 (재생 가능한 애니메이션만)")
+        g = CollapsibleBox("3-2) 에셋 찾기 · 캐릭터/스켈레톤 보기 (재생 가능한 애니메이션만)")
         v = QVBoxLayout(g)
         self.char_panel = CharAssetPanel(self)
         v.addWidget(self.char_panel)
         lay.addWidget(g)
 
-        g = QGroupBox("4) 추출된 파일 열기")
+        g = CollapsibleBox("4) 추출된 파일 열기")
         v = QVBoxLayout(g)
         self.ex_dir_label = QLabel("")
         self.ex_dir_label.setWordWrap(True)
@@ -1245,7 +1248,7 @@ class MainWindow(QMainWindow):
         self.warn_label.setStyleSheet("color:#e0a050")
         lay.addWidget(self.warn_label)
 
-        g = QGroupBox("크기 · 위치 · 방향")
+        g = CollapsibleBox("크기 · 위치 · 방향")
         f = QFormLayout(g)
         f.addRow(self._chk("auto_scale", "자동 스케일 (다리 길이 기준)", "소스 대비 타깃의 체형 비율로 이동량을 맞춥니다"))
         f.addRow("스케일 배율", self._num("scale_mult", 0.05, 5.0, 0.01, 2, tip="자동 스케일에 곱하는 값. 보폭/이동 거리를 키우거나 줄입니다"))
@@ -1287,7 +1290,7 @@ class MainWindow(QMainWindow):
         f.addRow("COM(위치 기준) 본", self.com_combo)
         lay.addWidget(g)
 
-        g = QGroupBox("척추")
+        g = CollapsibleBox("척추")
         f = QFormLayout(g)
         f.addRow(self._chk("spine_mix", "척추 개수가 다르면 중간값으로 맞추기",
                            "소스 척추가 3개(척추1·척추2·가슴)인데 타깃 모델은 2개뿐일 때처럼 짝이 없는 본이 생기면, 골반~목 사이를 하나의 곡선으로 보고 "
@@ -1295,7 +1298,7 @@ class MainWindow(QMainWindow):
                            "끄면 이름이 맞는 본만 1:1 로 적용하고 나머지는 움직이지 않습니다 (직접 매핑을 맞춰 쓰는 경우)."))
         lay.addWidget(g)
 
-        g = QGroupBox("발 · 접지 (IK)")
+        g = CollapsibleBox("발 · 접지 (IK)")
         f = QFormLayout(g)
         f.addRow(self._chk("foot_ik", "발 IK 사용", "접지 구간에서 발이 미끄러지지 않게 다리를 풉니다"))
         f.addRow(self._chk("hand_ik", "손 IK 사용 (바닥 짚기)", "원본 손이 바닥에 닿은 구간에서만 그 팔에 IK 를 걸고 벗어나면 풉니다. 높이는 '타깃 바닥 + 소스 손의 바닥 대비 높이' 로 계산하고, 손이 거의 안 움직이는 구간만 한 점에 고정합니다"))
@@ -1315,7 +1318,7 @@ class MainWindow(QMainWindow):
         f.addRow("접지 전환 프레임", bf)
         lay.addWidget(g)
 
-        g = QGroupBox("좌표축 (자동 인식이 틀릴 때만)")
+        g = CollapsibleBox("좌표축 (자동 인식이 틀릴 때만)")
         f = QFormLayout(g)
         for key, lab in (("src_up", "소스 상방"), ("src_fwd", "소스 전방"), ("tgt_up", "타깃 상방"), ("tgt_fwd", "타깃 전방")):
             cb = QComboBox()
@@ -1348,7 +1351,7 @@ class MainWindow(QMainWindow):
             f.addRow("", lb)
         lay.addWidget(g)
 
-        g = QGroupBox("본별 보정 — 회전 · 위치 · 크기 (하위 본 전체에 적용)")
+        g = CollapsibleBox("본별 보정 — 회전 · 위치 · 크기 (하위 본 전체에 적용)")
         v = QVBoxLayout(g)
         self.rot_combo = QComboBox()
         self.rot_combo.currentIndexChanged.connect(self._rot_joint_changed)
@@ -1447,7 +1450,7 @@ class MainWindow(QMainWindow):
         sc.setWidget(w)
         lay = QVBoxLayout(w)
 
-        g = QGroupBox("출력 폴더")
+        g = CollapsibleBox("출력 폴더")
         h = QHBoxLayout(g)
         self.out_edit = QLineEdit(self.cfg.get("out_dir") or os.path.join(os.path.expanduser("~"), "MotionBridge_out"))
         h.addWidget(self.out_edit, 1)
@@ -1456,12 +1459,12 @@ class MainWindow(QMainWindow):
         h.addWidget(b)
         lay.addWidget(g)
 
-        g = QGroupBox("폴더 정리")
+        g = CollapsibleBox("폴더 정리")
         h = QHBoxLayout(g)
-        self.cb_organize = QCheckBox("캐릭터별 폴더로 정리 (캐릭터 이름 / Animations · Models)")
+        self.cb_organize = QCheckBox("캐릭터별 폴더로 정리 (캐릭터 / Animations / 3dsMax·Blender·Maya, Models)")
         self.cb_organize.setChecked(bool(self.cfg.get("export_organize", True)))
-        self.cb_organize.setToolTip("끄면 출력 폴더에 파일이 한꺼번에 쌓입니다. 켜면 '출력 폴더 / 캐릭터 이름 / Animations'(BVH·FBX·Biped 등 모션 파일), "
-                                    "'… / Models'(메시가 든 GLB, 본 구조 JSON) 로 나눠 담습니다.")
+        self.cb_organize.setToolTip("끄면 출력 폴더에 파일이 한꺼번에 쌓입니다. 켜면 '출력 폴더 / 캐릭터 이름 / Animations / 3dsMax · Blender · Maya' 로 "
+                                    "프로그램별로 나눠 담고(각 폴더에 '사용법.txt' 가 들어갑니다), 메시가 든 GLB·본 구조 JSON 은 '… / Models' 에 둡니다.")
         h.addWidget(self.cb_organize)
         h.addWidget(QLabel("캐릭터 폴더 이름"))
         self.char_edit = QLineEdit(self.cfg.get("export_char", ""))
@@ -1469,7 +1472,7 @@ class MainWindow(QMainWindow):
         h.addWidget(self.char_edit, 1)
         lay.addWidget(g)
 
-        g = QGroupBox("같은 이름의 파일이 이미 있을 때")
+        g = CollapsibleBox("같은 이름의 파일이 이미 있을 때")
         v = QVBoxLayout(g)
         self.out_exist = self._make_exist_combo()
         v.addWidget(self.out_exist)
@@ -1480,7 +1483,7 @@ class MainWindow(QMainWindow):
         v.addWidget(lb)
         lay.addWidget(g)
 
-        g = QGroupBox("무엇을 내보낼까")
+        g = CollapsibleBox("무엇을 내보낼까")
         v = QVBoxLayout(g)
         self.rb_retarget = QRadioButton("리타깃 결과 (내 모델용)")
         self.rb_source = QRadioButton("원본 모션 그대로 (리타깃 없음 — 크리처/구조물용)")
@@ -1498,7 +1501,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.cb_skel_json)
         lay.addWidget(g)
 
-        g = QGroupBox("대상 프로그램")
+        g = CollapsibleBox("대상 프로그램")
         h = QHBoxLayout(g)
         self.cb_preset = {}
         for key, p in PRESETS.items():
@@ -1509,7 +1512,7 @@ class MainWindow(QMainWindow):
             h.addWidget(cb)
         lay.addWidget(g)
 
-        g = QGroupBox("파일 형식")
+        g = CollapsibleBox("파일 형식")
         h = QHBoxLayout(g)
         self.cb_fmt = {}
         for key, text, tip in (("bvh", "BVH", "Max/Maya/Blender 모두 읽는 모션 파일 (대상 프로그램별 축·단위 적용)"),
@@ -1574,7 +1577,7 @@ class MainWindow(QMainWindow):
         self.edit_panel = EditPanel("내보낼 때 추가 가공 (선택) — fps · 루프 · 키 압축", self.cfg, "ex_edit", simple=True)
         lay.addWidget(self.edit_panel)
 
-        g = QGroupBox("클립")
+        g = CollapsibleBox("클립")
         v = QVBoxLayout(g)
         self.rb_clip_cur = QRadioButton("현재 클립만")
         self.rb_clip_all = QRadioButton("소스의 모든 클립")

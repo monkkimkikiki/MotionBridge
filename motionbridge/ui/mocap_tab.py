@@ -11,11 +11,12 @@ from typing import List, Optional
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from ..core import bridge, mocapai, smplmotion
+from .widgets import CollapsibleBox
 
 WSL_HELP = ("Windows 에서는 WSL2(우분투)가 필요합니다. 관리자 권한 PowerShell 에서  wsl --install -d Ubuntu  를 실행하고 재부팅한 뒤 "
             "우분투를 한 번 열어 사용자 이름/비밀번호를 만드세요. NVIDIA 그래픽 드라이버는 Windows 쪽 최신 버전이면 됩니다.")
@@ -46,7 +47,7 @@ class MocapTab(QWidget):
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
-        g = QGroupBox("1) 엔진 고르기")
+        g = CollapsibleBox("1) 엔진 고르기")
         v = QVBoxLayout(g)
         self.engine = QComboBox()
         for e in mocapai.ENGINES.values():
@@ -59,7 +60,7 @@ class MocapTab(QWidget):
         v.addWidget(self.blurb)
         lay.addWidget(g)
 
-        g = QGroupBox("2) 설치 상태")
+        g = CollapsibleBox("2) 설치 상태")
         v = QVBoxLayout(g)
         self.st_label = QLabel("아직 확인하지 않았습니다.")
         self.st_label.setWordWrap(True)
@@ -77,7 +78,7 @@ class MocapTab(QWidget):
         v.addLayout(h)
         lay.addWidget(g)
 
-        g = QGroupBox("3) SMPL 인체 모델 파일 (직접 받아야 합니다 — 무료 가입 + 라이선스 동의)")
+        g = CollapsibleBox("3) SMPL 인체 모델 파일 (직접 받아야 합니다 — 무료 가입 + 라이선스 동의)")
         v = QVBoxLayout(g)
         v.addWidget(QLabel("아래 사이트에서 가입하고 모델을 내려받은 뒤(zip 그대로 OK), 받은 폴더를 고르면 알맞은 자리에 놓아 줍니다."))
         h = QHBoxLayout()
@@ -92,7 +93,7 @@ class MocapTab(QWidget):
         v.addWidget(self.btn_models)
         lay.addWidget(g)
 
-        g = QGroupBox("4) 영상에서 모션 뽑기")
+        g = CollapsibleBox("4) 영상에서 모션 뽑기")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         self.video = QLineEdit(self.cfg.get("mocap_video", ""))

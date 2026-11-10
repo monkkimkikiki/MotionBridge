@@ -368,5 +368,47 @@ try:
 except Exception as _e:  # noqa: BLE001
     check(False, "끌어다 놓기 스모크 예외: %r" % (_e,))
 
+# 접고 펴는 섹션 (제목 줄 클릭 / 상태 저장 복원 / 원래 숨겨진 위젯 유지)
+try:
+    from PySide6.QtCore import QPointF as _PF, Qt as _Q2
+    from PySide6.QtGui import QMouseEvent as _ME
+    from PySide6.QtCore import QEvent as _EV, QPoint as _PT
+    from PySide6.QtWidgets import QGroupBox, QPushButton as _PB, QVBoxLayout as _VB
+    from motionbridge.ui.widgets import CollapsibleBox as _CB
+
+    _store, _saved = {}, []
+    _CB.bind(_store, lambda: _saved.append(dict(_store)))
+    _box = _CB("시험 섹션")
+    _lay = _VB(_box)
+    _b1, _b2 = _PB("보임"), _PB("원래 숨김")
+    _lay.addWidget(_b1)
+    _lay.addWidget(_b2)
+    _b2.hide()
+    _box.show()
+    app.processEvents()
+    check(_box.title() == "시험 섹션" and QGroupBox.title(_box).startswith("\u25bc"), "접기 박스: title() 은 화살표 없는 이름, 화면에는 ▼")
+    check(_b1.isVisible() and not _box.is_collapsed(), "처음엔 펼쳐짐")
+    h0 = _box.height()
+    _pos = _PF(20.0, float(_box.header_height() - 4))
+    _ev = _ME(_EV.Type.MouseButtonPress, _pos, _box.mapToGlobal(_pos), _Q2.MouseButton.LeftButton, _Q2.MouseButton.LeftButton, _Q2.KeyboardModifier.NoModifier)
+    _box.mousePressEvent(_ev)
+    app.processEvents()
+    check(_box.is_collapsed() and not _b1.isVisible() and _box.maximumHeight() == _box.header_height(), "제목 줄 클릭 -> 접힘")
+    check(_store == {"시험 섹션": True} and _saved, "접힘 상태 저장: %s" % _store)
+    _box.toggle()
+    app.processEvents()
+    check(not _box.is_collapsed() and _b1.isVisible() and not _b2.isVisible() and _box.maximumHeight() > 10000, "다시 펴면 보이던 것만 보임")
+    check(_store == {}, "펴면 저장 항목 제거")
+    # 저장된 상태로 시작
+    _store["복원 섹션"] = True
+    _box2 = _CB("복원 섹션")
+    _VB(_box2).addWidget(_PB("x"))
+    _box2.show()
+    app.processEvents()
+    check(_box2.is_collapsed(), "저장된 접힘 상태로 시작")
+    _CB.bind(None, None)
+except Exception as _e:  # noqa: BLE001
+    check(False, "접기 박스 스모크 예외: %r" % (_e,))
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

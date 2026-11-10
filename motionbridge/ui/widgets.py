@@ -5,6 +5,7 @@ import threading
 import traceback
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtWidgets import QMenu
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QProgressBar, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -250,7 +251,120 @@ class PathTree(QTreeWidget):
         self.expandAll() if v else self.collapseAll()
 
 
-class EditPanel(QGroupBox):
+class CollapsibleBox(QGroupBox):
+    """제목 줄을 누르면 접고 펴는 그룹 박스 (제목 왼쪽에 ▼ 펼침 / ▶ 접힘 화살표).
+
+    - 제목 줄(맨 위 한 줄)을 누르면 접히고, 다시 누르면 펴집니다. 제목 줄에서 오른쪽 클릭하면 이 창의 섹션을 모두 접기/펴기.
+    - 접힘 상태는 제목을 열쇠로 cfg["collapsed"] 에 저장하고 다음 실행 때 복원합니다 (bind() 로 연결).
+    - 접으면 안의 위젯을 숨기고 높이를 제목 줄만큼으로 줄여 남는 자리를 돌려줍니다. 원래 숨겨져 있던 위젯은 펼칠 때 계속 숨김.
+    """
+
+    store = None        # {제목: True}  — MainWindow 가 cfg["collapsed"] 를 연결
+    on_change = None    # 상태가 바뀔 때 부르는 함수(저장용)
+    OPEN, CLOSED = "\u25bc ", "\u25b6 "
+
+    @classmethod
+    def bind(cls, store, on_change=None):
+        cls.store, cls.on_change = store, on_change
+
+    def __init__(self, title="", parent=None):
+        super().__init__(parent)
+        self._base = title
+        self._collapsed = False
+        self._restored = False
+        self._hidden_before = []
+        self.setMouseTracking(True)
+        self._refresh_title()
+
+    # --- 제목 -------------------------------------------------------------
+    def setTitle(self, title):       # noqa: N802 (Qt 이름)
+        self._base = title
+        self._refresh_title()
+
+    def title(self):
+        return self._base
+
+    def _refresh_title(self):
+        text = (self.CLOSED if self._collapsed else self.OPEN) + self._base
+        try:
+            QGroupBox.setTitle(self, text)
+        except (TypeError, AttributeError):   # 시험용 가짜 Qt
+            self._shown_title = text
+
+    # --- 접기/펴기 ----------------------------------------------------------
+    def header_height(self) -> int:
+        return int(self.fontMetrics().height() + 12)
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, v: bool, save: bool = True) -> None:
+        v = bool(v)
+        if v == self._collapsed:
+            return
+        self._collapsed = v
+        kids = [w for w in self.children() if isinstance(w, QWidget)]
+        if v:
+            self._hidden_before = [w for w in kids if w.isHidden()]
+            for w in kids:
+                w.setVisible(False)
+            self.setMaximumHeight(self.header_height())
+        else:
+            for w in kids:
+                if w not in self._hidden_before:
+                    w.setVisible(True)
+            self._hidden_before = []
+            self.setMaximumHeight(16777215)
+        self._refresh_title()
+        if save and CollapsibleBox.store is not None:
+            if v:
+                CollapsibleBox.store[self._base] = True
+            else:
+                CollapsibleBox.store.pop(self._base, None)
+            if CollapsibleBox.on_change:
+                try:
+                    CollapsibleBox.on_change()
+                except Exception:
+                    pass
+
+    def toggle(self) -> None:
+        self.set_collapsed(not self._collapsed)
+
+    def _in_header(self, y) -> bool:
+        return y <= self.header_height()
+
+    def showEvent(self, e):          # noqa: N802
+        if not self._restored:       # 안의 위젯이 다 들어간 뒤(처음 보일 때) 저장된 상태를 적용
+            self._restored = True
+            if CollapsibleBox.store and CollapsibleBox.store.get(self._base):
+                self.set_collapsed(True, save=False)
+        super().showEvent(e)
+
+    def mousePressEvent(self, e):    # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton and self._in_header(e.position().y()):
+            self.toggle()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):     # noqa: N802
+        self.setCursor(Qt.CursorShape.PointingHandCursor if self._in_header(e.position().y()) else Qt.CursorShape.ArrowCursor)
+        super().mouseMoveEvent(e)
+
+    def contextMenuEvent(self, e):   # noqa: N802
+        if not self._in_header(e.pos().y()):
+            super().contextMenuEvent(e)
+            return
+        m = QMenu(self)
+        a1 = m.addAction("이 창의 섹션 모두 접기")
+        a2 = m.addAction("이 창의 섹션 모두 펴기")
+        act = m.exec(e.globalPos())
+        if act in (a1, a2):
+            for b in self.window().findChildren(CollapsibleBox):
+                b.set_collapsed(act is a1)
+
+
+class EditPanel(CollapsibleBox):
     """애니메이션 가공 옵션(늘리기/줄이기, fps, 구간, 루프, 키 압축). options() 로 animops.EditOptions 를 얻는다.
 
     값은 cfg 에 `<prefix>_...` 로 기억한다.

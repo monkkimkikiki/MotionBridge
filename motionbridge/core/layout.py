@@ -15,6 +15,59 @@ ANIM_DIR = "Animations"
 MODEL_DIR = "Models"
 MISC = "기타"
 
+# 모션 파일을 쓸 프로그램별 하위 폴더 (출력 폴더 / 캐릭터 / Animations / <프로그램>)
+PROGRAM_DIRS = {"max": "3dsMax", "blender": "Blender", "maya": "Maya", "etc": "기타"}
+GUIDE_NAME = "사용법.txt"
+GUIDES = {
+    "max": ("3ds Max 용 모션\n"
+            "- 이름_retarget.max : 스키닝된 .max 에 모션을 자동으로 넣어 저장한 결과 (3ds Max 에서 그냥 열면 됩니다. 원본 .max 폴더에 저장됩니다)\n"
+            "- 이름_retarget.ms : 3ds Max 의 Scripting > Run Script 로 실행하면 같은 일을 합니다 (자동 적용이 꺼졌거나 실패했을 때)\n"
+            "- 이름_retarget.mbbip / .mbbones : .ms 가 읽는 모션 데이터 — .ms 와 같은 폴더에 두세요\n"
+            "- 이름_retarget_max.log : 자동 적용 결과 기록 (문제가 있을 때 확인)\n"),
+    "blender": ("Blender 용 모션\n"
+                "- 이름_blender.fbx : File > Import > FBX 로 불러옵니다 (타깃 모델에 모션이 구워진 파일)\n"
+                "- 이름_blender.bvh : File > Import > Motion Capture (.bvh) — 본 구조만 있는 모션\n"),
+    "maya": ("Maya 용 모션\n"
+             "- 이름_maya.fbx : File > Import 로 불러옵니다 (타깃 모델에 모션이 구워진 파일)\n"
+             "- 이름_maya.bvh : File > Import 에서 BVH 를 고릅니다 — 본 구조만 있는 모션\n"),
+    "etc": ("기타\n"
+            "- .glb : 대부분의 뷰어/Blender 에서 열 수 있는 미리보기용\n"
+            "- _curves.json : 키 곡선 데이터 (본 구조를 내보내지 않을 때)\n"),
+}
+
+
+def program_dir(base: str, key: str, organize: bool = True) -> str:
+    """organize 이면 base / 프로그램 폴더, 아니면 base 그대로."""
+    return os.path.join(base, PROGRAM_DIRS.get(key, MISC)) if organize else base
+
+
+def write_guide(folder: str, key: str) -> None:
+    """프로그램 폴더에 짧은 사용법을 한 번만 적는다 (이미 있으면 그대로 둠)."""
+    p = os.path.join(folder, GUIDE_NAME)
+    if key in GUIDES and not os.path.exists(p):
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(GUIDES[key])
+        except OSError:
+            pass
+
+
+def remove_empty_fbm(*roots: str) -> List[str]:
+    """FBX 내보내기가 남기는 비어 있는 '<이름>.fbm' 폴더를 지운다 (텍스처가 있으면 건드리지 않음). 지운 폴더 목록을 돌려준다."""
+    gone: List[str] = []
+    for root in dict.fromkeys(r for r in roots if r):
+        for cur, dirs, _files in os.walk(root, topdown=False):
+            for d in dirs:
+                if d.lower().endswith(".fbm"):
+                    p = os.path.join(cur, d)
+                    try:
+                        if not os.listdir(p):
+                            os.rmdir(p)
+                            gone.append(p)
+                    except OSError:
+                        pass
+    return gone
+
 # 이 폴더 바로 아래가 캐릭터 폴더인 경우가 많다
 MARKERS = {"characters", "character", "enemies", "enemy", "monsters", "monster", "bosses", "boss", "npcs", "npc",
            "creatures", "creature", "mobs", "mob", "pawns", "units", "humanoids"}

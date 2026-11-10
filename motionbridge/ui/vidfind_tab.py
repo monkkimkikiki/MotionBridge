@@ -19,14 +19,14 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QMimeData, QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
 from ..core import animlink, animref, assetidx, bridge, extractor, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, pairing, panel, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
-from .widgets import EditPanel, fit_widths, wrappable
+from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
 MEMORY_FILE = os.path.join(bridge.CONFIG_DIR, "matches.json")
@@ -134,7 +134,7 @@ class VidFindTab(QWidget):
         lay.addWidget(self.link_banner)
 
         # 1) 입력
-        g = QGroupBox("1) 영상 / 이미지 / AnimRef 클립")
+        g = CollapsibleBox("1) 영상 / 이미지 / AnimRef 클립")
         v = QVBoxLayout(g)
         self.src_list = QListWidget()
         self.src_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -169,7 +169,7 @@ class VidFindTab(QWidget):
         lay.addWidget(g)
 
         # 2) 인식 방식
-        g = QGroupBox("2) 인식 방식 (검수자가 고릅니다)")
+        g = CollapsibleBox("2) 인식 방식 (검수자가 고릅니다)")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         self.engine = QComboBox()
@@ -261,7 +261,7 @@ class VidFindTab(QWidget):
         self._engine_changed()
 
         # 3) 추측
-        g = QGroupBox("3) 캐릭터 추측")
+        g = CollapsibleBox("3) 캐릭터 추측")
         v = QVBoxLayout(g)
         h = QHBoxLayout()
         self.min_conf = QSpinBox()
@@ -328,7 +328,7 @@ class VidFindTab(QWidget):
         lay.addWidget(g)
 
         # 4) 검수
-        g = QGroupBox("4) 검수 — 틀린 것은 고쳐 주세요")
+        g = CollapsibleBox("4) 검수 — 틀린 것은 고쳐 주세요")
         v = QVBoxLayout(g)
         self.table = QTableWidget()
         self.table.setColumnCount(4)
@@ -404,7 +404,7 @@ class VidFindTab(QWidget):
         lay.addWidget(g)
 
         # 5) 후보 / 추출
-        g = QGroupBox("5) 후보에서 골라 추출")
+        g = CollapsibleBox("5) 후보에서 골라 추출")
         v = QVBoxLayout(g)
         v.addWidget(QLabel("메시 (확정한 캐릭터 / 캐릭터 메쉬 검색 결과)"))
         self.mesh_list = _AssetList("mesh")

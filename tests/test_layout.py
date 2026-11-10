@@ -82,8 +82,32 @@ def test_export_with_layout():
     print("export with layout OK")
 
 
+def test_program_dirs_and_fbm():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        a = layout.program_dir(os.path.join(d, "C", "Animations"), "max")
+        assert a.endswith(os.path.join("Animations", "3dsMax")) and layout.program_dir("x", "blender").endswith("Blender") and layout.program_dir("x", "maya").endswith("Maya")
+        assert layout.program_dir("x", "max", organize=False) == "x"
+        os.makedirs(a)
+        layout.write_guide(a, "max")
+        g = os.path.join(a, layout.GUIDE_NAME)
+        assert os.path.exists(g) and ".ms" in open(g, encoding="utf-8").read()
+        open(g, "w", encoding="utf-8").write("내가 고친 것")
+        layout.write_guide(a, "max")    # 이미 있으면 덮어쓰지 않는다
+        assert open(g, encoding="utf-8").read() == "내가 고친 것"
+        # 빈 .fbm 만 지운다 (텍스처가 든 것은 유지)
+        e, f = os.path.join(a, "x.fbm"), os.path.join(a, "y.fbm")
+        os.makedirs(e)
+        os.makedirs(f)
+        open(os.path.join(f, "t.png"), "wb").write(b"1")
+        gone = layout.remove_empty_fbm(d)
+        assert gone == [e] and not os.path.exists(e) and os.path.exists(f), gone
+    print("program dirs / fbm OK")
+
+
 if __name__ == "__main__":
     test_character_of()
     test_game_name()
     test_export_with_layout()
+    test_program_dirs_and_fbm()
     print("test_layout ALL OK")

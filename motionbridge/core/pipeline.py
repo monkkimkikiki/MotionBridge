@@ -390,7 +390,7 @@ class Project:
                 warns += ["[%s] %s" % (anim_src.name, w) for w in info.notes]
             policy = safesave.norm(opt.on_exist)
             if policy == safesave.NEW_NAME:     # 이미 있는 파일과 겹치지 않는 이름(base_2 …)을 먼저 고른다
-                base = _free_base(base, [adir, mdir])
+                base = _free_base(base, [adir, mdir] + [os.path.join(adir, d) for d in layout.PROGRAM_DIRS.values()])
             if policy == safesave.KEEP_OLD:     # 임시 폴더에 만들고, 이미 있는 파일은 '_old_날짜' 로 보관한 뒤 제자리로 옮긴다
                 stage = tempfile.mkdtemp(prefix="mb_exp_", dir=opt.out_dir)
                 try:
@@ -408,10 +408,14 @@ class Project:
                             self.backups.append(bk)
                         os.replace(f, dst)
                         files.append(dst)
+                        k = {v: kk for kk, v in layout.PROGRAM_DIRS.items()}.get(os.path.basename(os.path.dirname(dst)))
+                        if opt.organize and k:
+                            layout.write_guide(os.path.dirname(dst), k)
                 finally:
                     shutil.rmtree(stage, ignore_errors=True)
             else:
                 files += self._export_one(opt, base, skel, anim, F, upm, meshes, model_path, warns, keys, adir, mdir)
+            layout.remove_empty_fbm(adir, mdir)     # Blender FBX 내보내기가 남기는 빈 .fbm 폴더 정리
         if opt.write_skeleton_json:
             skel = self.tgt.skeleton if opt.what == "retargeted" else self.src.skeleton
             sdir = os.path.join(opt.out_dir, self.export_char(clips[-1] if clips else self.clip, opt), layout.MODEL_DIR) if opt.organize else opt.out_dir
@@ -422,6 +426,14 @@ class Project:
             X.write_json(p, X.skeleton_dict(skel))
             files.append(p)
         return files, warns
+
+    def _pdir(self, opt, adir: str, key: str) -> str:
+        """모션 파일을 둘 프로그램 폴더(3dsMax/Blender/Maya/기타). '캐릭터별 폴더로 정리'가 꺼져 있으면 그대로 adir."""
+        d = layout.program_dir(adir, key, bool(opt.organize))
+        os.makedirs(d, exist_ok=True)
+        if opt.organize:
+            layout.write_guide(d, key)
+        return d
 
     def _export_one(self, opt, base, skel, anim, F, upm, meshes, model_path, warns, keys=None, adir=None, mdir=None) -> List[str]:
         out: List[str] = []
@@ -436,7 +448,8 @@ class Project:
             warns.append("Biped 스크립트는 프레임마다 키를 찍는 방식이라 키 수는 줄지 않고, 정리(압축)된 모션으로 나갑니다.")
         if "bip" in fmts:  # 3ds Max (Biped 또는 일반 본): 스크립트(.ms) + 데이터. 프리셋과 무관하게 3ds Max 프레임 고정
             slots = self.tgt_slots if opt.what == "retargeted" else self.src_slots
-            auto = {"log": os.path.join(adir, base + "_retarget_max.log"), "quit": False} if opt.max_auto and opt.biped_template else None
+            mxdir = self._pdir(opt, adir, "max")
+            auto = {"log": os.path.join(mxdir, base + "_retarget_max.log"), "quit": False} if opt.max_auto and opt.biped_template else None
             exe = ""
             if auto is not None:
                 exe = maxrun.find_max(opt.max_exe)
@@ -447,9 +460,9 @@ class Project:
                     auto["quit"] = not maxrun.is_batch(exe)
             try:
                 if opt.max_method == "bones":
-                    files, w = maxbones.export_bones(adir, base, skel, anim, slots, F, upm, opt.biped_template, auto)
+                    files, w = maxbones.export_bones(mxdir, base, skel, anim, slots, F, upm, opt.biped_template, auto)
                 else:
-                    files, w = biped.export_biped(adir, base, skel, anim, slots, F, upm, opt.biped_template, auto)
+                    files, w = biped.export_biped(mxdir, base, skel, anim, slots, F, upm, opt.biped_template, auto)
                 out += files
                 warns += w
                 if auto is not None:
@@ -466,15 +479,16 @@ class Project:
                 warns.append(str(e))
         for preset_key in opt.presets:
             preset = X.PRESETS[preset_key]
+            pdir = self._pdir(opt, adir, preset_key if preset_key in layout.PROGRAM_DIRS else "etc")
             if "bvh" in fmts:
-                p = os.path.join(adir, "%s_%s.bvh" % (base, preset_key))
+                p = os.path.join(pdir, "%s_%s.bvh" % (base, preset_key))
                 warns += X.export_bvh(p, skel, anim, F, preset, upm)
                 out.append(p)
             if "fbx" in fmts:
                 if opt.what != "retargeted":
                     warns.append("FBX 는 리타깃 결과(타깃 모델 파일 기준)에서만 지원합니다. 소스는 BVH/GLB 를 쓰세요.")
                 else:
-                    p = os.path.join(adir, "%s_%s.fbx" % (base, preset_key))
+                    p = os.path.join(pdir, "%s_%s.fbx" % (base, preset_key))
                     with tempfile.TemporaryDirectory(prefix="mb_") as d:
                         npz = os.path.join(d, "payload.npz")
                         X.write_blender_payload(npz, skel, anim, base)
@@ -487,7 +501,7 @@ class Project:
                     warns += r.warnings
                     out.append(p)
         if "glb" in fmts:
-            p = os.path.join(mdir if meshes else adir, base + ".glb")
+            p = os.path.join(mdir if meshes else self._pdir(opt, adir, "etc"), base + ".glb")
             os.makedirs(os.path.dirname(p), exist_ok=True)
             X.export_glb(p, skel, anim, F, upm, meshes, keys)
             out.append(p)

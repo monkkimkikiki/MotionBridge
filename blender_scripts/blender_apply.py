@@ -284,11 +284,19 @@ def main(argv=None):
         bake_anim_simplify_factor=float(opts.get("simplify", 0.0)),
         axis_forward=opts.get("axis_forward", "-Z"),
         axis_up=opts.get("axis_up", "Y"),
-        path_mode="COPY",
-        embed_textures=True,
+        path_mode="COPY" if _has_textures() else "AUTO",
+        embed_textures=_has_textures(),
     )
     bpy.ops.export_scene.fbx(**_filter(bpy.ops.export_scene.fbx, fkw))
     print("MB_RESULT " + json.dumps({"out": out_path, "bones_matched": int(matched.sum()), "bones_total": B, "frames": int(T), "fit_residual": float(resid.max())}))
+
+
+def _has_textures():
+    """텍스처 이미지가 실제로 있을 때만 복사/내장한다 (없으면 빈 '<이름>.fbm' 폴더만 생긴다)."""
+    try:
+        return any(getattr(im, "has_data", False) or getattr(im, "packed_file", None) for im in bpy.data.images if getattr(im, "type", "") == "IMAGE")
+    except Exception:
+        return False
 
 
 def _depth(b):

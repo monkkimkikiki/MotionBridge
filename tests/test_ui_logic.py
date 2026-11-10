@@ -296,7 +296,9 @@ def test_full_flow():
         walk = sorted(os.path.relpath(os.path.join(r, f), out).replace("\\", "/") for r, _ds, fl in os.walk(out) for f in fl)
         fs = [os.path.basename(f) for f in walk]
         assert len([f for f in fs if f.endswith(".bvh")]) == 4 and len([f for f in fs if f.endswith(".glb")]) == 2, walk  # 클립 2개 × (blender,max)
-        assert all(w.count("/") == 2 and w.split("/")[1] in ("Animations", "Models") for w in walk), walk  # 캐릭터/Animations|Models/파일
+        assert all((w.count("/") == 2 and w.split("/")[1] == "Models") or (w.count("/") == 3 and w.split("/")[1] == "Animations" and w.split("/")[2] in ("3dsMax", "Blender", "Maya", "기타")) for w in walk), walk  # 캐릭터/Models/파일, 캐릭터/Animations/프로그램/파일
+        assert all(any(w.endswith("/%s/%s" % (d, "사용법.txt")) for w in walk) for d in ("3dsMax", "Blender")), walk
+        assert any(w.endswith("3dsMax/walk_max.bvh") for w in walk) and any(w.endswith("Blender/walk_blender.bvh") for w in walk), walk
         assert "완료" in mw.export_log.toPlainText()
         assert mw.pr.clip == 0 and mw.pr.result is not None and mw.tabs.isEnabled()
         # 본 구조 제외

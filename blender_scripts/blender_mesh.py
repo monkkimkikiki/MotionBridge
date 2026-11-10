@@ -152,6 +152,15 @@ def _select(objs):
         bpy.context.view_layer.objects.active = objs[0]
 
 
+def _has_textures():
+    import bpy
+
+    try:
+        return any(getattr(im, "has_data", False) or getattr(im, "packed_file", None) for im in bpy.data.images if getattr(im, "type", "") == "IMAGE")
+    except Exception:
+        return False
+
+
 def _export(fmt, path, objs, rigged, opts):
     import bpy
 
@@ -160,7 +169,7 @@ def _export(fmt, path, objs, rigged, opts):
         types = {"ARMATURE", "MESH"} if rigged else {"MESH"}
         kw = dict(filepath=path, use_selection=True, object_types=types, add_leaf_bones=False, bake_anim=False,
                   axis_forward=opts.get("axis_forward", "-Z"), axis_up=opts.get("axis_up", "Y"),
-                  path_mode="COPY", embed_textures=True, use_mesh_modifiers=True, mesh_smooth_type="FACE")
+                  path_mode="COPY" if _has_textures() else "AUTO", embed_textures=_has_textures(), use_mesh_modifiers=True, mesh_smooth_type="FACE")
         bpy.ops.export_scene.fbx(**_filter(bpy.ops.export_scene.fbx, kw))
     elif fmt == "obj":
         f = AXIS_OBJ.get(opts.get("axis_forward", "-Z"), "NEGATIVE_Z")
