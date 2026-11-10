@@ -101,12 +101,29 @@ class _Names:
         return hits[0] if len(hits) == 1 else None
 
 
-def _intro(hint: str, names: Sequence[str], extra: str) -> str:
+KIND_ANIM, KIND_CHAR = "animation", "character"
+
+
+class PanelStopped(Exception):
+    """사용자가 취소했을 때."""
+
+
+def _intro(hint: str, names: Sequence[str], extra: str, kind: str = KIND_ANIM) -> str:
+    if kind == KIND_CHAR:
+        return ("You are one member of a panel of AIs identifying WHICH game CHARACTER(S) (monster, boss, NPC or the playable character) appear in a short gameplay clip.\n"
+                "The clip is shown as a contact sheet (numbered frames in time order, left to right, top to bottom)%s. Ignore UI, scenery and first-person hands.\n"
+                "Closed list of character asset names (pick ONLY from this list, exactly as written):\n%s\n"
+                "If a visible character is clearly none of them (e.g. a unique boss or NPC that is not in the list), do not force a match: leave it out of the picks and describe it in the description.\n"
+                "%s\n") % ("" if not extra else " " + extra, ", ".join(names), ("Known context: " + hint + "\n") if hint else "")
     return ("You are one member of a panel of AIs identifying WHICH game animation asset matches a short gameplay clip.\n"
             "The clip is shown as a contact sheet (numbered frames in time order, left to right, top to bottom)%s.\n"
             "Closed list of animation asset names (pick ONLY from this list, exactly as written):\n%s\n"
             "%s\n") % ("" if not extra else " " + extra, ", ".join(names), ("Known context: " + hint + "\n") if hint else "")
 
+
+FORMAT_CHAR = ("Answer with JSON only: {\"description\": \"<2-3 sentences: each distinct character you see, with its look: colors, armor, weapon, body shape, size>\", "
+               "\"picks\": [{\"name\": \"<name from list>\", \"confidence\": 0.0-1.0, \"reason\": \"<short, cite what you see/read>\"}]} "
+               "with at most 4 picks, best first (one per different character you believe is visible). Empty picks list if none of the listed names fits.")
 
 FORMAT = ("Answer with JSON only: {\"description\": \"<2-3 sentences: what the player character does, in order>\", "
           "\"picks\": [{\"name\": \"<name from list>\", \"confidence\": 0.0-1.0, \"reason\": \"<short, cite what you see/read>\"}]} "
@@ -144,14 +161,15 @@ def _summary(picks: Sequence[Pick]) -> str:
 
 
 def run_panel(members: Sequence[Member], sheet_path: Optional[str], names: Sequence[str], hint: str = "", rounds: int = 2,
-              on_progress: Optional[Callable[[str], None]] = None) -> Verdict:
+              on_progress: Optional[Callable[[str], None]] = None, kind: str = KIND_ANIM,
+              stop: Optional[Callable[[], bool]] = None) -> Verdict:
     """참가자 모두가 같은 시트·같은 이름 목록으로 라운드를 돌려 합의 순위를 만든다.
 
     1라운드: 이미지 보는 AI 가 먼저(장면 묘사 + 선택), 글 전용 AI 는 그 묘사를 읽고 선택.
     2라운드~: 모두 다른 사람의 선택·이유를 보고 고친다."""
     nm = _Names(names)
     if not nm.names:
-        raise vision.VisionError("애니메이션 이름 목록이 비어 있습니다.")
+        raise vision.VisionError("이름 목록이 비어 있습니다." if kind == KIND_CHAR else "애니메이션 이름 목록이 비어 있습니다.")
     if not members:
         raise vision.VisionError("참가자가 없습니다.")
     if not any(m.sees for m in members):
@@ -163,23 +181,26 @@ def run_panel(members: Sequence[Member], sheet_path: Optional[str], names: Seque
     errors: List[str] = []
     desc: Dict[str, str] = {}
     current: Dict[str, List[Pick]] = {}
+    fmt = FORMAT_CHAR if kind == KIND_CHAR else FORMAT
     limit = min(m.provider.vocab_limit() for m in members)
     shown = nm.names[:limit]
     order = [m for m in members if m.sees] + [m for m in members if not m.sees]
     for rd in range(1, max(1, rounds) + 1):
         new: Dict[str, List[Pick]] = {}
         for m in order:
+            if stop is not None and stop():
+                raise PanelStopped()
             say("라운드 %d · %s 생각 중" % (rd, m.name))
             if rd == 1:
                 seen_desc = "\n".join("- %s saw: %s" % (k, v) for k, v in desc.items() if v)
                 extra = "" if m.sees else "(you cannot see images; rely on what the other panelists describe below)"
-                body = _intro(hint, shown, "" if m.sees else "") + (("Other panelists describe the clip:\n" + seen_desc + "\n") if (not m.sees and seen_desc) else "") + \
-                    ("\n" + extra + "\n" if extra else "") + FORMAT
+                body = _intro(hint, shown, "", kind) + (("Other panelists describe the clip:\n" + seen_desc + "\n") if (not m.sees and seen_desc) else "") + \
+                    ("\n" + extra + "\n" if extra else "") + fmt
             else:
                 others = "\n".join("- %s: %s" % (k, _summary(v)) for k, v in current.items() if k != m.name)
                 mine = _summary(current.get(m.name, []))
-                body = _intro(hint, shown, "") + "Other panelists' latest choices:\n%s\nYour previous choice: %s\n" % (others or "(none)", mine) + \
-                    "Re-check the clip against each candidate name. Keep your pick if you still believe it, or switch if another panelist's reason is better. " + FORMAT
+                body = _intro(hint, shown, "", kind) + "Other panelists' latest choices:\n%s\nYour previous choice: %s\n" % (others or "(none)", mine) + \
+                    "Re-check the clip against each candidate name. Keep your pick if you still believe it, or switch if another panelist's reason is better. " + fmt
             try:
                 text = m.provider.ask(sheet_path, body) if m.sees else m.provider.ask_text(body)
                 d, picks = _parse(text, nm)
@@ -203,3 +224,48 @@ def run_panel(members: Sequence[Member], sheet_path: Optional[str], names: Seque
             who.setdefault(p.name, []).append(member)
     ranking = sorted(((k, round(v, 4), who[k]) for k, v in score.items()), key=lambda t: (-t[1], -len(t[2]), t[0]))
     return Verdict(ranking, transcript, desc, errors)
+
+
+# ---------------------------------------------------------------------- 캐릭터 추측용 회의
+@dataclass
+class CharResult:
+    source: str                              # 원본 영상/이미지
+    verdict: Verdict
+    detections: List["vision.Detection"]
+
+
+def _unwrap(names: Sequence[str]) -> List[str]:
+    return list(dict.fromkeys(str(n) for n in names if str(n).strip()))
+
+
+def run_char_panel(members: Sequence[Member], frames_by_source: Dict[str, List[str]], names: Sequence[str], hint: str = "",
+                   known_lines: Sequence[str] = (), rounds: int = 2, sheet_dir: str = ".", min_score: float = 0.15,
+                   on_progress: Optional[Callable[[str], None]] = None, stop: Optional[Callable[[], bool]] = None) -> List[CharResult]:
+    """영상(원본)마다 장면 시트를 만들어 회의를 열고, 합의된 캐릭터를 vision.Detection 으로 돌려준다 (기존 검수 표가 그대로 쓴다).
+
+    - 합의 점수(0~1)가 min_score 이상인 이름만 확신도로 쓴다. 목록에 없는 캐릭터(이름 없는 보스 등)는 묘사만 담아 name='unknown' 으로 돌려 준다.
+    - 아는 정보(known_lines)는 회의 맥락에 함께 준다. 취소(stop)하면 PanelStopped.
+    """
+    say = on_progress or (lambda _s: None)
+    nm = _unwrap(names)
+    ctx = hint
+    if known_lines:
+        ctx = (hint + "\n" if hint else "") + "The user says these characters appear (display name, likely internal name, note): " + " | ".join(known_lines)
+    out: List[CharResult] = []
+    for si, (src, paths) in enumerate(frames_by_source.items(), 1):
+        if stop is not None and stop():
+            raise PanelStopped()
+        if not paths:
+            continue
+        say("[%d/%d] %s 장면 시트 만드는 중" % (si, len(frames_by_source), os.path.basename(src)))
+        sheet = make_sheet(paths, os.path.join(sheet_dir, "char_sheet_%02d.jpg" % si))
+        v = run_panel(members, sheet, nm, ctx, rounds, lambda m, _i=si: say("[%d/%d] %s" % (_i, len(frames_by_source), m)), KIND_CHAR, stop)
+        desc = next((d for d in v.descriptions.values() if d), "")
+        dets: List[vision.Detection] = []
+        for name, score, who in v.ranking:
+            if score >= min_score:
+                dets.append(vision.Detection(name, min(1.0, score), desc, None, paths[0]))
+        if not dets and desc:      # 목록에 없는 캐릭터: 묘사만 남겨 검수자가 직접 고르게 한다
+            dets.append(vision.Detection("unknown", 0.0, desc, None, paths[0]))
+        out.append(CharResult(src, v, dets))
+    return out

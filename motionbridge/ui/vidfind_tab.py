@@ -309,12 +309,25 @@ class VidFindTab(QWidget):
         v.addWidget(self.char_panel)
         self.char_panel.setVisible(on_char)
         self.rb_mode_char.toggled.connect(self._mode_changed)
+        self.ck_fast = QCheckBox("빠르게 (후보 5개)")
+        self.ck_fast.setChecked(bool(self.cfg.get("vf_fast", True)))
+        self.ck_fast.setToolTip("켜면 시간을 크게 줄입니다: ① 영상마다 장면 시트 한 장으로 AI 에게 한 번만 묻고(장면마다 묻지 않음), ② AI 에게 알리는 이름 목록을 %d개로 줄이고, "
+                                "③ 하나로 못 박지 않고 AI 가 꼽은 후보를 합쳐 검수 칸에 후보 5개를 보여 줍니다. 끄면 장면마다 정밀하게 묻습니다(느림)." % vision.FAST_VOCAB)
+        self.ck_fast.toggled.connect(lambda v: (self.cfg.__setitem__("vf_fast", bool(v)), bridge.save_config(self.cfg)))
         self.btn_guess = QPushButton("캐릭터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
         if self.rb_mode_char.isChecked():
             self.btn_guess.setText("캐릭터 메쉬 목록 열기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
+        h.addWidget(self.ck_fast)
         h.addWidget(self.btn_guess, 1)
+        self.btn_guess_panel = QPushButton("🧑‍⚖ AI 회의로 추측")
+        self.btn_guess_panel.setMinimumHeight(32)
+        self.btn_guess_panel.setToolTip("영상마다 장면 시트를 만들어, 이미지를 보는 AI(Qwen-VL·Claude·Gemini …)가 직접 보고 캐릭터 후보와 생김새를 말하면,\n"
+                                        "글 전용 AI(GPT-OSS)가 그 묘사를 읽고 같은 이름 목록에서 의견을 냅니다. 서로의 이유를 보며 고치고, 합의된 캐릭터가 아래 검수 표에 들어갑니다.\n"
+                                        "목록에 없는 캐릭터(이름 없는 보스 등)는 '(모름)' 줄에 생김새만 적어 둡니다. 토론 기록도 창으로 볼 수 있습니다.")
+        self.btn_guess_panel.clicked.connect(lambda *_a: self.start_guess_panel())
+        h.addWidget(self.btn_guess_panel, 1)
         h.addWidget(QLabel("자동 선택 최소 확신"))
         h.addWidget(self.min_conf)
         b = QPushButton("에셋 목록 새로 읽기")
@@ -552,9 +565,9 @@ class VidFindTab(QWidget):
         fit_widths(inner)
 
     # ================================================================== 입력
-    def _add_source(self, path: str, label: str = "") -> None:
+    def _add_source(self, path: str, label: str = "", title: str = "") -> None:
         tag = "[%s] " % label if label else ""
-        it = QListWidgetItem(tag + os.path.basename(path))
+        it = QListWidgetItem(tag + animlink.display_name(path, title))   # 'video.mp4' 같은 뜻 없는 파일 이름 대신 클립 이름
         it.setData(Qt.ItemDataRole.UserRole, path)
         it.setToolTip(path)
         self.src_list.addItem(it)
@@ -825,6 +838,7 @@ class VidFindTab(QWidget):
         self.cfg["vf_mode_char"] = on
         self.char_panel.setVisible(on)
         self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else "캐릭터 추측 시작")
+        self.btn_guess_panel.setVisible(not on)
         if on:
             if self._load_index_cached():
                 self.show_char_meshes()
@@ -891,6 +905,7 @@ class VidFindTab(QWidget):
         book = self.name_book() if known else None
         ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
         w_cap = 24
+        fast = bool(self.ck_fast.isChecked())
 
         class _Stopped(Exception):
             pass
@@ -915,9 +930,9 @@ class VidFindTab(QWidget):
                 stop_check(w)
                 w.progress.emit(i, n, "장면 뽑는 중 " + name)
 
-            fr = frames.sample_sources(ff, srcs, FRAME_DIR, per, w_cap, sampling)
+            fr = frames.sample_sources(ff, srcs, FRAME_DIR, max(per, 6) if fast else per, w_cap, sampling)
             stop_check(w)
-            vocab, notes = self._vocab(idx, prov.vocab_limit(), pat)
+            vocab, notes = self._vocab(idx, min(prov.vocab_limit(), vision.FAST_VOCAB) if fast else prov.vocab_limit(), pat)
             if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
                 gamenames.resolve_known(known, idx, book)
                 for k in known:
@@ -927,6 +942,43 @@ class VidFindTab(QWidget):
             klines = [k.prompt_line() for k in known]
             dets: List[vision.Detection] = []
             errors: List[str] = []
+            if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
+                by_src: Dict[str, List[str]] = {}
+                for f in fr:
+                    by_src.setdefault(f.source, []).append(f.path)
+                notes.append("빠르게 모드: 영상 %d개 × AI 호출 1번 (이름 목록 %d개)" % (len(by_src), len(vocab)))
+                jobs = list(by_src.items())
+
+                def one(si_src):
+                    si, (src, paths) = si_src
+                    stop_check(w)
+                    sheet = panel.make_sheet(paths, os.path.join(FRAME_DIR, "guess_sheet_%02d.jpg" % si), cols=4, cell_w=384, max_frames=9)
+                    return prov.analyze_sheet(sheet, paths[0], vocab, hint, klines, vision.FAST_VOCAB)
+
+                workers = 3 if prov.key in ("claude", "openai") else 1
+                done_n = 0
+                if workers == 1:
+                    for it in enumerate(jobs):
+                        w.progress.emit(done_n, len(jobs), "캐릭터 인식 중 " + os.path.basename(it[1][0]))
+                        try:
+                            dets += one(it)
+                        except vision.VisionError as e:
+                            errors.append("%s: %s" % (os.path.basename(it[1][0]), e))
+                            if len(errors) >= 3 and not dets:
+                                break
+                        done_n += 1
+                else:
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=workers) as ex:
+                        futs = [(it, ex.submit(one, it)) for it in enumerate(jobs)]
+                        for it, fu in futs:
+                            w.progress.emit(done_n, len(jobs), "캐릭터 인식 중 " + os.path.basename(it[1][0]))
+                            try:
+                                dets += fu.result()
+                            except vision.VisionError as e:
+                                errors.append("%s: %s" % (os.path.basename(it[1][0]), e))
+                            done_n += 1
+                return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
             for i, f in enumerate(fr):
                 stop_check(w)  # 취소하면 다음 장면부터 안 한다
                 w.progress.emit(i, len(fr), "캐릭터 인식 중 " + os.path.basename(f.path))
@@ -955,6 +1007,23 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "캐릭터 추측", "캐릭터를 찾지 못했습니다.\n\n" + ("\n".join(res["errors"][:3]) or "다른 장면이나 인식 방식을 시도하세요. '캐릭터 줄 직접 추가'로 직접 넣을 수도 있습니다."))
 
     # ================================================================== 검수 표
+    def _merge_cands(self, idx, base, alts, n: int = 5):
+        """랭킹 상위 + AI 가 꼽은 다른 후보(각각 가장 비슷한 메시)를 섞어 n개 (중복 없이)."""
+        out = list(base[:max(1, n - min(len(alts), n - 1) if alts else n)])
+        have = {c.path for c in out}
+        for al in alts:
+            for c in idx.rank_meshes(al, "", 1, None):
+                if c.path not in have and len(out) < n:
+                    out.append(c)
+                    have.add(c.path)
+        for c in base:
+            if len(out) >= n:
+                break
+            if c.path not in have:
+                out.append(c)
+                have.add(c.path)
+        return out
+
     def _cand_text(self, c: assetidx.MeshCandidate) -> str:
         return "%s   [%d%%] %s" % (c.name, round(min(c.score, 1.0) * 100), c.why)
 
@@ -978,6 +1047,8 @@ class VidFindTab(QWidget):
     def _make_row(self, r: int, g: vision.Group) -> None:
         idx = self.index or assetidx.AssetIndex()
         base = idx.rank_meshes(g.name, g.description, 8, self.memory)
+        if g.alts or self.ck_fast.isChecked():   # 후보군: AI 가 꼽은 다른 이름들도 합쳐 5개
+            base = self._merge_cands(idx, base, g.alts, 5)
         remembered = bool(base) and base[0].why.startswith("이전에 확정")
         sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
@@ -1541,24 +1612,12 @@ class VidFindTab(QWidget):
             out.append(panel.Member("다른 AI (%s)" % (cfg.get("vf_oa_model") or self._preset()[2]), vision.make_provider("openai", cfg)))
         return out
 
-    def open_panel(self) -> None:
-        names = []
-        for i in range(self.anim_list.count()):
-            it = self.anim_list.item(i)
-            if not it.isHidden():
-                names.append(os.path.splitext(os.path.basename(str(it.data(Qt.ItemDataRole.UserRole))))[0])
-        names = names[:MAX_PANEL_NAMES]
-        if not names:
-            QMessageBox.warning(self, "AI 회의", "회의에 올릴 애니메이션 목록이 비어 있습니다. 먼저 캐릭터를 고르거나 검색해서 후보를 만드세요.")
-            return
-        if not self.source_paths(True):
-            QMessageBox.warning(self, "AI 회의", "영상/이미지를 먼저 추가하세요.")
-            return
+    def _ask_panel_members(self, title: str, info: str):
+        """회의 참가자·라운드 고르는 창. 취소/잘못 고르면 None, 아니면 (members, rounds)."""
         d = QDialog(self)
-        d.setWindowTitle("AI 회의로 찾기")
+        d.setWindowTitle(title)
         lay = QVBoxLayout(d)
-        lay.addWidget(wrappable(QLabel("회의에 참가할 AI 를 고르세요. 이미지를 보는 AI 가 한 명 이상 필요합니다. 모델과 키는 위 '인식 방식' 설정을 따릅니다.\n"
-                                       "회의에 올리는 애니메이션: 지금 목록 위쪽 %d개." % len(names))))
+        lay.addWidget(wrappable(QLabel("회의에 참가할 AI 를 고르세요. 이미지를 보는 AI 가 한 명 이상 필요합니다. 모델과 키는 위 '인식 방식' 설정을 따릅니다.\n" + info)))
         opts = [("ollama", "Ollama 비전 모델 (설정의 모델, 예: qwen2.5vl:7b) — 이미지 봄", True),
                 ("ollama2", "Ollama 두 번째 비전 모델 — 이미지 봄", False),
                 ("gptoss", "GPT-OSS-20B — 글 전용 (다른 AI 의 묘사를 읽고 추론)", True),
@@ -1589,7 +1648,7 @@ class VidFindTab(QWidget):
         bh.addWidget(cancel)
         lay.addLayout(bh)
         if not d.exec():
-            return
+            return None
         picked = {k: bool(cb.isChecked()) for k, cb in boxes.items()}
         for k, v_ in picked.items():
             self.cfg["vf_panel_" + k] = v_
@@ -1599,19 +1658,127 @@ class VidFindTab(QWidget):
         members = self._panel_members(picked, second.text())
         if not members:
             QMessageBox.warning(self, "AI 회의", "참가자를 한 명 이상 고르세요.")
-            return
+            return None
         if not any(m.sees for m in members):
             QMessageBox.warning(self, "AI 회의", "이미지를 볼 수 있는 AI 를 한 명 이상 고르세요 (GPT-OSS 는 그림을 못 봅니다).")
-            return
+            return None
         for m in members:
             ok_, msg, _n = m.provider.check() if m.provider.key in ("claude", "openai", "ollama", "gptoss") else (True, "", [])
             if not ok_:
                 QMessageBox.warning(self, "AI 회의 — %s" % m.name, msg)
-                return
+                return None
+        return members, int(rounds.value())
+
+    @staticmethod
+    def _transcript_text(verdict) -> str:
+        lines = []
+        for t in verdict.transcript:
+            lines.append("[라운드 %d] %s\n%s\n" % (t.round, t.speaker, t.text))
+        lines.append("— 합의 순위 —")
+        for i, (nm_, sc, who) in enumerate(verdict.ranking[:10], 1):
+            lines.append("%d. %s  (점수 %d%%, 지지: %s)" % (i, nm_, round(sc * 100), ", ".join(who)))
+        if verdict.errors:
+            lines.append("\n⚠ " + " / ".join(verdict.errors))
+        return "\n".join(lines)
+
+    def _show_text_dialog(self, title: str, text: str) -> None:
+        d = QDialog(self)
+        d.setWindowTitle(title)
+        lay = QVBoxLayout(d)
+        box = QPlainTextEdit()
+        box.setReadOnly(True)
+        box.setPlainText(text)
+        box.setMinimumSize(720, 480)
+        lay.addWidget(box)
+        b = QPushButton("닫기")
+        b.clicked.connect(d.accept)
+        lay.addWidget(b)
+        d.exec()
+
+    # ---- 캐릭터 추측을 AI 회의로
+    def start_guess_panel(self) -> None:
+        """영상(원본)마다 장면 시트를 만들어 비전 AI 와 글 전용 AI(GPT-OSS)가 토론해 캐릭터를 정한다. 결과는 같은 검수 표에 들어간다."""
+        if self.rb_mode_char.isChecked():
+            QMessageBox.warning(self, "AI 회의", "'캐릭터 메쉬 찾기' 모드는 AI 없이 이름으로 찾습니다. '몬스터 찾기' 모드로 바꿔 주세요.")
+            return
+        srcs = self.source_paths()
+        if not srcs:
+            QMessageBox.warning(self, "AI 회의", "영상/이미지를 먼저 추가하세요.")
+            return
+        a = self.win._extract_args()
+        if a is None:
+            return
+        got = self._ask_panel_members("AI 회의로 캐릭터 추측", "영상마다 장면 시트를 한 장 만들어 회의합니다. 영상이 많으면 AI 호출이 그만큼 늘어납니다.")
+        if got is None:
+            return
+        members, n_rounds = got
+        per, hint, pat = int(self.per.value()), self.hint.text().strip(), self.filter.text().strip()
+        hint = hint or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")
+        known = gamenames.parse_known(self.known.toPlainText())
+        book = self.name_book() if known else None
+        ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
+        limit = min(m.provider.vocab_limit() for m in members)
+        if self.ck_fast.isChecked():
+            limit = min(limit, vision.FAST_VOCAB)
+
+        def job(w):
+            idx = self._ensure_index(a, w, False)
+            shutil.rmtree(FRAME_DIR, ignore_errors=True)
+
+            def sampling(i, n, name):
+                if w.cancel.is_set():
+                    raise panel.PanelStopped()
+                w.progress.emit(i, n, "장면 뽑는 중 " + name)
+
+            fr = frames.sample_sources(ff, srcs, FRAME_DIR, max(per, 6), 24, sampling)
+            vocab, notes = self._vocab(idx, limit, pat)
+            if known:
+                gamenames.resolve_known(known, idx, book)
+                for k in known:
+                    if k.top and k.top.name not in vocab:
+                        vocab = [k.top.name] + list(vocab)
+                    notes.append("아는 정보: %s → %s" % (k.name, (k.top.name + " (%d%%)" % round(k.top.score * 100)) if k.top else "리소스를 못 찾음"))
+            by_src: Dict[str, List[str]] = {}
+            for f in fr:
+                by_src.setdefault(f.source, []).append(f.path)
+            results = panel.run_char_panel(members, by_src, vocab, hint, [k.prompt_line() for k in known], n_rounds, FRAME_DIR,
+                                           on_progress=lambda m: w.progress.emit(0, 1, m), stop=lambda: w.cancel.is_set())
+            dets = [d for r in results for d in r.detections]
+            text = "\n\n".join("===== %s =====\n%s" % (os.path.basename(r.source), self._transcript_text(r.verdict)) for r in results)
+            errs = [e for r in results for e in r.verdict.errors]
+            return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errs, "notes": notes + ["AI 회의로 추측 (참가: %s, %d라운드)" % (", ".join(m.name for m in members), n_rounds)],
+                    "frames": len(fr), "vocab": len(vocab), "panel_text": text}
+
+        def done(res):
+            self._after_guess(res)
+            self.last_panel_text = res.get("panel_text", "")
+            if self.last_panel_text:
+                self._show_text_dialog("AI 회의 결과 — 캐릭터 추측 (표는 검수 칸에 채워졌습니다)", self.last_panel_text)
+
+        self.win.run_async(job, done, "AI 회의로 캐릭터 추측 중 (AI 가 느리면 몇 분 걸립니다)", cancellable=True,
+                           on_cancel=lambda: self.status.setText("AI 회의를 취소했습니다."))
+
+    def open_panel(self) -> None:
+        names = []
+        for i in range(self.anim_list.count()):
+            it = self.anim_list.item(i)
+            if not it.isHidden():
+                names.append(os.path.splitext(os.path.basename(str(it.data(Qt.ItemDataRole.UserRole))))[0])
+        names = names[:MAX_PANEL_NAMES]
+        if not names:
+            QMessageBox.warning(self, "AI 회의", "회의에 올릴 애니메이션 목록이 비어 있습니다. 먼저 캐릭터를 고르거나 검색해서 후보를 만드세요.")
+            return
+        if not self.source_paths(True):
+            QMessageBox.warning(self, "AI 회의", "영상/이미지를 먼저 추가하세요.")
+            return
+        got = self._ask_panel_members("AI 회의로 찾기", "회의에 올리는 애니메이션: 지금 목록 위쪽 %d개." % len(names))
+        if got is None:
+            return
+        members, rounds = got
         srcs = self.source_paths(True)
         hint = self.hint.text().strip() or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")
         ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
-        n_rounds = int(rounds.value())
+        n_rounds = int(rounds)
 
         def job(w):
             shutil.rmtree(FRAME_DIR, ignore_errors=True)
@@ -1625,15 +1792,7 @@ class VidFindTab(QWidget):
 
     def _after_panel(self, out) -> None:
         verdict, sheet = out
-        lines = []
-        for t in verdict.transcript:
-            lines.append("[라운드 %d] %s\n%s\n" % (t.round, t.speaker, t.text))
-        lines.append("— 합의 순위 —")
-        for i, (nm_, sc, who) in enumerate(verdict.ranking[:10], 1):
-            lines.append("%d. %s  (점수 %d%%, 지지: %s)" % (i, nm_, round(sc * 100), ", ".join(who)))
-        if verdict.errors:
-            lines.append("\n⚠ " + " / ".join(verdict.errors))
-        text = "\n".join(lines)
+        text = self._transcript_text(verdict)
         rank = {nm_: (sc, who) for nm_, sc, who in verdict.ranking}
         keep = []
         for i in range(self.anim_list.count()):
@@ -1649,19 +1808,8 @@ class VidFindTab(QWidget):
             it.setToolTip(tip + (("\nAI 회의 지지: " + ", ".join(r[1])) if r else ""))
             self.anim_list.addItem(it)
         self.last_panel_text = text
-        d = QDialog(self)
-        d.setWindowTitle("AI 회의 결과")
-        lay = QVBoxLayout(d)
-        box = QPlainTextEdit()
-        box.setReadOnly(True)
-        box.setPlainText(text)
-        box.setMinimumSize(720, 480)
-        lay.addWidget(box)
-        b = QPushButton("닫기")
-        b.clicked.connect(d.accept)
-        lay.addWidget(b)
         self.anim_note.setText("AI 회의 완료 — 합의 1위: %s. 목록을 합의 순으로 다시 줄 세웠습니다. 눈으로 확인하고 고르세요." % (verdict.ranking[0][0] if verdict.ranking else "없음"))
-        d.exec()
+        self._show_text_dialog("AI 회의 결과", text)
 
     # ================================================================== 동작으로 비교해 정렬
     def rank_by_motion(self, query_path: Optional[str] = None) -> None:
@@ -1943,7 +2091,7 @@ class VidFindTab(QWidget):
         self.link_query = q
         self.clear_sources()
         for p in q.get("paths", []):
-            self._add_source(p, q.get("label", ""))
+            self._add_source(p, q.get("label", ""), q.get("title", ""))
         if q.get("label") in LABEL_CHOICES:
             self.label.setCurrentIndex(max(self.label.findData(q["label"]), 0))
         hits = q.get("hits") or []
@@ -1970,8 +2118,9 @@ class VidFindTab(QWidget):
         self._update_src_note(prefix=" · ".join(facts))
         n = len(q.get("paths", []))
         missing = [p for p in q.get("paths", []) if not os.path.isfile(p)]
-        self.link_banner.setText("AnimRef 요청%s — 영상/클립 %d개%s 를 받았어요."
-                                 % (" #%s" % q["id"] if q.get("id") else "", n, " · " + " · ".join(facts) if facts else ""))
+        nm = animlink.display_name((q.get("paths") or [""])[0], q.get("title", "")) if n else ""
+        self.link_banner.setText("AnimRef 요청%s — %s 를 받았어요%s."
+                                 % (" #%s" % q["id"] if q.get("id") else "", ("'%s'" % nm) if n == 1 else "영상/클립 %d개" % n, " · " + " · ".join(facts) if facts else ""))
         if missing:
             self.link_banner.setText(self.link_banner.text() + "\n⚠ 영상 파일이 없습니다: " + wrappable(missing[0]))
         if n and not missing:  # 받기만 한다 — 캐릭터 추측은 자동으로 시작하지 않는다 (인식 방식을 고른 뒤 직접 시작)

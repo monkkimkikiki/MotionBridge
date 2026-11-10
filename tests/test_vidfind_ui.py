@@ -95,7 +95,8 @@ def main():
         vt.add_files()
         check(vt.src_list.count() == 2 and vt.source_paths(False) == ["/v/a.mp4", "/v/b.png"], "영상/이미지만 추가: %s" % vt.source_paths(False))
 
-        # 추측
+        # 추측 (정밀 모드: 장면마다 묻는 옛 방식)
+        vt.ck_fast.setChecked(False)
         vt.start_guess()
         check(listed == [V.LIST_PATTERN], "에셋 목록은 한 번에 읽음")
         check(os.path.isfile(V.INDEX_CACHE), "색인 저장")
@@ -851,6 +852,37 @@ def main():
         w3 = hub.detach(vt, None)
         hub.redock_window(w3)
         check(mw.tabs.pages[1] is vt, "영상찾기를 분리했다 합쳐도 둘째 칸")
+
+        # 빠르게 모드: 영상마다 시트 1장 → AI 호출 1번, 이름 목록 축소, 후보군(alternatives)이 검수 칸 후보 5개로
+        vt.ck_fast.setChecked(True)
+        n_before = len(prompts)
+        script["i"] = 0
+        sheets = []
+
+        def fake_sheet(paths, out, cols=4, cell_w=480, max_frames=12):
+            sheets.append((list(paths), max_frames))
+            open(out, "wb").write(b"\xff\xd8 sheet")
+            return out
+
+        V.panel.make_sheet = fake_sheet
+
+        def fake_post2(url, payload, headers, timeout):
+            if url.endswith("/api/tags"):
+                return {"models": [{"name": "qwen2.5vl:7b"}]}
+            prompts.append(payload["messages"][0]["content"])
+            return {"message": {"content": json.dumps({"characters": [
+                {"name": "Dwarf", "confidence": 0.8, "description": "armored dwarf", "box": [0.1, 0.1, 0.6, 0.9], "alternatives": ["StoneGolem"]}]})}}
+
+        V.vision.make_provider = lambda kind, cfg, post=None: vision.OllamaProvider(cfg.get("vf_ollama_model") or "qwen2.5vl:7b", post=fake_post2)
+        vt.start_guess()
+        new = prompts[n_before:]
+        check(len(new) == 1, "빠르게: 장면 2장이어도 영상 하나에 호출 1번 (옛 방식은 2번): %d" % len(new))
+        check("contact sheet" in new[0] and "alternatives" in new[0], "시트용 질문에 후보군 요청")
+        check(len(sheets) == 1 and len(sheets[0][0]) == 2 and sheets[0][1] == 9, "영상마다 시트 한 장: %s" % sheets)
+        check(len(vt.rows) == 1 and vt.rows[0].group.name == "Dwarf" and "StoneGolem" in vt.rows[0].group.alts, "후보군이 묶인 줄에 실림: %s" % [r.group.alts for r in vt.rows])
+        cands = [vt.rows[0].combo.itemData(i) for i in range(vt.rows[0].combo.count())]
+        check(MESHES[0] in cands and MESHES[2] in cands and len(cands) <= 5, "후보 5개 이내에 AI 후보군 포함: %s" % cands)
+        check(vt.rows[0].group.box is None, "시트는 위치 상자를 쓰지 않음")
 
     print("모두 통과" if not fails else "실패 %d개" % len(fails))
     sys.exit(1 if fails else 0)

@@ -67,6 +67,7 @@ def sort_models(names):
         return any(h in low for h in VISION_HINTS)
     uniq = sorted(dict.fromkeys(str(n) for n in names if n))
     return [n for n in uniq if likely(n)] + [n for n in uniq if not likely(n)], sum(1 for n in uniq if likely(n))
+FAST_VOCAB = 120  # 빠르게 모드에서 알려 주는 이름 수 (짧을수록 모델이 빨리 읽는다)
 VOCAB_LIMIT = {"ollama": 250, "gptoss": 500, "claude": 800, "openai": 800}  # 한 번에 알려줄 이름 수 (작은 모델은 긴 목록에 약하다)
 
 
@@ -81,6 +82,7 @@ class Detection:
     description: str = ""
     box: Optional[Tuple[float, float, float, float]] = None  # 장면 안 위치 (0~1 비율: 왼, 위, 오른, 아래)
     frame: str = ""
+    alts: List[str] = field(default_factory=list)            # 다른 후보 이름 (빠르게 모드: 후보군)
 
 
 @dataclass
@@ -93,10 +95,11 @@ class Group:
     frame: str
     box: Optional[Tuple[float, float, float, float]]
     frames: List[str] = field(default_factory=list)
+    alts: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------- 질문과 답 해석
-def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = ()) -> str:
+def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = (), sheet: bool = False, alts: bool = False) -> str:
     names = ", ".join(vocab)
     game = (" from the video game %s" % game_hint) if game_hint else " from a video game"
     extra = ""
@@ -104,8 +107,13 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str]
         extra = ("The user says these characters appear in the video (their in-game display name, the likely internal name, and a note):\n%s\n"
                  "Use this as a strong hint. If a visible character matches one of them, answer with its internal name from the list.\n\n"
                  % "\n".join("- " + k for k in known))
-    return (
-        "This is a screenshot%s. Identify every distinct monster, enemy, boss or NPC character visible, and also the player-controlled "
+    shot = ("This is a contact sheet of numbered frames sampled over time from ONE gameplay video%s. Treat it as one scene: list each distinct character once, "
+            "not once per frame, and give box as null." % game) if sheet else ("This is a screenshot%s." % game)
+    alt_line = ('  "alternatives": up to 4 OTHER names from the list that this character could also be (most likely first; [] if none),\n' if alts else "")
+    shape = ('{"characters":[{"name":"...","confidence":0.0,"description":"...","box":null,"alternatives":["..."]}]}' if alts
+             else '{"characters":[{"name":"...","confidence":0.0,"description":"...","box":null}]}')
+    head = (
+        shot + " Identify every distinct monster, enemy, boss or NPC character visible, and also the player-controlled "
         "(playable) character when its body is visible (ignore first-person hands/weapon, UI, and scenery). Several can be on screen at once. "
         "For the playable character use a name from the list that contains words like player, hero or protagonist if one exists, otherwise answer \"player\".\n"
         "%sKnown character names in this game's files:\n[%s]\n\n"
@@ -115,9 +123,8 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str]
         '  "confidence": a number from 0 to 1 (use below 0.5 when you are unsure),\n'
         '  "description": a short English description of its look (colors, body shape, weapon),\n'
         '  "box": [left, top, right, bottom] as fractions of the image (0 to 1), or null if unsure.\n'
-        'Reply with ONLY JSON in this form: {"characters":[{"name":"...","confidence":0.0,"description":"...","box":null}]}. '
-        'If no character is visible reply {"characters":[]}.' % (game, extra, names)
-    )
+    ) % (extra, names)
+    return head + alt_line + "Reply with ONLY JSON in this form: " + shape + ". If no character is visible reply {\"characters\":[]}."
 
 
 def _extract_json(text: str):
@@ -179,7 +186,8 @@ def parse_response(text: str, frame: str = "") -> List[Detection]:
             conf = 0.0
         if conf > 1.0:
             conf = conf / 100.0 if conf <= 100 else 1.0
-        out.append(Detection(name or "unknown", max(0.0, min(1.0, conf)), desc, _norm_box(it.get("box")), frame))
+        alts = [str(x).strip()[:80] for x in (it.get("alternatives") or []) if isinstance(x, str) and str(x).strip()][:4] if isinstance(it.get("alternatives"), list) else []
+        out.append(Detection(name or "unknown", max(0.0, min(1.0, conf)), desc, _norm_box(it.get("box")), frame, alts))
     return out
 
 
@@ -257,6 +265,18 @@ class Provider:
     def analyze(self, image_path: str, vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = ()) -> List[Detection]:
         text = self.ask(image_path, build_prompt(list(vocab)[: self.vocab_limit()], game_hint, known))
         return parse_response(text, image_path)
+
+
+    def analyze_sheet(self, sheet_path: str, first_frame: str, vocab: Sequence[str], game_hint: str = "", known: Sequence[str] = (),
+                      limit: int = 0) -> List[Detection]:
+        """영상 하나를 장면 시트 한 장으로 한 번에 묻는다 (프레임마다 묻는 것보다 몇 배 빠름). 후보군(alternatives)도 같이 받는다.
+        위치(box)는 시트 기준이라 쓸 수 없으므로 지우고, 대표 장면은 첫 프레임으로 둔다."""
+        n = min(self.vocab_limit(), limit) if limit else self.vocab_limit()
+        text = self.ask(sheet_path, build_prompt(list(vocab)[:n], game_hint, known, sheet=True, alts=True))
+        dets = parse_response(text, first_frame)
+        for d in dets:
+            d.box = None
+        return dets
 
 
 class OllamaProvider(Provider):
@@ -539,8 +559,11 @@ def aggregate(dets: Sequence[Detection]) -> List[Group]:
                 continue
         g = groups.get(key)
         if g is None:
-            groups[key] = Group("" if unknown else d.name, d.description, 1, d.confidence, d.frame, d.box, [d.frame])
+            groups[key] = Group("" if unknown else d.name, d.description, 1, d.confidence, d.frame, d.box, [d.frame], list(d.alts))
             continue
+        for a_ in d.alts:
+            if a_ not in g.alts and len(g.alts) < 6:
+                g.alts.append(a_)
         g.seen += 1
         if d.frame and d.frame not in g.frames:
             g.frames.append(d.frame)

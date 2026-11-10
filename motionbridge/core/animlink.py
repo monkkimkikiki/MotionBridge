@@ -244,6 +244,22 @@ def _num_list(v) -> List[float]:
     return out
 
 
+GENERIC_STEMS = {"video", "clip", "movie", "vid", "media", "output", "temp"}
+
+
+def display_name(path: str, title: str = "") -> str:
+    """영상 목록에 보일 이름: 제목이 있으면 제목, 파일 이름이 'video.mp4' 처럼 뜻 없는 이름이면 그 위 폴더(클립 이름), 아니면 파일 이름."""
+    if title and title.strip():
+        return title.strip()
+    base = os.path.basename(path or "")
+    stem = os.path.splitext(base)[0]
+    if stem.lower() in GENERIC_STEMS:
+        parent = os.path.basename(os.path.dirname(path or ""))
+        if parent:
+            return "%s / %s" % (parent, base)
+    return base
+
+
 def parse_query(q) -> dict:
     """/v1/open 의 query(= query.json 경로) 또는 query 객체를 읽는다.
 
@@ -271,7 +287,8 @@ def parse_query(q) -> dict:
     if not result_path and file:
         result_path = os.path.join(os.path.dirname(file), RESULT_FILE)
     hits = _num_list(obj.get("hits"))
-    return {"file": file, "id": str(clip.get("id") or obj.get("id") or ""), "game": str(obj.get("game") or ""),
+    title = str(clip.get("title") or "").strip()
+    return {"file": file, "id": str(clip.get("id") or obj.get("id") or ""), "title": title, "game": str(obj.get("game") or ""),
             "paths": [video] if video else [], "label": "" if label in UNCLASSIFIED else label, "hits": hits, "hit_count": len(hits),
             "duration": clip.get("duration"), "fps": clip.get("fps"), "thumb": str(clip.get("thumb") or ""),
             "character": ({"name": str(ch.get("name") or ""), "kind": str(ch.get("kind") or ""), "detect_text": str(ch.get("detect_text") or "")}

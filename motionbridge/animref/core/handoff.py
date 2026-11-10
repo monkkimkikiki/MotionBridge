@@ -45,6 +45,15 @@ def _character(s, meta):
             "ref_images": [str(p) for p in C.ref_images(c)]}
 
 
+def _clip_title(meta) -> str:
+    """사람이 알아볼 클립 이름 ('<영상 제목> 00:00:00~00:00:10'). 못 만들면 빈 문자열."""
+    try:
+        from .titles import clip_title
+        return clip_title(meta)
+    except Exception:
+        return ""
+
+
 def build_query(meta, s, markers=None, copy_video=False, log=noop):
     """클립 하나의 연동 파일 묶음을 만든다. 반환: query.json 경로(str)."""
     folder = folder_of(s, meta)
@@ -70,7 +79,7 @@ def build_query(meta, s, markers=None, copy_video=False, log=noop):
         "created": datetime.now().isoformat(timespec="seconds"),
         "app_version": VERSION,
         "game": s.get("game", ""),
-        "clip": {"id": Path(meta["_json"]).stem, "label": final_label(meta), "duration": round(float(info.duration), 3),
+        "clip": {"id": Path(meta["_json"]).stem, "title": _clip_title(meta), "label": final_label(meta), "duration": round(float(info.duration), 3),
                  "fps": round(float(info.fps), 3), "size": [info.w, info.h], "video": str(vpath),
                  "thumb": str(file_of(meta, "thumb")), "json": str(meta["_json"])},
         "character": _character(s, meta),

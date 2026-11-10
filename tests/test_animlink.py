@@ -209,5 +209,13 @@ from motionbridge import cli
 check(cli._split_handoff(["--handoff", "C:\\a b\\query.json"]) == ([], "C:\\a b\\query.json"), "--handoff 인자")
 check(cli._split_handoff(["--handoff=q.json", "gui"]) == (["gui"], "q.json") and cli._split_handoff(["mesh", "a.psk"]) == (["mesh", "a.psk"], ""), "--handoff= / 다른 인자는 그대로")
 
+# 목록에 보일 이름: 제목 > 뜻 없는 'video.mp4' 면 클립 폴더 이름 > 파일 이름
+check(L.display_name("C:/lib/clips/c0123/video.mp4", "이름없는자 보스전 00:01:01~00:01:05") == "이름없는자 보스전 00:01:01~00:01:05", "제목이 있으면 제목")
+check(L.display_name("C:/lib/clips/c0123/video.mp4") == "c0123 / video.mp4", "제목 없고 video.mp4 면 클립 폴더 이름과 함께: %s" % L.display_name("C:/lib/clips/c0123/video.mp4"))
+check(L.display_name("C:/x/boss_fight.mp4") == "boss_fight.mp4", "의미 있는 파일 이름은 그대로")
+qq = L.parse_query({"animref_handoff": 1, "clip": {"id": "c1", "title": " 보스전 00:00:00~00:00:10 ", "video": "C:/x/video.mp4"}})
+check(qq["title"] == "보스전 00:00:00~00:00:10", "query 의 clip.title 읽기")
+check(L.parse_query({"animref_handoff": 1, "clip": {"id": "c1", "video": "C:/x/video.mp4"}})["title"] == "", "title 없으면 빈 값 (옛 AnimRef 호환)")
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)
