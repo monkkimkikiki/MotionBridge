@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import quat as Q
-from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_frame, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
+from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_frame, estimate_up, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
 from .model import Animation, Skeleton, fk
 
 
@@ -85,6 +85,7 @@ class ChainPlan:
     target: np.ndarray  # (T,3) 표준 프레임, IK 목표 발목 위치
     fail: np.ndarray  # (T,) bool 다리가 닿지 않은 프레임
     leg_length: float = 0.0
+    applied: bool = False  # 이 체인에 IK 가 실제로 적용됐는가 (꺼져 있거나 손이 바닥에 안 닿으면 False — 뷰포트 IK 표시도 이때는 그리지 않는다)
 
 
 @dataclass
@@ -323,17 +324,28 @@ def retarget(
     if rig is not None:
         k = rig.scale * st.scale_mult if st.auto_scale else st.manual_scale
     elif st.auto_scale:
-        ground_s = min(bps[pair_of[t], 1] for t in mapped_t)
-        ground_t = min(bpt[t, 1] for t in mapped_t)
-        hs = bps[pair_of[com], 1] - ground_s
-        ht = bpt[com, 1] - ground_t
-        if hs > 1e-6 and ht > 1e-6:
+        # 스케일은 '몸 자체의 위쪽'을 기준으로 잰다. 사용자가 고른 표준 상방(Y)으로 재면, 눕히기/세우기/위아래 반전으로 프레임을 돌릴 때
+        # 높이가 바뀌어 스케일이 멋대로 커지거나 작아진다 (눕히기·세우기는 방향만 바꿔야 한다).
+        hs = ht = None
+        up_s = estimate_up(bwp_s, src_slots) if src_slots else None
+        up_t = estimate_up(bwp_t, tgt_slots) if tgt_slots else None
+        if up_s is not None and up_t is not None:
+            us = Q.rotate(Fs, np.asarray(up_s, float))
+            ut = Q.rotate(Ft, np.asarray(up_t, float))
+            gs_ = min(float(bps[pair_of[t]] @ us) for t in mapped_t)
+            gt_ = min(float(bpt[t] @ ut) for t in mapped_t)
+            hs = float(bps[pair_of[com]] @ us) - gs_
+            ht = float(bpt[com] @ ut) - gt_
+        if hs is not None and hs > 1e-6 and ht > 1e-6:
             k = ht / hs
         else:
-            ext_s = np.ptp(np.array([bps[pair_of[t]] for t in mapped_t]), axis=0).max()
-            ext_t = np.ptp(np.array([bpt[t] for t in mapped_t]), axis=0).max()
-            k = ext_t / ext_s if ext_s > 1e-9 else 1.0
-            warnings.append("COM 높이로 스케일을 구할 수 없어 전체 크기 비율을 사용했습니다.")
+            # 몸 위쪽을 못 구하면 방향에 상관없는 크기(매핑된 관절이 무게중심에서 퍼진 정도)의 비율
+            cs = np.array([bps[pair_of[t]] for t in mapped_t])
+            ct = np.array([bpt[t] for t in mapped_t])
+            rad_s = float(np.sqrt(((cs - cs.mean(axis=0)) ** 2).sum(axis=1).mean()))
+            rad_t = float(np.sqrt(((ct - ct.mean(axis=0)) ** 2).sum(axis=1).mean()))
+            k = rad_t / rad_s if rad_s > 1e-9 else 1.0
+            warnings.append("몸의 위쪽 방향(골반/발/머리)을 찾지 못해 전체 크기 비율로 스케일을 구했습니다.")
         k *= st.scale_mult
     else:
         k = st.manual_scale
@@ -547,6 +559,7 @@ def retarget(
                 continue          # 손이 바닥에 닿은 적이 없으면 손 IK 는 아무것도 바꾸지 않는다
             applied = True
             any_applied = True
+            pl.applied = True
             l1, l2 = chain_lengths(ch)
             A = Q.rotate(Ft, Wp[:, ch.upper])
             B = Q.rotate(Ft, Wp[:, ch.lower])

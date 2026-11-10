@@ -231,6 +231,8 @@ class ViewData:
                 vd.ghost_pos = res.ghost_pos if res.ghost_pos is not None else res.src_canon_pos * res.k
                 vd.ghost_parents = reduced_parents(pr.src.skeleton.parents, pr.src_slots, mf)
                 for p in res.plans:
+                    if not p.applied:       # IK 가 꺼져 있거나 적용되지 않은 체인은 표시하지 않는다
+                        continue
                     vd.contact[p.label] = p.contact
                     vd.ik_target[p.label] = p.target
                     vd.bad[p.label] = p.fail

@@ -688,6 +688,8 @@ class MainWindow(QMainWindow):
         self.ex_list = PathTree(strip_ext=True)  # 폴더 구조대로 접고 펼치는 트리
         self.ex_list.setMinimumHeight(220)
         self.ex_list.itemSelectionChanged.connect(self._update_ex_count)
+        self.ex_list.enable_asset_drag(lambda: "anim" if self.ex_kind.currentData() == "anim" else "mesh")  # 뷰포트로 끌어다 놓으면 바로 추출해 연다
+        self.ex_list.setToolTip("파일을 골라 오른쪽 뷰포트로 끌어다 놓으면 바로 추출해서 엽니다")
         v.addWidget(self.ex_list)
         self.ex_count = QLabel("")
         self.ex_count.setWordWrap(True)

@@ -190,6 +190,35 @@ class PathTree(QTreeWidget):
             it.addChild(self._make(c))
         return it
 
+    # -- 뷰포트로 끌어다 놓기 (추출 탭의 '에셋 찾기 / 추출' 목록): 놓으면 그 에셋을 바로 추출해 뷰포트에 연다
+    ASSET_MIME = "application/x-motionbridge-asset"
+    drag_kind = None  # 종류("anim"|"mesh")를 돌려주는 함수. None 이면 끌기 꺼짐
+
+    def enable_asset_drag(self, kind_fn) -> None:
+        self.drag_kind = kind_fn
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+
+    def drag_payload(self, items) -> dict:
+        """끌려 가는 항목(파일/폴더) -> {"kind", "paths"} (폴더는 안의 파일 전부, 중복 없이 목록 순서대로)."""
+        got = set()
+        for it in items:
+            got.update(self._leaves(it))
+        kind = "anim"
+        if callable(self.drag_kind):
+            kind = "anim" if self.drag_kind() == "anim" else "mesh"
+        return {"kind": kind, "paths": [p for p in self._paths if p in got]}
+
+    def mimeData(self, items):  # noqa: N802
+        import json
+
+        from PySide6.QtCore import QMimeData
+
+        md = QMimeData()
+        if callable(self.drag_kind):
+            md.setData(self.ASSET_MIME, json.dumps(self.drag_payload(items)).encode("utf-8"))
+        return md
+
     # -- 읽기
     def count(self) -> int:
         return len(self._paths)

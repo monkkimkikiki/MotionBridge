@@ -745,6 +745,39 @@ def test_extract_tab():
     print("extract tab OK")
 
 
+def test_extract_list_drag():
+    """추출 탭의 '에셋 찾기 / 추출' 목록도 뷰포트로 끌어다 놓을 수 있다 (종류 = 지금 고른 추출 종류, 폴더는 안의 파일 전부)."""
+    mw = A.MainWindow()
+    t = mw.ex_list
+    assert callable(t.drag_kind)
+    t.set_paths(["Game/A/anim1.uasset", "Game/A/anim2.uasset", "Game/B/mesh1.uasset"])
+
+    class It:
+        def __init__(self, paths=None, kids=()):
+            self.p, self.k = paths, list(kids)
+
+        def data(self, col, role):
+            return self.p
+
+        def childCount(self):
+            return len(self.k)
+
+        def child(self, i):
+            return self.k[i]
+
+    leaf = It("Game/B/mesh1.uasset")
+    folder = It(None, [It("Game/A/anim1.uasset"), It("Game/A/anim2.uasset")])
+    mw.ex_kind.setCurrentIndex(mw.ex_kind.findData("anim"))
+    d = t.drag_payload([folder, leaf])
+    assert d["kind"] == "anim" and d["paths"] == ["Game/A/anim1.uasset", "Game/A/anim2.uasset", "Game/B/mesh1.uasset"], d
+    for i in range(mw.ex_kind.count()):
+        if mw.ex_kind.itemData(i) != "anim":
+            mw.ex_kind.setCurrentIndex(i)
+            assert t.drag_payload([leaf])["kind"] == "mesh"
+            break
+    print("extract list drag OK")
+
+
 def test_exist_policy_ui():
     from motionbridge.core import safesave
     mw = A.MainWindow()
@@ -777,4 +810,5 @@ if __name__ == "__main__":
     test_undo_shortcuts_meshmode()
     test_extract_tab()
     test_exist_policy_ui()
+    test_extract_list_drag()
     print("test_ui_logic ALL OK")

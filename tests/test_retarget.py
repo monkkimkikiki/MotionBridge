@@ -189,6 +189,42 @@ def _hand_case(src_cfg, tgt_cfg, still_arms=False, hand_ik=True):
     return ssk, tsk, on, off, gs, gt, ps
 
 
+def test_ik_off_shows_nothing():
+    """발 IK 를 꺼도 뷰포트에 IK 접지 점(초록)이 계속 보이던 문제: 적용되지 않은 체인은 plan.applied=False 이고 뷰어 데이터에 들어가지 않는다."""
+    ssk, smeta = synth.build_skeleton(**COMBOS[0][0])
+    tsk, _ = synth.build_skeleton(**IK_TGT)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=40)
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    pairs, ch = pairs_from_slots(sm, tm), default_chains(sm, tm)
+    off = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=False), ch, sm, tm)
+    assert not off.ik_applied and not any(p.applied for p in off.plans)
+    on = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=True, hand_ik=False), ch, sm, tm)
+    assert on.ik_applied and all(p.applied for c, p in zip(on.chains, on.plans) if c.kind == "foot")
+    # 손만 켜고 손이 바닥에 안 닿으면 아무것도 적용 안 됨
+    hand = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=True), ch, sm, tm)
+    assert not any(p.applied for p in hand.plans)
+    print("ik off OK")
+
+
+def test_scale_independent_of_frame():
+    """눕히기/세우기/위아래 반전으로 좌표축을 돌려도 스케일(k)은 같아야 한다 (몸 자체의 위쪽 기준으로 계산)."""
+    from motionbridge.core.mapping import axes_of_frame, turn_axes
+    ssk, smeta = synth.build_skeleton(**COMBOS[0][0])
+    tsk, _ = synth.build_skeleton(**IK_TGT)
+    an, _ = synth.walk_animation(ssk, smeta, n_frames=20)
+    sm, tm = auto_map(ssk), auto_map(tsk)
+    pairs = pairs_from_slots(sm, tm)
+    r0 = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False), [], sm, tm)
+    up, fwd = axes_of_frame(r0.frame_src[0])
+    for side in ("src", "tgt"):
+        for op in ("pitch90", "yaw90", "yaw180", "flip_up", "pitch90"):
+            u, f = turn_axes(up, fwd, op)
+            kw = {side + "_up": u, side + "_fwd": f}
+            r = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, **kw), [], sm, tm)
+            assert abs(r.k - r0.k) < 1e-9 * max(r0.k, 1.0), (side, op, r.k, r0.k)
+    print("scale independent of frame OK")
+
+
 def test_hand_ik_bind_pose_mismatch():
     """소스/타깃의 바인드 포즈에서 손 높이가 다르면(A 포즈 ↔ T 포즈) 손 IK 가 손을 공중으로 끌어올리던 버그.
     손이 바닥에 닿을 때 타깃 손도 '바닥 + 소스 손 높이 x 스케일' 에 있어야 하고, IK 를 끈 결과와 크게 다르지 않아야 한다."""
@@ -585,6 +621,8 @@ if __name__ == "__main__":
     test_fk_invariants()
     test_ik()
     test_hand_ik()
+    test_ik_off_shows_nothing()
+    test_scale_independent_of_frame()
     test_hand_ik_bind_pose_mismatch()
     test_hand_ik_plant()
     test_spine_blend()
