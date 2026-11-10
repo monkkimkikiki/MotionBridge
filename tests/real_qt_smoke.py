@@ -241,6 +241,26 @@ with tempfile.TemporaryDirectory() as d:
     span0 = ce.canvas.view[1] - ce.canvas.view[0]
     ce.canvas.wheelEvent(wev2)
     check(ce.canvas.view[1] - ce.canvas.view[0] < span0, "곡선 그래프: 휠로 가로 확대")
+    # IK 구간 직접 지정 패널: 제목 줄을 눌러 접었다 펴지고, 펴면 안의 버튼이 보이고, 눌러 구간 지정이 된다 (진짜 Qt)
+    ikp = mw.ik_panel
+    mw.tabs.setCurrentIndex(2)
+    app.processEvents()
+    ikp.set_collapsed(False, save=False)
+    app.processEvents()
+    check(ikp.isVisible() and ikp.b_on.isVisible() and ikp.lst.isVisible(), "IK 구간 패널: 펼치면 안의 위젯이 보임 (패널 %s, 버튼 %s)" % (ikp.isVisible(), ikp.b_on.isVisible()))
+    ikp.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, 20, 4, LB, LB, _Qt.KeyboardModifier.NoModifier))
+    app.processEvents()
+    check(ikp.is_collapsed() and not ikp.b_on.isVisible(), "IK 구간 패널: 제목 줄을 누르면 접힘")
+    ikp.mousePressEvent(_ev(QEvent.Type.MouseButtonPress, 20, 4, LB, LB, _Qt.KeyboardModifier.NoModifier))
+    app.processEvents()
+    check(not ikp.is_collapsed() and ikp.b_on.isVisible() and ikp.height() > 80, "IK 구간 패널: 다시 누르면 펴짐 (높이 %d)" % ikp.height())
+    check(ikp.chain.count() >= 1 and "IK" in ikp.b_on.text(), "IK 구간 패널: 대상 목록/버튼 글자 (%s)" % ikp.b_on.text())
+    ikp.toggle(True)
+    mw.frame_slider.setValue(min(5, mw.pr.anim.n_frames - 1))
+    ikp.toggle(True)
+    app.processEvents()
+    check(ikp._pending is None, "IK 구간 패널: 두 번 눌러 구간 지정")
+    ikp.clear_chain()
     # 왼쪽 모션 목록: 클립을 눌러 오가기 / 다른 모션 세팅 가져오기 / 빼기 (진짜 Qt 위젯)
     import copy as _cp
     cpn = mw.clip_panel

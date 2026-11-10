@@ -1702,7 +1702,7 @@ class MainWindow(QMainWindow):
         self.biped_tpl.setPlaceholderText("비워 두면 새 Biped 를 만들어 .bip 만 저장 · 스키닝된 .max 를 고르고 추출하면 고른 방식(Biped/일반 본)으로 모션을 적용해 같은 폴더에 *_retarget.max 로 저장")
         self.biped_tpl.setToolTip("3ds Max Biped 형식으로 내보낼 때만 쓰입니다.\n"
                                   "· 비워 둘 때: 3ds Max 에서 *_retarget.ms 를 실행하면 새 Biped 를 만들고 모션을 넣어 같은 폴더에 *_retarget.bip 로 저장합니다.\n"
-                                  "· 스키닝된 .max 를 고를 때: *_retarget.ms 를 실행하면 그 파일을 열어 안의 Biped(bip > refbone 구조)에 모션을 적용하고,\n"
+                                  "· 스키닝된 .max 를 고를 때: *_retarget.ms 를 실행하면 그 파일을 열어 안의 Biped(refbone ▶ bip 구조)에 모션을 적용하고,\n"
                                   "  그 .max 가 있는 폴더에 *_retarget.max 와 *_retarget.bip 로 다른 이름 저장합니다. 원본 .max 는 그대로, 같은 이름이 있으면 _2, _3 을 붙입니다.\n"
                                   "저장 위치는 묻지 않습니다. 모든 프레임에 키를 넣습니다.")
         h2.addWidget(self.biped_tpl, 1)
@@ -1713,7 +1713,7 @@ class MainWindow(QMainWindow):
         h3 = QHBoxLayout()
         h3.addWidget(QLabel("적용 방식"))
         self.max_method = QComboBox()
-        self.max_method.addItem("Biped (bip > refbone 구조에 키)", "biped")
+        self.max_method.addItem("Biped (refbone ▶ bip 구조에 키)", "biped")
         self.max_method.addItem("일반 본 (Maya 식 관절 — 이름이 같은 본에 키)", "bones")
         i = self.max_method.findData(self.cfg.get("max_method", "biped"))
         self.max_method.setCurrentIndex(max(i, 0))
