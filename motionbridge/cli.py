@@ -384,7 +384,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_gui(handoff)
     try:
         return args.fn(args)
-    except (ValueError, bridge.BlenderError, extractor.ExtractError, OSError) as e:
+    except (ValueError, RuntimeError, bridge.BlenderError, extractor.ExtractError, OSError) as e:
         _p("오류:", e)
         return 1
 
