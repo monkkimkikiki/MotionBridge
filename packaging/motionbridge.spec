@@ -2,6 +2,9 @@
 # 빌드: pyinstaller --noconfirm --clean packaging/motionbridge.spec   (프로젝트 루트에서)
 # 결과: dist/MotionBridge/MotionBridge.exe (GUI), dist/MotionBridge/MotionBridgeCLI.exe (콘솔, 배치용)
 import os
+from PyInstaller.utils.hooks import collect_all
+
+_unity_datas, _unity_binaries, _unity_hiddenimports = collect_all("UnityPy")
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
@@ -21,10 +24,10 @@ _animref_datas = [(os.path.join(_ar, "assets"), "motionbridge/animref/assets"),
 a = Analysis(
     [os.path.join(ROOT, "MotionBridge.py")],
     pathex=[ROOT],
-    binaries=[],
+    binaries=_unity_binaries,
     # Blender 안에서 실행되는 스크립트는 파일로 함께 배포해야 한다 (bridge.scripts_dir 이 찾는 위치)
-    datas=[(os.path.join(ROOT, "blender_scripts"), "blender_scripts")] + _helper_datas + _animref_datas,
-    hiddenimports=["imageio_ffmpeg", "cv2", "PIL", "obsws_python", "pynput"],  # 함수 안에서 불러오는 것들(frames.find_ffmpeg, AnimRef)
+    datas=[(os.path.join(ROOT, "blender_scripts"), "blender_scripts")] + _helper_datas + _animref_datas + _unity_datas,
+    hiddenimports=["imageio_ffmpeg", "cv2", "PIL", "obsws_python", "pynput"] + _unity_hiddenimports,  # 함수 안에서 불러오는 것들(frames.find_ffmpeg, AnimRef)
     excludes=["tkinter", "matplotlib", "scipy", "pandas", "IPython", "pytest",
               "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore", "PySide6.QtQuick", "PySide6.QtQml"],
     noarchive=False,
