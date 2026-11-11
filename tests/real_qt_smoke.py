@@ -114,10 +114,13 @@ with tempfile.TemporaryDirectory() as d:
         check(mw.vidfind.link_query and mw.vidfind.link_query["id"] == "c1", "AnimRef -> 영상찾기 직접 전달")
         w3 = mw.tabs.hub.detach(ar, None)  # 분리해도 동작
         app.processEvents()
-        check(w3 is not None and ar.inner.isVisible(), "AnimRef 탭 분리")
-        w3.close()
-        app.processEvents()
-        check(mw.tabs.pages.index(ar) == 0, "AnimRef 탭 합치기(맨 앞)")
+        if w3 is not None:      # AnimRef 가 탭 줄 안에 있을 때만 (지금은 최상단 선택이라 탭 줄 밖 -> 분리 대상이 아님)
+            check(ar.inner.isVisible(), "AnimRef 탭 분리")
+            w3.close()
+            app.processEvents()
+            check(mw.tabs.pages.index(ar) == 0, "AnimRef 탭 합치기(맨 앞)")
+        else:
+            check(ar not in mw.tabs.pages, "AnimRef 는 탭 줄 밖(최상단 선택)이라 분리 대상이 아님")
         check(ar.can_close(), "닫기 허용")
         # 영상 플레이어는 모달이 아니다 (띄워 둔 채 다른 곳을 쓸 수 있음)
         import inspect
