@@ -48,7 +48,7 @@ class UnityExtractTab(QWidget):
         self.bundle_key = QLineEdit()
         self.bundle_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.bundle_key.setPlaceholderText("필요한 경우에만 사용자 제공 키 입력")
-        self.bundle_key.setText(str(self.host.cfg.get("unity_bundle_key", "")))
+        self.bundle_key.setText("")  # 키는 설정 파일에 저장하지 않는다
         self.bundle_key.setToolTip(
             "UnityPy가 지원하는 AssetBundle 복호화 키를 입력합니다. "
             "게임 키를 자동으로 찾거나 보호/온라인 검사를 우회하지 않습니다."
@@ -124,9 +124,7 @@ class UnityExtractTab(QWidget):
             return
         key = self.bundle_key.text().strip() or None
         self.host.cfg["unity_game_dir"] = game
-        self.host.cfg["unity_bundle_key"] = self.bundle_key.text()
         self.host.cfg["unity_out"] = self.out_path.text().strip()
-        self.host.cfg.pop("unity_bundle_key", None) if not key else None
         from ..core import bridge
         bridge.save_config(self.host.cfg)
         self.scan_button.setEnabled(False)
