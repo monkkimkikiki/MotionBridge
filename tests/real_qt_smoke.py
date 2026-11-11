@@ -197,6 +197,7 @@ with tempfile.TemporaryDirectory() as d:
     try:
         from motionbridge.ui.viewer_math import drag_placement as _dp
         _vd = vp.vd
+        print("DIAG cam: eye", vp.cam.eye(), "basis", vp.cam.basis(), "ground", _vd.ground_y, "center", _vd.center, "gp", vp.cam.ground_point(400, 480, 800.0, 600.0, _vd.ground_y))
         print("DIAG place: vd", _vd is not None, "size", vp.width(), vp.height(), "drag", vp._drag, "bone_edit", vp.bone_edit,
               "dp", None if _vd is None else _dp(vp.cam, "move", (400, 480), (420, 480), float(vp.width()), float(vp.height()), _vd.ground_y, (_vd.center[0], _vd.center[2])))
     except Exception as _e:  # noqa: BLE001
@@ -291,7 +292,8 @@ with tempfile.TemporaryDirectory() as d:
     mw.vsplit.setSizes([300, 520])
     mw._vsplit_moved()
     print("DIAG vsplit:", mw.vsplit.sizes(), "min", mw.vsplit.widget(0).minimumSizeHint().height(), mw.vsplit.widget(1).minimumSizeHint().height(), "win", mw.height())
-    check(0.1 <= mw.cfg.get("vsplit_bottom", 0) <= 0.85 and mw.vsplit.sizes()[1] > mw.vsplit.sizes()[0] * 0.9, "아래 영역을 키우면 비율이 저장됨 (%s)" % mw.cfg.get("vsplit_bottom"))
+    _top_min = mw.vsplit.widget(0).minimumSizeHint().height()     # 창이 작으면 뷰포트가 최소 높이에서 더 줄지 않는다
+    check(0.1 <= mw.cfg.get("vsplit_bottom", 0) <= 0.85 and (mw.vsplit.sizes()[1] > mw.vsplit.sizes()[0] * 0.9 or mw.vsplit.sizes()[0] <= _top_min + 2), "아래 영역을 키우면 비율이 저장됨 (%s)" % mw.cfg.get("vsplit_bottom"))
     mw._left_split.setSizes([260, 700])
     mw._left_split_moved()
     check(mw.cfg.get("clip_panel_w", 0) >= 150 and mw.clip_panel.width() >= 150, "모션 목록 폭 조절 (%s)" % mw.cfg.get("clip_panel_w"))
@@ -652,7 +654,7 @@ try:
     _r0.reset()
     check(_r0.key not in mw.cfg["sizes"], "두 번 누르면(초기화) 저장 값이 지워짐")
     _app = _QA.instance()
-    _before = {id(w): w.styleSheet() for w in _app.allWidgets() if w.styleSheet()}
+    _before = [(w, w.styleSheet()) for w in _app.allWidgets() if w.styleSheet()]
     mw.toggle_theme()
     check(_th.mode() == "light" and mw.cfg["theme"] == "light", "밝은 테마로 전환")
     _bad = [w for w in _app.allWidgets() if ("#8aa" in w.styleSheet() or "#ffdc50" in w.styleSheet()) and not _th._keep_dark(w)]
@@ -661,8 +663,13 @@ try:
     check(not _bad, "밝은 테마에서 어두운 바탕용 글자색이 남지 않음: %d개" % len(_bad))
     mw.toggle_theme()
     check(_th.mode() == "dark", "어두운 테마로 되돌림")
-    _after = {id(w): w.styleSheet() for w in _app.allWidgets() if id(w) in _before}
-    _diff = [(v, _after.get(k)) for k, v in _before.items() if _after.get(k) != v]
+    _diff = []
+    for _w, _v in _before:
+        try:
+            if _w.styleSheet() != _v:
+                _diff.append((_v, _w.styleSheet()))
+        except RuntimeError:      # 그 사이 없어진 위젯
+            pass
     for _a, _b in _diff[:5]:
         print("DIAG theme roundtrip:", _a[:110], "=>", (_b or "")[:110])
     check(not _diff, "왕복하면 스타일이 원래대로 (다른 것 %d개)" % len(_diff))

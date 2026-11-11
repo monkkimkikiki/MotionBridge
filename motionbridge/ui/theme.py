@@ -79,9 +79,9 @@ def convert_css(css: str, to: str) -> str:
     if css in WHOLE.get(to, {}):
         return WHOLE[to][css]
     if to == "dark":
-        if css in _REV:
-            return _REV[css]
-        return _TOKEN.sub(lambda m: LIGHT_TO_DARK.get(m.group(0).lower(), m.group(0)), css)
+        # 밝게 바꾼 적이 있는 글자만 되돌린다. 기억에 없는 것은 원래부터 어두운 테마용이므로 손대지 않는다
+        # (#3a4560 처럼 '밝은 쪽 짝 색'이면서 '어두운 쪽 원래 색'이기도 한 값이 있어, 표로 거꾸로 바꾸면 멀쩡한 색이 망가진다)
+        return _REV.get(css, css)
     if css in _REV:            # 이미 밝게 바꾼 것 (두 번 적용 방지)
         return css
     lights = set(LIGHT_TO_DARK)
@@ -171,7 +171,8 @@ class _Follower(QObject):
 
     def eventFilter(self, obj, ev) -> bool:  # noqa: N802
         try:
-            if _mode == "light" and ev.type() == QEvent.Type.Show and hasattr(obj, "styleSheet"):
+            # 처음 보일 때 + 프로그램이 글자색을 다시 지정했을 때(StyleChange: 판정 줄·선택 표시처럼 상태에 따라 색을 바꾸는 곳)
+            if _mode == "light" and ev.type() in (QEvent.Type.Show, QEvent.Type.StyleChange) and hasattr(obj, "styleSheet"):
                 _remap(obj, "light")
         except Exception:  # noqa: BLE001
             pass

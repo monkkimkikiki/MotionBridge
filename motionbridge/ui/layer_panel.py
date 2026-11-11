@@ -222,7 +222,7 @@ class LayerPanel(CollapsibleBox):
             it = QListWidgetItem("원본 (리타겟 결과 · 레이어 없음)")
             self.lst.addItem(it)
             for i, l in enumerate(st.layers):
-                it = QListWidgetItem("%d. %s  (키 %d · 세기 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight))
+                it = QListWidgetItem(self._item_text(i, l))
                 try:
                     it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 except TypeError:       # 가짜 Qt(시험용)에서는 플래그 연산이 안 된다
@@ -600,8 +600,30 @@ class LayerPanel(CollapsibleBox):
             return True
         return False
 
+    @staticmethod
+    def _item_text(i: int, l) -> str:
+        return "%d. %s  (키 %d · 세기 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight)
+
+    def _retitle_items(self) -> None:
+        """목록을 다시 만들지 않고 글자(키 개수)만 고친다 — 끄는 동안 오토키로 키가 늘어도 목록의 숫자가 따라오게."""
+        was = self._busy
+        self._busy = True
+        try:
+            st = self.stack()
+            for i, l in enumerate(st.layers):
+                it = self.lst.item(i + 1)
+                if it is not None:
+                    t = self._item_text(i, l)
+                    if it.text() != t:
+                        it.setText(t)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._busy = was
+
     def _after_drag(self) -> None:
         self._warned = ""
+        self._retitle_items()
         self.app.viewport.edited_joints = self.app._edited_set()
         self._update_info()
         self.app.schedule_live()
