@@ -51,6 +51,21 @@ def _name(obj) -> str:
     except Exception:
         return ""
 
+def _unity_data_root(root: str) -> str:
+    if os.path.basename(os.path.normpath(root)).lower().endswith("_data"):
+        return root
+    candidates = []
+    for current, dirs, _files in os.walk(root):
+        depth = os.path.relpath(current, root).count(os.sep)
+        if depth >= 4:
+            dirs[:] = []
+        for name in dirs:
+            if name.lower().endswith("_data"):
+                candidates.append(os.path.join(current, name))
+        if candidates:
+            break
+    return candidates[0] if candidates else root
+
 def _load(root: str, bundle_key: Optional[str] = None):
     UnityPy = _unitypy()
     if bundle_key:
@@ -58,7 +73,9 @@ def _load(root: str, bundle_key: Optional[str] = None):
         if not callable(setter):
             raise UnityExtractError("설치된 UnityPy가 사용자 제공 AssetBundle 키 입력을 지원하지 않습니다.")
         setter(bundle_key)
-    return UnityPy.load(root)
+    # Prefer the game's *_Data directory to avoid loading unrelated executables
+    # and launcher files from the entire installation folder.
+    return UnityPy.load(_unity_data_root(root))
 
 def scan(root: str, on_event: Optional[Callable[[dict], None]] = None,
          bundle_key: Optional[str] = None) -> list[dict]:
@@ -135,7 +152,7 @@ def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
                 data = obj.read()
                 payload = getattr(data, "m_Script", b"")
                 if isinstance(payload, str):
-                    payload = payload.encode("utf-8")
+                    payload = payload.encode("utf-8", "surrogateescape")
                 path = target + ".txt"
                 with open(path, "wb") as stream:
                     stream.write(payload)
