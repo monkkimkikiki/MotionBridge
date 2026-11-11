@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import quat as Q
-from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
+from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core import guide as guide_mod
 from ..core.history import History
@@ -848,6 +848,17 @@ class MainWindow(QMainWindow):
         self.ex_summary = QLabel("① 게임 설치 폴더를 고르고 ② 주황색 [검사]를 먼저 누르세요. 암호화 여부를 확인하고, 그 뒤에 아래 설정이 켜집니다.")
         self.ex_summary.setWordWrap(True)
         v.addWidget(self.ex_summary)
+        # 추출 가능 여부 3단계 판정 (🟢 가능 / 🟡 조건부 / 🔴 불가) + 불가일 때 영상 쪽으로 가는 버튼
+        vh = QHBoxLayout()
+        self.ex_verdict = QLabel("")
+        self.ex_verdict.setWordWrap(True)
+        vh.addWidget(self.ex_verdict, 1)
+        self.btn_to_animref = QPushButton("AnimRef / AI 모캡으로 가기")
+        self.btn_to_animref.setToolTip("직접 추출이 안 되는 게임은 플레이 영상에서 모션을 얻습니다.")
+        self.btn_to_animref.clicked.connect(lambda *_a: self.set_mode("animref"))
+        self.btn_to_animref.setVisible(False)
+        vh.addWidget(self.btn_to_animref)
+        v.addLayout(vh)
         lay.addWidget(g)
 
         g = CollapsibleBox("2) 추출 설정")
@@ -858,11 +869,26 @@ class MainWindow(QMainWindow):
         self.ex_aes.setEnabled(False)
         f.addRow("AES 키", self.ex_aes)
         self.ex_ue = QComboBox()
-        for v_ in gamescan.UE_VERSIONS:
+        for v_ in gamescan.merge_versions([]):
             self.ex_ue.addItem(v_, v_)
         self.ex_ue.setCurrentIndex(max(self.ex_ue.findData(self.cfg.get("ue", "GAME_UE5_4")), 0))
         self.ex_ue.setToolTip("정확한 버전을 모르면 최신부터 시도하세요. 안 읽히면 다른 버전으로 바꿔 다시 검색합니다.")
-        f.addRow("UE 버전", self.ex_ue)
+        try:
+            self.ex_ue.setEditable(True)       # 목록이 길어서(게임 전용 항목 수백 개) 글자를 쳐서 찾을 수 있게
+            self.ex_ue.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        except Exception:  # noqa: BLE001
+            pass
+        f.addRow("UE 버전", with_help(self.ex_ue,
+                                    "게임이 만들어진 언리얼 버전입니다. 게임 폴더를 검사하면 실행 파일 버전을 읽어 자동으로 골라 줍니다.\n"
+                                    "목록 아래쪽에는 '게임 전용 항목'(GAME_BlackMythWukong 등)이 있습니다. 엔진을 고쳐 쓴 게임은 일반 버전으로는 안 열리고 전용 항목을 골라야 합니다 — "
+                                    "검사할 때 폴더 이름으로 전용 항목을 찾으면 자동으로 고릅니다. 칸에 글자를 쳐서 찾을 수도 있습니다 (예: wukong)."))
+        self.ex_links = QLineEdit()
+        self.ex_links.setPlaceholderText("이 게임의 키/매핑을 구한 곳 주소나 메모 (선택) — 게임과 함께 기억됩니다")
+        f.addRow("참고 링크·메모", self.ex_links)
+        self.ex_share = QLineEdit(self.cfg.get("preset_share_dir", ""))
+        self.ex_share.setPlaceholderText("(선택) 팀 공유 폴더 — 여기에 game_presets.json 을 같이 써서 팀원과 게임 설정을 공유")
+        self.ex_share.textChanged.connect(lambda *_a: (self.cfg.__setitem__("preset_share_dir", self.ex_share.text().strip()), bridge.save_config(self.cfg)))
+        f.addRow("공유 폴더", self.ex_share)
         h = QHBoxLayout()
         self.ex_usmap = QLineEdit(self.cfg.get("usmap", ""))
         self.ex_usmap.setPlaceholderText("언리얼 5 게임은 보통 필요 (.usmap)")
@@ -1241,7 +1267,100 @@ class MainWindow(QMainWindow):
                 self.ex_gname.setText(auto)  # 직접 고친 이름은 덮어쓰지 않는다
             self.cfg["game_name_auto"] = auto
             bridge.save_config(self.cfg)
+        try:
+            self._apply_game_preset(sc)
+        except Exception as e:  # noqa: BLE001 - 자동 채우기 실패가 검사를 막지 않게
+            self.statusBar().showMessage("게임 설정 자동 채우기 실패: %s" % e)
         self._update_scan_gate()
+
+    def _sync_ue_list(self) -> list:
+        """UE 버전 목록을 추출 도우미가 실제로 지원하는 전체 목록과 맞춘다 (고른 값은 유지)."""
+        games = extractor.list_games(extractor.find_helper(self.cfg.get("helper")))
+        want = gamescan.merge_versions(games)
+        have = [self.ex_ue.itemData(i) for i in range(self.ex_ue.count())]
+        if want != have:
+            cur = self.ex_ue.currentData() or self.cfg.get("ue", "GAME_UE5_4")
+            self.ex_ue.blockSignals(True)
+            self.ex_ue.clear()
+            for v_ in want:
+                self.ex_ue.addItem(v_, v_)
+            self.ex_ue.setCurrentIndex(max(self.ex_ue.findData(cur), 0))
+            self.ex_ue.blockSignals(False)
+        return games or want
+
+    def _set_ue(self, name: str) -> bool:
+        i = self.ex_ue.findData(name)
+        if i >= 0:
+            self.ex_ue.setCurrentIndex(i)
+        return i >= 0
+
+    def _apply_game_preset(self, sc) -> None:
+        """검사 직후: 예전에 쓴 설정(AES 키·UE 버전·usmap·링크)을 자동으로 채우고, 처음 보는 게임이면 UE 버전을 추천하고, 3단계 판정을 보여 준다."""
+        games = self._sync_ue_list()
+        share = self.cfg.get("preset_share_dir", "") or None
+        pre = gamepresets.lookup(sc, share) if sc.found or sc.engine else None
+        notes = []
+        if pre:
+            if pre.get("ue") and self._set_ue(pre["ue"]):
+                notes.append("UE 버전 " + pre["ue"])
+            if pre.get("aes") and sc.encrypted:
+                self.ex_aes.setText(pre["aes"])
+                notes.append("AES 키")
+            if pre.get("usmap") and os.path.isfile(pre["usmap"]):
+                self.ex_usmap.setText(pre["usmap"])
+                notes.append("매핑 파일")
+            if pre.get("links") or pre.get("note"):
+                self.ex_links.setText(" ".join(pre.get("links") or []) + ((" " + pre["note"]) if pre.get("note") else ""))
+        else:
+            self.ex_aes.setText("")
+            self.ex_links.setText("")
+            name, why = gamescan.suggest_ue(sc, games, self.ex_gname.text())
+            if name and self._set_ue(name):
+                notes.append("UE 버전 %s (%s)" % (name, why))
+        cur_um = self.ex_usmap.text().strip()
+        if sc.found and sc.is_unreal5 and (not cur_um or not os.path.isfile(cur_um) or (not pre and self.cfg.get("usmap_game") != sc.root)):
+            um = gamepresets.find_usmap_near(sc, [share] if share else None)     # 게임 폴더·공유 폴더에 놓아 둔 .usmap
+            if um:
+                self.ex_usmap.setText(um)
+                notes.append("매핑 파일(%s)" % os.path.basename(um))
+            elif not pre and self.cfg.get("usmap_game") not in (None, "", sc.root):
+                self.ex_usmap.setText("")          # 다른 게임의 매핑 파일이 남아 있으면 비운다 (맞지 않는 매핑은 오류의 원인)
+        self.cfg["usmap_game"] = sc.root
+        has_key = False
+        try:
+            has_key = bool(gamescan.normalize_aes_key(self.ex_aes.text()))
+        except ValueError:
+            pass
+        um = self.ex_usmap.text().strip()
+        state, title, desc = gamescan.verdict(sc, has_key, bool(um and os.path.isfile(um)), pre)
+        icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}[state]
+        color = {"green": "#5ab0ff", "yellow": "#e0a050", "red": "#e0a050"}[state]
+        head = ("예전 설정을 불러왔습니다: " if pre else "자동으로 맞춘 것: ") + ", ".join(notes) if notes else ""
+        eng = {"unreal": "언리얼", "unity": "유니티", "re": "RE 엔진", "godot": "고도"}.get(sc.engine, "알 수 없음")
+        facts = "엔진: %s%s%s" % (eng, (" · 실행 파일 버전 " + sc.exe_version) if sc.exe_version else "", (" · 스팀 AppID " + sc.appid) if sc.appid else "")
+        self.ex_verdict.setText("%s %s — %s\n%s%s" % (icon, title, desc, facts, ("\n" + head) if head else ""))
+        self.ex_verdict.setStyleSheet("color:%s;font-weight:700" % color)
+        self.btn_to_animref.setVisible(state == "red")
+        self._verdict_state = state
+
+    def _remember_game(self, status: str = "ok", reason: str = "") -> None:
+        """추출/검색이 실제로 성공한 설정을 게임과 함께 기억한다 (다음에 같은 게임 폴더를 고르면 자동으로 채움)."""
+        sc = self.__dict__.get("scan")
+        if sc is None or not sc.found:
+            return
+        try:
+            aes = gamescan.normalize_aes_key(self.ex_aes.text()) if sc.encrypted else ""
+        except ValueError:
+            aes = ""
+        txt = self.ex_links.text().strip()
+        links = [w for w in txt.split() if w.lower().startswith(("http://", "https://"))]
+        note = " ".join(w for w in txt.split() if w not in links)
+        try:
+            gamepresets.remember(sc, self.cfg.get("preset_share_dir", "") or None, name=self.ex_gname.text().strip(),
+                                 ue=self.ex_ue.currentData() or "", aes=aes, usmap=self.ex_usmap.text().strip(),
+                                 links=links, note=note, status=status, reason=reason)
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage("게임 설정 저장 실패: %s" % e)
 
     def _extract_args(self):
         """추출 호출에 필요한 값을 모은다. 조건이 안 맞으면 안내창을 띄우고 None."""
@@ -1329,6 +1448,8 @@ class MainWindow(QMainWindow):
 
     def _after_search(self, paths) -> None:
         self.ex_list.set_paths(paths)
+        if paths:
+            self._remember_game("ok")       # 실제로 열린 설정만 기억한다
         logs = getattr(self, "_ex_logs", [])
         self.ex_count.setText("%d개" % len(paths) + (" — 폴더 왼쪽 화살표로 열고 닫기, 폴더를 고르면 안의 파일 전부 추출" if paths else " — UE 버전, mappings(.usmap), 검색식을 확인해 보세요.\n도우미 로그: " + " / ".join(logs[-4:])))
 

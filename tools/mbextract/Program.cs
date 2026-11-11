@@ -1,4 +1,6 @@
 // MotionBridge 추출 도우미 (CUE4Parse 기반).
+//   mbextract list-games   (지원하는 UE 버전/게임 프리셋 이름 전체를 JSON 배열로)
+//   mbextract probe  --game DIR --ue X [--aes] [--usmap]   (열어 보고 왜 안 되는지 코드로 알려 줌)
 //   mbextract list   --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] [--filter REGEX] [--limit N]
 //   mbextract locres --game DIR --ue GAME_UE5_4 [--aes 0x...] [--usmap FILE] --out DIR   (게임 안 글자 사전 .locres 를 꺼냄)
 //   (공통) --kind anim|mesh  --format glb|psk (mesh)  --textures (mesh, 텍스처 포함)
@@ -31,10 +33,19 @@ using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.Options;
 
 static void Emit(object o) => Console.WriteLine(JsonSerializer.Serialize(o));
-static void Fail(string msg) { Emit(new { type = "error", message = msg }); Environment.Exit(1); }
+static void Fail(string msg) { Emit(new { type = "error", code = "", message = msg }); Environment.Exit(1); }
+// 원인을 프로그램이 구분할 수 있게 코드를 붙인 오류 (ERR_OODLE_MISSING / ERR_INVALID_AES / ERR_MISSING_USMAP / ERR_PATH_MISMATCH / ERR_NO_CONTAINERS / ERR_NO_PACKAGES)
+static void FailC(string code, string msg) { Emit(new { type = "error", code, message = msg }); Environment.Exit(1); }
+static void Warn(string code, string msg) => Emit(new { type = "warn", code, message = msg });
 
 if (args.Length == 0) Fail("사용법: mbextract list|export --game DIR --ue GAME_UE5_4 ...");
 var cmd = args[0];
+// 지원하는 'UE 버전/게임 프리셋' 전체 목록 (화면의 UE 버전 목록을 이것과 맞춘다). 게임 폴더 없이도 동작.
+if (cmd == "list-games" || args.Contains("--list-games"))
+{
+    Console.WriteLine(JsonSerializer.Serialize(Enum.GetNames<EGame>()));
+    return;
+}
 string? Opt(string name) { for (int i = 1; i < args.Length - 1; i++) if (args[i] == name) return args[i + 1]; return null; }
 
 var game = Opt("--game") ?? "";
@@ -50,32 +61,135 @@ if (!Enum.TryParse<EGame>(ueName, true, out var ue))
 
 try
 {
-    // Oodle 압축 해제 라이브러리 (UE5 게임 대부분이 사용). 없으면 내려받는다.
+    // Oodle 압축 해제 라이브러리 (UE5 게임 대부분이 사용).
+    // ① 게임 폴더 안의 oo2core_*.dll (그 게임이 실제로 쓰는 버전) ② 도우미 옆에 받아 둔 것 ③ 내려받기 순으로 찾는다.
+    bool oodleOk = false;
+    var walk = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
     try
     {
-        string? oodle = Path.Combine(AppContext.BaseDirectory, OodleHelper.OodleFileName);
-        if (!OodleHelper.DownloadOodleDll(ref oodle)) throw new Exception("oodle 라이브러리를 내려받지 못했습니다");
-        OodleHelper.Initialize(oodle);
+        string? inGame = null;
+        try { inGame = Directory.EnumerateFiles(game, "oo2core_*.dll", walk).OrderByDescending(f => f, StringComparer.OrdinalIgnoreCase).FirstOrDefault(); } catch { }
+        if (inGame != null)
+        {
+            try
+            {
+                OodleHelper.Initialize(inGame);
+                oodleOk = OodleHelper.Instance != null;
+                if (oodleOk) Emit(new { type = "log", message = "Oodle: 게임 폴더의 " + Path.GetFileName(inGame) + " 사용" });
+            }
+            catch (Exception e) { Emit(new { type = "log", message = "게임 폴더의 Oodle 을 쓰지 못함(" + e.Message + ") — 다른 것을 찾습니다" }); }
+        }
+        if (!oodleOk)
+        {
+            string? oodle = Path.Combine(AppContext.BaseDirectory, OodleHelper.OodleFileName);
+            if (OodleHelper.DownloadOodleDll(ref oodle))
+            {
+                OodleHelper.Initialize(oodle);
+                oodleOk = OodleHelper.Instance != null;
+            }
+        }
     }
-    catch (Exception e) { Emit(new { type = "log", message = "Oodle 준비 실패(압축된 에셋을 못 읽을 수 있음): " + e.Message }); }
+    catch (Exception e) { Emit(new { type = "log", message = "Oodle 준비 중 오류: " + e.Message }); }
+    if (!oodleOk) Warn("ERR_OODLE_MISSING", "Oodle 압축 해제 라이브러리를 찾지 못했습니다 (게임 폴더에 oo2core_*.dll 이 없고 내려받기도 실패). 압축된 에셋은 읽지 못할 수 있습니다.");
+    try { ZlibHelper.Initialize(Path.Combine(AppContext.BaseDirectory, ZlibHelper.DllName)); }
+    catch (Exception e) { Emit(new { type = "log", message = "zlib 준비 실패(일부 오래된 게임만 영향): " + e.Message }); }
 
-    // Paks 폴더가 있으면 그 폴더만 읽는다(게임 루트 전체를 뒤지지 않음).
-    var root = game;
-    try { root = Directory.EnumerateDirectories(game, "Paks", SearchOption.AllDirectories).FirstOrDefault() ?? game; } catch { }
+    // 컨테이너(.pak/.utoc)가 가장 많이 든 폴더를 읽는다. 이름이 Paks 인 폴더를 우선한다 (--paks 로 직접 지정 가능).
+    var root = Opt("--paks") ?? "";
+    if (root.Length == 0 || !Directory.Exists(root))
+    {
+        root = game;
+        try
+        {
+            var best = Directory.EnumerateFiles(game, "*", walk)
+                .Where(f => f.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".utoc", StringComparison.OrdinalIgnoreCase))
+                .GroupBy(f => Path.GetDirectoryName(f) ?? game, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count() + (string.Equals(Path.GetFileName(g.Key), "Paks", StringComparison.OrdinalIgnoreCase) ? 1000 : 0))
+                .FirstOrDefault();
+            if (best != null) root = best.Key;
+        }
+        catch { }
+    }
     Emit(new { type = "log", message = "읽는 폴더: " + root });
     var provider = new DefaultFileProvider(root, SearchOption.TopDirectoryOnly, new VersionContainer(ue), StringComparer.OrdinalIgnoreCase);
-    if (!string.IsNullOrEmpty(usmap)) provider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmap);
+    bool usmapGiven = !string.IsNullOrEmpty(usmap);
+    if (usmapGiven)
+    {
+        try { provider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmap!); }
+        catch (Exception e) { FailC("ERR_PATH_MISMATCH", "usmap(매핑) 파일을 읽지 못했습니다: " + e.Message + " — 파일이 깨졌거나 이 게임/버전의 것이 아닐 수 있습니다."); }
+    }
     provider.Initialize();
-    Emit(new { type = "log", message = "컨테이너 " + provider.UnloadedVfs.Count + "개 발견" });
+    var allVfs = provider.UnloadedVfs.ToList();
+    int nAll = allVfs.Count, nEnc = allVfs.Count(r => r.IsEncrypted);
+    bool hasIo = false;
+    try { hasIo = Directory.EnumerateFiles(root, "*.utoc", SearchOption.TopDirectoryOnly).Any(); } catch { }
+    Emit(new { type = "log", message = "컨테이너 " + nAll + "개 발견 (암호화 " + nEnc + "개" + (hasIo ? ", IoStore" : "") + ")" });
+    if (nAll == 0) FailC("ERR_NO_CONTAINERS", "이 폴더에서 .pak / .utoc 컨테이너를 찾지 못했습니다: " + root);
     // 암호화 안 된 컨테이너는 Mount() 로, 키가 있으면 SubmitKey 로 연다.
     int mounted = provider.Mount();
-    if (!string.IsNullOrEmpty(aes)) mounted += provider.SubmitKey(new FGuid(), new FAesKey(aes));
+    bool keyGiven = !string.IsNullOrEmpty(aes);
+    string keyErr = "";
+    if (keyGiven)
+    {
+        try { mounted += provider.SubmitKey(new FGuid(), new FAesKey(aes!)); }
+        catch (Exception e) { keyErr = e.GetType().Name + ": " + e.Message; }
+    }
     provider.PostMount();
+    var locked = provider.UnloadedVfs.Where(r => r.IsEncrypted).ToList();
+    var lockedNames = locked.Select(r => r.Name).Take(8).ToList();
+    var lockedGuids = locked.Select(r => r.EncryptionKeyGuid.ToString()).Distinct().Take(8).ToList();
     int pkgCount = provider.Files.Keys.Count(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase));
+    Emit(new { type = "containers", total = nAll, encrypted = nEnc, mounted, locked = lockedNames, key_guids = lockedGuids, iostore = hasIo,
+               files = provider.Files.Count, packages = pkgCount, oodle = oodleOk, usmap = usmapGiven, ue = ue.ToString() });
     Emit(new { type = "log", message = "마운트 " + mounted + "개, 전체 파일 " + provider.Files.Count + "개, 패키지(.uasset) " + pkgCount + "개" });
-    if (pkgCount == 0) Fail("읽을 수 있는 에셋이 없습니다(마운트 " + mounted + "개). AES 키가 필요하거나 UE 버전/usmap 이 맞지 않을 수 있습니다.");
+    string aesMsg = keyGiven
+        ? "AES 키가 이 게임과 맞지 않습니다 (암호화된 컨테이너 " + locked.Count + "개를 열지 못함" + (keyErr.Length > 0 ? ", " + keyErr : "") + "). 키를 다시 확인하거나, 커스텀 엔진 게임이면 UE 버전을 그 게임 전용 항목으로 바꿔 보세요."
+        : "암호화된 게임인데 AES 키가 없습니다 (암호화된 컨테이너 " + locked.Count + "개).";
+    if (pkgCount == 0)
+    {
+        if (locked.Count > 0) FailC("ERR_INVALID_AES", aesMsg);
+        FailC("ERR_NO_PACKAGES", "컨테이너는 열었지만 에셋(.uasset)이 하나도 없습니다 (마운트 " + mounted + "개). UE 버전이 맞지 않을 수 있습니다 — 게임 전용 항목이 있으면 그것을 고르세요.");
+    }
+    if (locked.Count > 0) Warn("ERR_INVALID_AES", aesMsg + " 열린 컨테이너의 에셋만 보입니다.");
+    if (hasIo && !usmapGiven && ue >= EGame.GAME_UE5_0)
+        Warn("ERR_MISSING_USMAP", "언리얼 5 IoStore 게임인데 매핑(.usmap) 파일이 없습니다. 목록은 보이지만 에셋 내용을 읽을 때 실패할 수 있습니다.");
 
-    if (cmd == "list")
+    if (cmd == "probe")
+    {
+        // 실제로 에셋 몇 개를 열어 보고 '왜 안 되는지'를 코드로 알려 준다 (AES 키 후보 확인, usmap 확인에 쓴다).
+        int want = int.TryParse(Opt("--limit"), out var pl) ? pl : 6;
+        var samples = provider.Files.Keys.Where(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(k => Regex.IsMatch(k, "(?i)skeleton|/sk_|anim") ? 0 : 1).ThenBy(k => k, StringComparer.OrdinalIgnoreCase).Take(want).ToList();
+        int okN = 0, mapErr = 0, oodleErr = 0, otherErr = 0; string firstErr = "";
+        foreach (var sp in samples)
+        {
+            try
+            {
+                var pkg = provider.LoadPackage(sp);
+                int nExp = pkg.GetExports().Count();
+                okN++;
+            }
+            catch (Exception e)
+            {
+                var txt = e.ToString();
+                if (Regex.IsMatch(txt, "(?i)mapping|unversioned|usmap")) mapErr++;
+                else if (Regex.IsMatch(txt, "(?i)oodle")) oodleErr++;
+                else otherErr++;
+                if (firstErr.Length == 0) firstErr = e.GetType().Name + ": " + e.Message;
+            }
+        }
+        string code = "OK", msg = "에셋 " + okN + "/" + samples.Count + "개를 정상으로 읽었습니다.";
+        if (okN == 0 && samples.Count > 0)
+        {
+            if (mapErr > 0 && !usmapGiven) { code = "ERR_MISSING_USMAP"; msg = "매핑(.usmap) 파일이 없어 에셋 내용을 읽지 못합니다."; }
+            else if (mapErr > 0) { code = "ERR_PATH_MISMATCH"; msg = "매핑(.usmap) 파일이 이 게임(또는 이 버전)과 맞지 않습니다. 게임이 패치됐다면 새 매핑 파일이 필요합니다."; }
+            else if (oodleErr > 0 || !oodleOk) { code = "ERR_OODLE_MISSING"; msg = "Oodle 압축을 풀지 못했습니다."; }
+            else { code = "ERR_READ_FAILED"; msg = "에셋을 읽지 못했습니다. UE 버전(게임 전용 항목)이 맞는지 확인하세요."; }
+        }
+        Emit(new { type = "probe", code, message = msg, ok = okN, tried = samples.Count, map_errors = mapErr, oodle_errors = oodleErr, other_errors = otherErr, first_error = firstErr });
+        Emit(new { type = "done", count = okN });
+    }
+    else if (cmd == "list")
     {
         var rx = new Regex(Opt("--filter") ?? "(?i)anim", RegexOptions.Compiled);
         int limit = int.TryParse(Opt("--limit"), out var l) ? l : 5000, n = 0;

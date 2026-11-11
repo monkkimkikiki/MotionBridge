@@ -45,18 +45,59 @@ def mode() -> str:
     return _mode
 
 
+_REV: dict = {}      # 밝게 바꾼 스타일 → 원래(어두운) 스타일. 되돌릴 때 정확히 원래대로
+
+
+def _flip(tok: str) -> str:
+    """표에 없는 색: 무채색에 가까우면 밝기를 뒤집고(어두운 바탕 ↔ 밝은 바탕), 강조색(채도 높음)은 그대로 두되 너무 밝으면 조금 어둡게."""
+    import colorsys
+    h = tok[1:]
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return tok
+    r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    hh, ll, ss = colorsys.rgb_to_hls(r, g, b)
+    if ss < 0.42 or ll < 0.18 or ll > 0.93:
+        ll = 1.0 - ll
+        ll = 0.04 + ll * 0.94 if ll > 0.5 else ll * 0.9          # 순백/순흑을 살짝 누그러뜨림
+    elif ll > 0.68:
+        ll = 0.42                                                 # 밝은 강조색 글자는 밝은 바탕에서 안 보이므로 어둡게
+    else:
+        return tok
+    r, g, b = colorsys.hls_to_rgb(hh, ll, ss)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
 def convert_css(css: str, to: str) -> str:
-    """스타일시트 안의 색을 to('light'|'dark') 테마용으로 바꾼다. 해당 없는 색은 그대로."""
+    """스타일시트 안의 색을 to('light'|'dark') 테마용으로 바꾼다.
+
+    밝게: 짝 색 표에 있으면 그 색, 없으면 밝기를 뒤집는다(AnimRef 화면처럼 표에 없는 어두운 색도 따라오게).
+    어둡게: 밝게 바꿀 때 기억해 둔 원래 글자로 정확히 되돌린다."""
     if not css:
         return css
     if css in WHOLE.get(to, {}):
         return WHOLE[to][css]
-    table = DARK_TO_LIGHT if to == "light" else LIGHT_TO_DARK
+    if to == "dark":
+        if css in _REV:
+            return _REV[css]
+        return _TOKEN.sub(lambda m: LIGHT_TO_DARK.get(m.group(0).lower(), m.group(0)), css)
+    if css in _REV:            # 이미 밝게 바꾼 것 (두 번 적용 방지)
+        return css
+    lights = set(LIGHT_TO_DARK)
 
     def sub(m):
-        return table.get(m.group(0).lower(), m.group(0))
+        t = m.group(0).lower()
+        if t in DARK_TO_LIGHT:
+            return DARK_TO_LIGHT[t]
+        if t in lights:
+            return m.group(0)
+        return _flip(t)
 
-    return _TOKEN.sub(sub, css)
+    new = _TOKEN.sub(sub, css)
+    if new != css:
+        _REV[new] = css
+    return new
 
 
 def register_whole(dark_css: str, light_css: str) -> None:
@@ -122,6 +163,18 @@ class _Follower(QObject):
 
 
 _follower = None
+_OWN_PALETTE: dict = {}     # 위젯 → 어두운 테마일 때의 자기 팔레트
+
+
+def track_palette(widget, dark_pal) -> None:
+    """자기 팔레트를 따로 입힌 화면을 등록해 두면 테마를 바꿀 때 같이 바뀐다."""
+    _OWN_PALETTE[widget] = dark_pal
+    if _mode == "light":
+        try:
+            widget.setPalette(light_palette())
+            _remap(widget, "light")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def apply_theme(app, new_mode: str) -> str:
@@ -140,6 +193,11 @@ def apply_theme(app, new_mode: str) -> str:
             app.installEventFilter(_follower)
         for w in list(app.allWidgets()):
             _remap(w, new_mode)
+        for w in list(_OWN_PALETTE):       # 자기 팔레트를 따로 가진 화면(AnimRef)
+            try:
+                w.setPalette(light_palette() if new_mode == "light" else _OWN_PALETTE[w])
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001  (시험용 가짜 Qt)
         pass
     return new_mode

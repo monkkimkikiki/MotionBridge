@@ -22,7 +22,7 @@ def test_convert_roundtrip():
     assert theme.convert_css(keep, "light") == keep
     # 대문자도 처리, 색 뒤에 숫자·글자가 더 붙은 긴 색은 건드리지 않음
     assert theme.convert_css("color:#8AA", "light") == "color:" + theme.DARK_TO_LIGHT["#8aa"]
-    assert theme.convert_css("color:#8aabcd", "light") == "color:#8aabcd"
+    assert theme.convert_css("color:#8aa1b2c3", "light") == "color:#8aa1b2c3"
     assert theme.convert_css("", "light") == ""
     # 탭 줄은 통째로 바뀜
     assert theme.convert_css(chrometabs.STYLE, "light") == chrometabs.STYLE_LIGHT
@@ -79,3 +79,27 @@ if __name__ == "__main__":
     test_resizable_persist()
     test_help_icon()
     print("test_uikit_theme ALL OK")
+
+
+def test_flip_animref_style():
+    """AnimRef 화면의 어두운 스타일이 밝은 테마에서 통째로 밝아지고(검은 바탕이 남지 않음), 되돌리면 글자 하나 안 틀리고 원래대로."""
+    import colorsys, re
+    from motionbridge.animref.ui import theme as ar
+    light = theme.convert_css(ar.STYLE, "light")
+    def lum(t):
+        h = t[1:]
+        h = "".join(c * 2 for c in h) if len(h) == 3 else h
+        return colorsys.rgb_to_hls(*(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)))[1]
+    bgs = re.findall(r"background(?:-color)?:\s*(#[0-9a-fA-F]{3,6})", light)
+    dark_bg = [b for b in bgs if lum(b) < 0.35 and colorsys.rgb_to_hls(*(int(b[1:][i:i+2],16)/255 for i in (0,2,4)))[2] < 0.42]
+    assert bgs and not dark_bg, dark_bg
+    m = re.search(r"QWidget \{ color: (#[0-9a-fA-F]{6})", light)
+    assert m and lum(m.group(1)) < 0.35, "기본 글자색은 어두워야 함: %s" % (m and m.group(1))
+    assert "#5b7cfa" in light, "강조색은 그대로"
+    assert theme.convert_css(light, "dark") == ar.STYLE
+    assert theme.convert_css(light, "light") == light
+    print("animref style flip OK")
+
+
+if __name__ == "__main__":
+    test_flip_animref_style()

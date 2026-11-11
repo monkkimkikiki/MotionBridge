@@ -64,6 +64,11 @@ class AnimRefTab(QWidget):
             self._fail("AnimRef 화면을 만들지 못했습니다: %s: %s" % (type(e).__name__, e))
             return False
         theme.apply_to(mw)  # 프로그램 전체가 아니라 이 탭에만 AnimRef 모양
+        try:      # 밝은/어두운 테마 전환을 AnimRef 화면도 따라가게
+            from . import theme as _mbtheme
+            _mbtheme.track_palette(mw, theme.palette())
+        except Exception:  # noqa: BLE001
+            pass
         self.note.setVisible(False)
         self._lay.addWidget(mw, 1)
         self.inner = mw
