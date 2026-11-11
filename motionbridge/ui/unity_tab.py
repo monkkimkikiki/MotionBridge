@@ -130,14 +130,23 @@ class UnityExtractTab(QWidget):
         self.scan_button.setEnabled(False)
         self.export_button.setEnabled(False)
         self.summary.setText("Unity 에셋 검사 중… (게임 폴더 크기에 따라 시간이 걸릴 수 있습니다)")
-        self.host.run_async(
-            lambda worker: unity_extractor.scan(game, bundle_key=key),
-            self._scan_done,
-            "Unity 에셋 검사 중",
-        )
+        def job(worker):
+            try:
+                return {"records": unity_extractor.scan(game, bundle_key=key)}
+            except Exception as exc:
+                return {"error": "%s: %s" % (type(exc).__name__, exc)}
 
-    def _scan_done(self, records) -> None:
+        self.host.run_async(job, self._scan_done, "Unity 에셋 검사 중")
+
+    def _scan_done(self, result) -> None:
         self.scan_button.setEnabled(True)
+        if isinstance(result, dict) and result.get("error"):
+            self.records = []
+            self.asset_list.clear()
+            self.summary.setText("Unity 검사 실패: " + result["error"])
+            self.export_button.setEnabled(False)
+            return
+        records = result.get("records", []) if isinstance(result, dict) else result
         self.records = list(records or [])
         self._apply_filter()
         self.summary.setText("검사 완료: 에셋 %d개 · 목록에서 필요한 항목을 골라 추출하세요." % len(self.records))
@@ -179,14 +188,21 @@ class UnityExtractTab(QWidget):
         os.makedirs(out, exist_ok=True)
         self.export_button.setEnabled(False)
         self.summary.setText("선택한 Unity 에셋 %d개 추출 중…" % len(asset_keys))
-        self.host.run_async(
-            lambda worker: unity_extractor.export(game, out, asset_keys=asset_keys, bundle_key=key),
-            self._export_done,
-            "Unity 에셋 추출 중",
-        )
+        def job(worker):
+            try:
+                return {"files": unity_extractor.export(game, out, asset_keys=asset_keys, bundle_key=key)}
+            except Exception as exc:
+                return {"error": "%s: %s" % (type(exc).__name__, exc)}
 
-    def _export_done(self, files) -> None:
+        self.host.run_async(job, self._export_done, "Unity 에셋 추출 중")
+
+    def _export_done(self, result) -> None:
         self.export_button.setEnabled(True)
+        if isinstance(result, dict) and result.get("error"):
+            self.summary.setText("Unity 추출 실패: " + result["error"])
+            self.log.setText(result["error"])
+            return
+        files = result.get("files", []) if isinstance(result, dict) else result
         made = list(files or [])
         self.summary.setText("추출 완료: 파일 %d개 → %s" % (len(made), self.out_path.text().strip()))
         if made:
