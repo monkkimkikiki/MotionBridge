@@ -218,7 +218,8 @@ def cmd_universal(args) -> int:
     if args.action == "scan":
         _p("감지된 엔진:", engine)
         if hasattr(adapter, "scan"):
-            records = adapter.scan(args.game, on_event=on_event)
+            records = (adapter.scan(args.game, on_event=on_event) if engine == "unity"
+                       else adapter.scan(args.game, aes=args.aes, mapping=args.mapping, on_event=on_event))
             _p("에셋 %d개" % len(records))
         else:
             _p("어댑터가 scan 기능을 제공하지 않습니다.")
@@ -227,7 +228,8 @@ def cmd_universal(args) -> int:
     if not hasattr(adapter, "scan"):
         _p("이 어댑터는 scan 기능을 제공하지 않습니다.")
         return 2
-    records = adapter.scan(args.game)
+    records = (adapter.scan(args.game) if engine == "unity"
+               else adapter.scan(args.game, aes=args.aes, mapping=args.mapping))
     import re
     rx = re.compile(args.filter, re.I)
     records = [r for r in records if rx.search(str(r.get("name", "")) + " " + str(r.get("type", "")))]
