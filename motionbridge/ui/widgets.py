@@ -601,7 +601,7 @@ class BusyDialog(QDialog):
 
 class WheelGuard(QObject):
     """슬라이더(파란 선) 휠 잠금 — 켜 두면 리타겟 조절의 슬라이더 위에서 휠을 굴려도 값이 바뀌지 않고, 휠이 그대로 바깥 패널 스크롤이 된다.
-    (패널을 스크롤하다 배율 같은 값이 실수로 바뀌는 것을 막는다. 슬라이더는 끌어서, 값은 옆 숫자칸에 입력해서 바꾼다.)
+    (패널을 스크롤하다 배율 같은 값이 실수로 바뀌는 것을 막는다. 슬라이더는 끌어서, 값은 옆 숫자칸에 입력해서 바꾸거나, Ctrl 을 누른 채 휠을 굴리면 된다.)
     숫자칸·콤보박스·프레임 슬라이더 등 다른 위젯은 건드리지 않는다 (NumField 의 슬라이더에만 noWheel 표시가 있다)."""
 
     def __init__(self, lock: bool = True, parent=None) -> None:
@@ -619,6 +619,8 @@ class WheelGuard(QObject):
     def eventFilter(self, obj, ev) -> bool:  # noqa: N802
         try:
             if self.lock and ev.type() == QEvent.Type.Wheel and self.watched(obj):
+                if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    return False                       # Ctrl+휠: 잠금을 잠깐 풀고 슬라이더 값을 바꾼다
                 ev.ignore()
                 par = obj.parentWidget()
                 if par is not None:

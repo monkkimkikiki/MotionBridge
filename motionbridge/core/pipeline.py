@@ -16,7 +16,7 @@ from . import animops, bridge, biped, frameedit, layout, maxbones, maxrun, motio
 from .layers import LayerStack, apply_layers
 from .loader import load_model
 from .mapping import DEFAULT_FRAME, SLOT_ORDER, auto_map, detect_frame, pairs_from_slots
-from .model import Animation, Model
+from .model import Animation, Model, Skeleton
 from .quality import Issue, analyze
 from .rigmatch import RigMatch, explain_rig, is_humanoid
 from .retarget import IKChain, RetargetResult, RetargetSettings, default_chains, retarget
@@ -78,6 +78,10 @@ class Project:
         self.settings = RetargetSettings()
         self.use_chain: Dict[str, bool] = {"L": True, "R": True}
         self._clip = 0
+        # 소스 본 구조: 목록에는 본 구조가 다른 몬스터의 모션도 같이 올라간다. 클립마다 어느 구조인지 기억해 두고, 클립을 고르면 src.skeleton/src_slots 를 그 구조로 바꿔 끼운다
+        # (리타겟은 어차피 타깃 스켈레톤으로 가므로 목록 안에서 소스 구조를 구분할 필요가 없다).
+        self._skels: List[list] = []                       # [[Skeleton, 매핑 dict], ...] 소스 본 구조 묶음
+        self._clip_skel: Dict[int, int] = {}               # 클립 번호 -> _skels 번호
         self._stash: Dict[int, RetargetSettings] = {}      # 지금 보는 클립이 아닌 클립들의 리타겟 설정 (클립마다 따로 가진다)
         self._import_undo: Dict[int, List[dict]] = {}      # 클립별 '다른 모션 세팅 가져오기' 되돌리기 기록
         self.result: Optional[RetargetResult] = None
@@ -98,11 +102,52 @@ class Project:
     def clip(self) -> int:
         return self._clip
 
+    # ---- 소스 본 구조 (클립마다)
+    @staticmethod
+    def _same_skel(a: Skeleton, b: Skeleton) -> bool:
+        return a is b or (list(a.names) == list(b.names) and np.array_equal(a.parents, b.parents))
+
+    def _find_skel(self, skel: Skeleton) -> int:
+        for i, (s, _sl) in enumerate(self._skels):
+            if self._same_skel(s, skel):
+                return i
+        return -1
+
+    def _register_skel(self, skel: Skeleton, slots: Optional[Dict[str, int]] = None) -> int:
+        i = self._find_skel(skel)
+        if i < 0:
+            self._skels.append([skel, dict(slots) if slots is not None else auto_map(skel)])
+            i = len(self._skels) - 1
+        return i
+
+    def _save_slots(self) -> None:
+        """지금 보던 클립의 소스 구조에 사용자가 고친 매핑을 되돌려 적어 둔다 (구조를 바꿔 끼우기 전에)."""
+        g = self._clip_skel.get(self._clip)
+        if g is not None and 0 <= g < len(self._skels) and self.src is not None:
+            self._skels[g][1] = self.src_slots
+
+    def _activate_skel(self, ci: int) -> None:
+        """클립 ci 의 소스 본 구조로 src.skeleton / src_slots 를 바꿔 끼운다 (구조가 같으면 아무것도 안 한다)."""
+        g = self._clip_skel.get(ci)
+        if self.src is None or g is None or not (0 <= g < len(self._skels)):
+            return
+        skel, slots = self._skels[g]
+        if self.src.skeleton is skel and self.src_slots is slots:
+            return
+        self.src.skeleton = skel
+        self.src_slots = slots
+        self.result, self._base_cache = None, None
+
+    def clip_skeleton(self, ci: int) -> Optional[Skeleton]:
+        g = self._clip_skel.get(ci)
+        return self._skels[g][0] if g is not None and 0 <= g < len(self._skels) else (self.src.skeleton if self.src is not None else None)
+
     @clip.setter
     def clip(self, v: int) -> None:
         v = int(v)
         if v == self._clip:
             return
+        self._save_slots()
         old = self.settings
         self._stash[self._clip] = old
         nxt = self._stash.pop(v, None)
@@ -111,6 +156,7 @@ class Project:
         nxt.ik_ranges = old.ik_ranges             # IK 구간은 이미 '클립 번호 → 구간' 모양이라 한 곳에 모아 둔다
         self.settings = nxt
         self._clip = v
+        self._activate_skel(v)
 
     # ---- 모션 목록 편집: 모션 추가 / 빼기 (모션별 설정·레이어·편집·IK 구간 번호를 함께 정리)
     def add_motions(self, paths: Sequence[str]) -> Tuple[List[int], List[str]]:
@@ -146,15 +192,19 @@ class Project:
                 self._clip_paths = known = {}
                 self.log += m.notes
                 n0 = 0
-            elif list(m.skeleton.names) == list(self.src.skeleton.names) and np.array_equal(m.skeleton.parents, self.src.skeleton.parents):
-                n0 = len(self.src.animations)
-                self.src.animations += m.animations
+                g = self._register_skel(m.skeleton, self.src_slots)
+                self._skels[g][1] = self.src_slots
             else:
-                skipped.append("%s: 스켈레톤이 달라 같은 목록에 넣을 수 없습니다 (지금 소스와 다른 캐릭터)" % nm)
-                continue
+                # 본 구조가 달라도(다른 몬스터) 그대로 목록에 올린다. 클립을 고르면 그 구조로 자동 전환된다.
+                n0 = len(self.src.animations)
+                self._save_slots()
+                g = self._register_skel(m.skeleton)
+                self.src.animations += m.animations
+                self.log += m.notes
             for i in range(n0, len(self.src.animations)):
                 added.append(i)
                 known[i] = key
+                self._clip_skel[i] = g
         return added, skipped
 
     def clip_of_path(self, path: str) -> Optional[int]:
@@ -204,8 +254,11 @@ class Project:
         self.edits = shift(self.edits)
         paths = shift(getattr(self, "_clip_paths", {}))
         self._clip_paths = paths
+        self._save_slots()
+        self._clip_skel = shift(self._clip_skel)
         del self.src.animations[ci]
         self.result, self._base_cache = None, None
+        self._activate_skel(new_clip)
         return name
 
     def settings_of(self, ci: int) -> Optional[RetargetSettings]:
@@ -219,6 +272,10 @@ class Project:
         self._stash = {}
         self._import_undo = {}
         self._clip = 0
+        self._skels, self._clip_skel = [], {}
+        if self.src is not None:
+            self._skels = [[self.src.skeleton, self.src_slots]]
+            self._clip_skel = {i: 0 for i in range(len(self.src.animations))}
 
     def _each_settings(self):
         yield self.settings

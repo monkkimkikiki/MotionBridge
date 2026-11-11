@@ -273,6 +273,10 @@ class FrameStrip(QWidget):
         self.release()
 
     def wheelEvent(self, ev) -> None:
+        # Ctrl+휠 = 조각 늘이기/줄이기 (Ctrl+Shift+휠 = 5배). 그냥 휠은 위쪽 스크롤 영역으로 넘긴다
+        if not (ev.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            ev.ignore()
+            return
         d = ev.angleDelta().y() or ev.angleDelta().x()  # Shift+휠은 가로 휠로 오는 환경이 있다
         steps = (1 if d > 0 else -1) * max(1, abs(int(d)) // 120) if d else 0
         if steps:

@@ -737,9 +737,19 @@ def main():
             return urllib.request.urlopen(rq, timeout=5).status
 
         import urllib.request
+        before = vt.source_paths(False)
         write_query("포로_내려찍기", "타격", [0.28, 0.8, 3.3], {"name": "The Nameless Captive", "kind": "creature"})
         check(send_open() == 200, "AnimRef 의 /v1/open 은 200")
-        check(vt.link_query and vt.link_query["id"] == "포로_내려찍기" and vt.source_paths(False) == ["/v/hit1.mp4"], "clip.video 가 목록에 들어감: %s" % vt.source_paths(False))
+        check(vt.link_query and vt.link_query["id"] == "포로_내려찍기" and vt.source_paths(False) == before + ["/v/hit1.mp4"], "clip.video 가 목록 뒤에 쌓임 (예전 것은 안 지워짐): %s" % vt.source_paths(False))
+        check(send_open() == 200 and vt.source_paths(False) == before + ["/v/hit1.mp4"], "같은 클립을 또 보내면 중복으로 안 쌓임")
+        # 목록에서 선택한 것만 지우기
+        vt.src_list.clearSelection()
+        for i in range(vt.src_list.count()):
+            if vt.src_list.item(i).data(A.Qt.ItemDataRole.UserRole) == "/v/hit1.mp4":
+                vt.src_list.item(i).setSelected(True)
+        n_rm = vt.remove_sources()
+        check(n_rm == 1 and vt.source_paths(False) == before and "/v/hit1.mp4" not in vt.clip_labels, "선택한 원본 지우기: %s" % vt.source_paths(False))
+        check(send_open() == 200 and vt.source_paths(False) == before + ["/v/hit1.mp4"], "지운 뒤 다시 보내면 다시 쌓임")
         check("포로_내려찍기" in vt.link_banner.text() and vt.label.currentData() == "타격" and vt.hits.value() == 3, "배너/분류/타수")
         check("0.28" in vt.link_banner.text() and "3.3" in vt.link_banner.text() and "분류 타격" in vt.src_note.text(), "타격 시각과 분류를 같이 표시: %s" % vt.src_note.text())
         check("The Nameless Captive" in vt.known.toPlainText(), "AnimRef 캐릭터가 '아는 정보'에 들어감: %r" % vt.known.toPlainText())

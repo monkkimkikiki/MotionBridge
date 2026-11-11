@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from . import quat as Q
+from . import fingermap
 from .model import Skeleton
 
 # ---------------------------------------------------------------------------- 슬롯
@@ -98,9 +99,11 @@ def classify_name(name: str):
     if tset & _SKIP:
         return None
     digits = [int(t) for t in ts if t.isdigit()]
-    # 손가락
+    # 손가락 (MiddleToe1 / RingToe2 처럼 발가락 이름에 손가락 낱말이 들어 있는 리그가 있다 — 그건 손가락이 아니다)
     for w, fname in _FINGER_WORDS.items():
         if w in tset:
+            if tset & {"toe", "toes"}:
+                return None
             if side is None:
                 return None
             return side, "Finger:" + fname, (digits[-1] if digits else None)
@@ -211,6 +214,11 @@ def auto_map(skel: Skeleton) -> Dict[str, int]:
                 chain = sorted(lst, key=lambda x: skel.depth(x[0]))[:3]
                 for n, (j, _) in enumerate(chain, 1):
                     out["%s_%s%d" % (side, f, n)] = j
+    # 이름에서 손가락을 하나도 못 찾은 손: 손 아래 뼈 사슬의 위치로 엄지~새끼를 정한다 (core/fingermap.py)
+    try:
+        fingermap.fill_fingers(skel, out)
+    except Exception:  # noqa: BLE001 — 손가락 추정이 실패해도 나머지 매핑은 그대로
+        pass
     return out
 
 

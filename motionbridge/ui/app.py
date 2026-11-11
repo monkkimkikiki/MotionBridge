@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import quat as Q
-from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, osopen, safesave, scalefit, textmatch
+from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core import guide as guide_mod
 from ..core.history import History
@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         if _app is not None:
             _app.installEventFilter(self.wheel_guard)
         self.wheel_cb = QCheckBox("🔒 슬라이더 휠 잠금")
-        self.wheel_cb.setToolTip("켜 두면 리타겟 조절의 슬라이더(파란 선) 위에서 마우스 휠을 굴려도 값이 바뀌지 않고 패널만 스크롤됩니다. (단축키 Ctrl+L)\n숫자칸·콤보박스·3D 뷰·곡선 그래프의 휠은 그대로 동작합니다.")
+        self.wheel_cb.setToolTip("켜 두면 리타겟 조절의 슬라이더(파란 선) 위에서 마우스 휠을 굴려도 값이 바뀌지 않고 패널만 스크롤됩니다. (단축키 Ctrl+L)\nCtrl 을 누른 채 굴리면 잠겨 있어도 슬라이더 값이 바뀝니다.\n숫자칸·콤보박스·3D 뷰의 휠은 그대로 동작합니다. 곡선 그래프·타임바는 Ctrl+휠일 때만 확대/축소(조각 늘이기)가 됩니다.")
         self.wheel_cb.setChecked(self.wheel_guard.lock)
         self.wheel_cb.toggled.connect(lambda on: self.set_wheel_lock(on))
         self.statusBar().addPermanentWidget(self.wheel_cb)
@@ -322,7 +322,7 @@ class MainWindow(QMainWindow):
             self.set_bone_tool(name[5:], enable=True)
             return
         {"prev": lambda: self.step_frame(-1), "next": lambda: self.step_frame(1), "first": lambda: self.goto_frame("first"),
-         "last": lambda: self.goto_frame("last"), "play": self.toggle_play}[name]()
+         "last": lambda: self.goto_frame("last"), "play": self.toggle_play, "key_selected": self.layer_panel.key_selected}[name]()
 
     # ---- 실행 취소 / 다시 실행
     def _edit_state(self) -> dict:
@@ -571,14 +571,21 @@ class MainWindow(QMainWindow):
             "QPushButton:checked:hover{background:#38905a}")
         self.cb_bone_edit.toggled.connect(self._bone_edit_toggled)
         bl.addWidget(self.cb_bone_edit)
-        self.cb_pos_only = QCheckBox("📍 이 본만 움직이기")
+        self.cb_pos_only = QCheckBox("📍 포지션 분리 (이 본만 움직이기)")
         self.cb_pos_only.setChecked(bool(self.cfg.get("pos_only", False)))
-        self.cb_pos_only.setToolTip("W 이동으로 손·발을 끌 때의 방식입니다.\n"
+        self.cb_pos_only.setToolTip("W 이동으로 손·발을 끌 때의 방식입니다 (팔도 다리와 똑같이 적용됩니다).\n"
                                     "해제(기본) = 3ds Max 바이패드처럼 팔·다리가 IK 로 자연스럽게 펴지고 접히며 손/발이 따라옵니다 (위팔·아래팔이 돌아감, 길이는 그대로).\n"
-                                    "체크 = 그 본만 위치를 옮깁니다 (팔다리는 그대로, 그 본이 몸에서 떨어지거나 늘어난 모양이 될 수 있어요).\n"
+                                    "체크(포지션 분리) = 그 본만 위치를 옮깁니다 (팔다리는 그대로, 그 본이 몸에서 떨어지거나 늘어난 모양이 될 수 있어요).\n"
                                     "손·발 끝이 아닌 본(골반·몸통·팔꿈치 등)은 항상 그 본만 움직입니다.")
         self.cb_pos_only.toggled.connect(self._pos_only_toggled)
         bl.addWidget(self.cb_pos_only)
+        self.cb_autokey = QCheckBox("🔑 오토키")
+        self.cb_autokey.setChecked(bool(self.cfg.get("autokey", False)))
+        self.cb_autokey.setToolTip("켜면 본을 돌리거나 옮길 때마다 지금 프레임에 자동으로 키가 찍힙니다 (보정 레이어가 없으면 '오토키' 레이어를 만들어요).\n"
+                                   "끄면 편집이 전체 구간 '본별 보정'으로 들어갑니다 (레이어가 골라져 있고 🔴 기록이 켜져 있으면 그 레이어에 기록).\n"
+                                   "오토키와 상관없이 K 키를 누르면 고른 본에 지금 프레임의 키를 찍습니다 (뷰포트 위에서).")
+        self.cb_autokey.toggled.connect(self._autokey_toggled)
+        bl.addWidget(self.cb_autokey)
         self.tool_buttons: Dict[str, QPushButton] = {}
         for tool, text, tip in (("select", "Q 선택", "점을 눌러 본을 고릅니다 (끌어도 아무것도 바뀌지 않음)"),
                                 ("move", "W 이동", "화살표(X 빨강/Y 초록/Z 파랑)를 끌면 그 축으로만, 중심 네모를 끌면 자유롭게 본(과 하위 본 전체)을 옮깁니다"),
@@ -947,6 +954,13 @@ class MainWindow(QMainWindow):
         v.addLayout(h)
         b = QPushButton("선택한 파일을 소스 모션으로 열기")
         b.clicked.connect(self._open_extracted)
+        v.addWidget(b)
+        b = QPushButton("📚 같은 종류 모션 모으기 (라이브러리 폴더 만들기)")
+        b.setToolTip("추출된 모션(PSA 등)을 '종류/동작' 폴더로 복사해 모읍니다 — attack 은 attack 끼리, run 은 run 끼리.\n"
+                     "예) 출력 폴더/Library/attack/Plow/…psa , Library/locomotion/Run/…psa\n"
+                     "목록에서 고른 파일(안 골랐으면 목록 전체, 목록이 비었으면 출력 폴더 안의 모든 모션)을 모으고, 원본은 그대로 둡니다.\n"
+                     "종류·동작은 파일 이름과 폴더 구조에서 읽습니다. 이름이 겹치고 내용이 다르면 캐릭터 이름을 붙여 둘 다 남깁니다.")
+        b.clicked.connect(self._collect_extracted)
         v.addWidget(b)
         b = QPushButton("선택한 GLB 를 타깃 모델로 열기")
         b.setToolTip("게임에서 뽑은 메시(GLB)를 타깃(내 모델) 자리에 불러옵니다. 소스 모션과 같은 캐릭터면 그대로 확인할 수 있습니다.")
@@ -1326,8 +1340,20 @@ class MainWindow(QMainWindow):
 
         self.run_async(job, self._after_extract, "추출 중")
 
+    def extract_to_library(self, paths) -> None:
+        """에셋 찾기에서 고른 애니메이션을 추출하고, 끝나면 종류별 라이브러리 폴더로도 모은다."""
+        self._collect_after = True
+        i = self.ex_kind.findData("anim")
+        if i >= 0:
+            self.ex_kind.setCurrentIndex(i)
+        self._extract_paths(list(paths))
+
     def _after_extract(self, files) -> None:
+        collect = bool(self.__dict__.pop("_collect_after", False))
         self.ex_files.set_paths(files)
+        if collect and files:
+            rep = self.collect_motions([f for f in files if f.lower().endswith(motionlib.ANIM_EXT)])
+            self.log_collect = rep
         if not files:
             why = [x for x in getattr(self, "_ex_skips", []) if x][:6]
             self.statusBar().showMessage("추출된 파일이 없습니다")
@@ -1347,6 +1373,32 @@ class MainWindow(QMainWindow):
             self._add_source_files(psas, play=True, sync=True, prefix=msg)
         elif glb:
             self._open_path_as_target(glb)
+
+    def library_dir(self) -> str:
+        return os.path.join(self.ex_out.text().strip() or os.path.expanduser("~"), "Library")
+
+    def collect_motions(self, files) -> "motionlib.Report":
+        """모션 파일들을 종류별 라이브러리 폴더로 모은다 (복사). 결과를 상태줄에 알린다."""
+        lib = self.library_dir()
+        rep = motionlib.collect(list(files), lib)
+        self.statusBar().showMessage("모션 라이브러리: %s — %s" % (lib, rep.summary()))
+        return rep
+
+    def _collect_extracted(self) -> None:
+        files = [f for f in (self.ex_files.selected_paths() or self.ex_files.all_paths()) if f.lower().endswith(motionlib.ANIM_EXT)]
+        if not files:
+            root = self.ex_out.text().strip()
+            files = motionlib.scan(root, self.library_dir()) if root and os.path.isdir(root) else []
+        if not files:
+            QMessageBox.information(self, "모션 모으기", "모을 모션 파일이 없습니다. 먼저 애니메이션을 추출하거나 '출력 폴더 내용 불러오기'를 누르세요.")
+            return
+        rep = self.collect_motions(files)
+        lines = [rep.summary(), "", "폴더: " + rep.lib]
+        if rep.skipped:
+            lines += ["", "건너뜀 (앞 6개):"] + ["- %s — %s" % (os.path.basename(p), why) for p, why in rep.skipped[:6]]
+        QMessageBox.information(self, "모션 모으기", "\n".join(lines))
+        if rep.copied:
+            osopen.open_in_explorer(rep.lib)
 
     def _open_extracted(self) -> None:
         sel = self.ex_files.selected_paths() or ([self.ex_files.first_path()] if self.ex_files.count() else [])
@@ -1372,7 +1424,7 @@ class MainWindow(QMainWindow):
 
     def _add_source_files(self, paths, play: bool = False, sync: bool = False, prefix: str = "") -> None:
         """뷰포트에 소스 모션으로 여는 파일은 전부 왼쪽 모션 목록에 자동으로 더한다 (이미 열린 모션은 그대로 두고 뒤에 붙인다).
-        이미 목록에 있는 파일이면 그 모션으로 이동한다. 지금 소스와 뼈대가 다른 캐릭터의 모션이면, 목록을 비우고 새로 열지 묻는다.
+        이미 목록에 있는 파일이면 그 모션으로 이동한다. 뼈대가 다른 캐릭터의 모션도 그대로 목록에 올라가고, 고르면 소스 구조가 자동으로 바뀐다.
         play=True 면 열린 모션을 처음부터 바로 재생한다. sync=True 면 일하는 스레드 없이 바로 읽는다(다른 작업의 완료 콜백 안에서 쓸 때)."""
         paths = [p for p in paths if p]
         if not paths:
@@ -1384,14 +1436,7 @@ class MainWindow(QMainWindow):
 
     def _added_done(self, paths, res, play: bool = False, prefix: str = "") -> None:
         added, skipped = res
-        diff = [x for x in skipped if "스켈레톤이 달라" in x]
-        if diff and not added and self.pr.src is not None:
-            r = QMessageBox.question(self, "다른 캐릭터의 모션", "지금 목록의 모션과 뼈대가 다른 캐릭터의 모션입니다.\n(%s)\n\n지금 목록을 비우고 이 모션으로 새로 열까요?\n(지금 모션들의 보정 작업은 사라집니다)" % diff[0][:80])
-            if r == QMessageBox.StandardButton.Yes:
-                self.pr.unload_source()
-                self._after_unload("source")
-                self._add_source_files(paths, play=play, sync=True, prefix=prefix)    # 완료 콜백 안이라 바로 읽는다
-                return
+        diff = []     # 본 구조가 달라도 이제 그대로 목록에 올라간다 (클립을 고르면 소스 구조가 자동 전환)
         hit = None
         if not added and self.pr.src is not None:          # 이미 목록에 있는 모션이면 새로 더하지 않고 그 모션으로 간다
             hit = next((self.pr.clip_of_path(p) for p in paths if self.pr.clip_of_path(p) is not None), None)
@@ -2522,6 +2567,17 @@ class MainWindow(QMainWindow):
             self.pr.settings.rot_offsets.pop(j, None)
         self._after_bone_value_edit(j)
 
+    def _autokey_toggled(self, on: bool) -> None:
+        self.cfg["autokey"] = bool(on)
+        try:
+            bridge.save_config(self.cfg)
+        except Exception:  # noqa: BLE001
+            pass
+        if on:
+            if not self.cb_bone_edit.isChecked():
+                self.cb_bone_edit.setChecked(True)
+            self.statusBar().showMessage("오토키 켜짐 — 본을 고치면 지금 프레임에 키가 찍힙니다 (K = 고른 본에 지금 값으로 키)")
+
     # ---- 뷰포트 본 편집 (파츠 목록 / 클릭 선택 / 끌어서 회전)
     def _bone_edit_toggled(self, on: bool) -> None:
         try:
@@ -2694,6 +2750,9 @@ class MainWindow(QMainWindow):
             for k in range(self.bone_tree.topLevelItemCount()):
                 self._tree_select(self.bone_tree.topLevelItem(k), j)
         self._update_bone_sel_label()
+        ikp = self.__dict__.get("ik_panel")
+        if ikp is not None:
+            ikp.sync_from_bone(j)                # 고른 본이 팔다리 체인에 속하면 'IK 구간 직접 지정'의 대상도 같이 맞춘다
         if getattr(self, "curve_editor", None) is not None:
             self.curve_editor.refresh()
         self.viewport.update()
@@ -2758,11 +2817,20 @@ class MainWindow(QMainWindow):
         self._ik_drag = None
 
     def _foot_ik_on(self, end: int) -> bool:
-        """본 end 가 '발 IK 가 실제로 걸리는 다리'의 발인가."""
-        if not self.pr.settings.foot_ik or not self.pr.ready():
+        """본 end 가 'IK 가 실제로 걸리는 팔다리'의 끝인가 (발: 발 IK 가 켜짐 / 손: 손 IK 가 켜져 있고 바닥에 닿는 구간이 있음).
+        이런 끝을 위/아래 팔다리 회전으로 옮기면 바로 뒤의 IK 가 원래 목표로 되돌려 버리므로 IK 목표 자체를 옮겨야 한다."""
+        if not self.pr.ready():
             return False
         try:
-            return any(c.kind == "foot" and int(c.foot) == int(end) for c in self.pr.chains())
+            for c in self.pr.chains():
+                if int(c.foot) != int(end):
+                    continue
+                if c.kind == "foot":
+                    return bool(self.pr.settings.foot_ik)
+                if c.kind == "hand" and self.pr.settings.hand_ik:
+                    res = self.pr.result
+                    return any(getattr(p, "applied", False) and p.label == c.label for p in (getattr(res, "plans", None) or []))
+            return False
         except Exception:  # noqa: BLE001
             return False
 
@@ -3053,12 +3121,18 @@ class MainWindow(QMainWindow):
     def _clip_changed(self, i: int) -> None:
         if self._syncing or i < 0 or self.pr.src is None:
             return
+        skel_before = self.pr.src.skeleton
         self.pr.clip = i
         self._syncing = True
         self._sync_settings_ui()                      # 설정은 클립마다 따로라 화면의 값도 그 클립 것으로
         self._select_clip_widgets()
         self._syncing = False
-        self.recompute(reframe=False)
+        new_skel = self.pr.src.skeleton is not skel_before        # 본 구조가 다른 몬스터의 모션으로 넘어감: 소스 매핑 표·정보를 그 구조로
+        if new_skel:
+            self._fill_mapping()
+        self.recompute(reframe=new_skel)
+        if new_skel:
+            self.statusBar().showMessage("다른 본 구조의 모션입니다 — 소스 본 %d개 · 매핑도 이 모션 것으로 바뀌었습니다" % self.pr.src.skeleton.n)
 
     # ---- 타임라인
     def _frame_changed(self, f: int) -> None:

@@ -103,6 +103,18 @@ class _AssetList(QListWidget):
         return md
 
 
+class _DeleteList(QListWidget):
+    """Delete 키를 누르면 on_delete 를 부르는 목록 (원본 목록에서 고른 것을 빼는 데 쓴다)."""
+    on_delete = None
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() == Qt.Key.Key_Delete and self.on_delete is not None:
+            self.on_delete()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+
 class VidFindTab(QWidget):
     def __init__(self, win) -> None:
         super().__init__()
@@ -141,10 +153,11 @@ class VidFindTab(QWidget):
         # 1) 입력
         g = CollapsibleBox("1) 영상 / 이미지 / AnimRef 클립")
         v = QVBoxLayout(g)
-        self.src_list = QListWidget()
+        self.src_list = _DeleteList()
         self.src_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.src_list.setMinimumHeight(90)
-        self.src_list.setToolTip("고르지 않으면 목록 전체를 씁니다. 원본이 많으면 고르게 솎아서 씁니다.")
+        self.src_list.setToolTip("고르지 않으면 목록 전체를 씁니다. 원본이 많으면 고르게 솎아서 씁니다. 고르고 Delete 키로 뺄 수 있습니다.")
+        self.src_list.on_delete = self.remove_sources
         v.addWidget(self.src_list)
         h = QHBoxLayout()
         b = QPushButton("영상/이미지 추가…")
@@ -157,6 +170,10 @@ class VidFindTab(QWidget):
         b = QPushButton("AnimRef query.json 열기…")
         b.setToolTip("AnimRef 가 '추출 툴로 보내기' 때 만든 query.json 을 직접 고릅니다 (실시간 연결이 안 될 때). 메뉴 파일 > AnimRef에서 가져오기 와 같습니다.")
         b.clicked.connect(lambda *_a: self.open_query_file())
+        h.addWidget(b)
+        b = QPushButton("선택한 원본 지우기")
+        b.setToolTip("목록에서 고른 영상/클립만 뺍니다 (파일은 지워지지 않습니다). 고른 게 없으면 아무것도 안 합니다. Delete 키도 같습니다.")
+        b.clicked.connect(self.remove_sources)
         h.addWidget(b)
         b = QPushButton("목록 비우기")
         b.clicked.connect(self.clear_sources)
@@ -608,6 +625,16 @@ class VidFindTab(QWidget):
         if len(labels) == 1:  # 클립이 전부 같은 분류면 애니메이션 분류도 그걸로
             self.label.setCurrentIndex(max(self.label.findData(next(iter(labels))), 0))
         self._update_src_note(prefix=animref.summarize(clips))
+
+    def remove_sources(self) -> int:
+        """목록에서 고른 원본만 뺀다. 빠진 개수를 돌려준다."""
+        rows = sorted({self.src_list.row(it) for it in self.src_list.selectedItems()}, reverse=True)
+        for r in rows:
+            it = self.src_list.takeItem(r)
+            if it is not None:
+                self.clip_labels.pop(it.data(Qt.ItemDataRole.UserRole), None)
+        self._update_src_note(prefix=("원본 %d개를 뺐습니다" % len(rows)) if rows else "")
+        return len(rows)
 
     def clear_sources(self) -> None:
         self.src_list.clear()
@@ -2233,9 +2260,13 @@ class VidFindTab(QWidget):
     def load_query(self, q: dict) -> None:
         """AnimRef 가 보낸 요청으로 화면을 채운다 (UI 스레드에서 불린다)."""
         self.link_query = q
-        self.clear_sources()
+        # 보낼 때마다 목록에 쌓인다 (이미 있는 파일은 건너뜀). 비우려면 '선택한 원본 지우기'/'목록 비우기'.
+        had = self.src_list.count() > 0
+        have = set(self.source_paths(False))
         for p in q.get("paths", []):
-            self._add_source(p, q.get("label", ""), q.get("title", ""))
+            if p not in have:
+                self._add_source(p, q.get("label", ""), q.get("title", ""))
+                have.add(p)
         if q.get("label") in LABEL_CHOICES:
             self.label.setCurrentIndex(max(self.label.findData(q["label"]), 0))
         hits = q.get("hits") or []
@@ -2247,11 +2278,12 @@ class VidFindTab(QWidget):
             if ch["name"].lower() not in have:
                 cur = self.known.toPlainText().strip()
                 self.known.setPlainText((cur + "\n" if cur else "") + ch["name"] + (" — %s" % ch["kind"] if ch.get("kind") else ""))
-        self.rows, self.confirmed = [], []
-        self.char_mode = False
-        self.table.setRowCount(0)
-        self.mesh_list.clear()
-        self.anim_list.clear()
+        if not had:      # 이미 쌓아 둔 원본이 있으면 지금까지의 추측·검수 결과는 그대로 둔다 (새 클립은 '캐릭터 추측 시작'을 다시 누르면 더해진다)
+            self.rows, self.confirmed = [], []
+            self.char_mode = False
+            self.table.setRowCount(0)
+            self.mesh_list.clear()
+            self.anim_list.clear()
         facts = []
         if q.get("label"):
             facts.append("분류 %s" % q["label"])

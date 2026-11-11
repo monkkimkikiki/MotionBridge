@@ -78,6 +78,82 @@ class IKRangePanel(CollapsibleBox):
         if not self._busy:
             self._pending = None
             self.refresh()
+            self._select_chain_bone()
+
+    def _chain_by_label(self, label):
+        pr = self.app.pr
+        if label is None or pr.src is None or pr.tgt is None:
+            return None
+        return next((c for c in pr.chains() if c.label == label), None)
+
+    def _select_chain_bone(self) -> None:
+        """대상 부위를 고르면 그 부위의 끝 본(발/손)이 뷰포트에서 자동으로 골라지고 본 편집이 켜진다. (이후 다른 본을 직접 골라도 된다)"""
+        ch = self._chain_by_label(self._label())
+        if ch is None:
+            return
+        if not self.app.cb_bone_edit.isChecked():
+            self.app.cb_bone_edit.setChecked(True)
+        self.app._select_bone(int(ch.foot))
+
+    def sync_from_bone(self, j) -> None:
+        """뷰포트에서 다른 본을 골랐을 때, 그 본이 어떤 팔다리 체인에 속하면 '대상'을 그 체인으로 맞춘다 (본 선택은 건드리지 않는다)."""
+        pr = self.app.pr
+        if j is None or pr.src is None or pr.tgt is None or self._busy:
+            return
+        for c in pr.chains():
+            if int(j) in (int(c.upper), int(c.lower), int(c.foot)):
+                i = self.chain.findData(c.label)
+                if i >= 0 and self.chain.currentIndex() != i:
+                    self._busy = True
+                    try:
+                        self.chain.setCurrentIndex(i)
+                    finally:
+                        self._busy = False
+                    self._pending = None
+                    self.refresh()
+                return
+
+    def chain_for_bone(self, j):
+        pr = self.app.pr
+        if j is None or pr.src is None or pr.tgt is None:
+            return None
+        for c in pr.chains():
+            if int(j) in (int(c.upper), int(c.lower), int(c.foot)):
+                return c.label
+        return None
+
+    def boxes(self, label=None) -> list:
+        """그래프에 그릴 직접 지정 구간 [[a, b, on], ...] (겹침을 푼 상태)."""
+        lab = label or self._label()
+        return ikranges.normalize(self._ranges(lab), self._T()) if lab else []
+
+    def edit_range(self, label, index: int, a: int, b: int) -> None:
+        """index 번째 구간을 a..b 로 옮기거나 늘이고 줄인다 (그래프에서 Ctrl+끌기). 옮긴 구간이 다른 구간과 겹치면 옮긴 쪽이 이긴다."""
+        T = self._T()
+        r = ikranges.normalize(self._ranges(label), T)
+        if not (0 <= index < len(r)) or T <= 0:
+            return
+        on = bool(r[index][2])
+        del r[index]
+        a, b = sorted((int(a), int(b)))
+        self._store(label, ikranges.add(r, max(a, 0), min(b, T - 1), on, T))
+
+    def remove_index(self, label, index: int) -> None:
+        self._store(label, ikranges.remove(self._ranges(label), index, self._T()))
+
+    def move_pending(self, f: int) -> None:
+        """찍어 둔 시작 프레임을 옮긴다 (그래프의 표시선을 Ctrl+끌기)."""
+        if self._pending is not None:
+            on, _f0, lab = self._pending
+            self._pending = (on, min(max(int(f), 0), max(self._T() - 1, 0)), lab)
+            self.refresh()
+            self._refresh_graph()
+
+    def pending_frame(self, label=None):
+        """[IK 켜기/끄기]로 시작을 찍어 둔 프레임 (0부터) — 그래프·프레임바에 표시선을 그리기 위해."""
+        pd = self._pending
+        lab = label or self._label()
+        return None if pd is None or pd[2] != lab else int(pd[1])
 
     # ---- 상태
     def _T(self) -> int:
@@ -106,6 +182,7 @@ class IKRangePanel(CollapsibleBox):
             pr.settings.ik_ranges.pop(pr.clip, None)
         self.app.schedule()
         self.refresh()
+        self._refresh_graph()
 
     def refresh(self) -> None:
         pr = self.app.pr
@@ -173,6 +250,7 @@ class IKRangePanel(CollapsibleBox):
             self._pending = (bool(on), f, lab)                      # 시작 찍기 (다른 쪽 버튼이었으면 새로 시작)
             self.app.statusBar().showMessage("%d 프레임부터 IK %s — 끝낼 프레임으로 가서 같은 버튼을 한 번 더 누르세요" % (f + 1, "켜기" if on else "끄기"))
             self.refresh()
+            self._refresh_graph()
             return
         self._pending = None
         a, b = sorted((pend[1], f))
@@ -182,6 +260,12 @@ class IKRangePanel(CollapsibleBox):
     def cancel(self) -> None:
         self._pending = None
         self.refresh()
+        self._refresh_graph()
+
+    def _refresh_graph(self) -> None:
+        ce = self.app.__dict__.get("curve_editor")
+        if ce is not None:
+            ce.refresh()
 
     def add(self, on: bool, a: int, b: int) -> None:
         """프레임 a..b(0부터, 끝 포함)를 직접 지정 (프로그램/시험용)."""

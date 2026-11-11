@@ -131,6 +131,13 @@ class CharAssetPanel(QWidget):
         h.addWidget(self.btn_send)
         v.addLayout(h)
         h = QHBoxLayout()
+        self.btn_lib = QPushButton("📚 같은 종류 모션 모으기 (라이브러리 폴더 생성)")
+        self.btn_lib.setToolTip("고른 애니메이션(폴더를 고르면 안의 전부)을 추출해서 '출력 폴더/Library/종류/동작/' 으로 모읍니다.\n"
+                                "attack 은 attack 끼리, run 은 run 끼리 — 여러 캐릭터를 골라 두면 같은 종류가 한 폴더에 쌓여 모션 라이브러리가 됩니다.")
+        self.btn_lib.clicked.connect(lambda *_a: self.collect_library())
+        h.addWidget(self.btn_lib)
+        v.addLayout(h)
+        h = QHBoxLayout()
         self.btn_find_player = self.btn_player = None
         if PLAYER_FEATURE:
             self._build_player_buttons(h)
@@ -420,6 +427,13 @@ class CharAssetPanel(QWidget):
             QMessageBox.warning(self, "메쉬", "메쉬를 고르세요.")
             return
         self.win.extract_for_char(p[:1], "mesh")
+
+    def collect_library(self) -> None:
+        p = self._leaf_paths("anim")
+        if not p:
+            QMessageBox.warning(self, "모션 모으기", "애니메이션(또는 애니메이션이 든 폴더)을 고르세요. 여러 캐릭터를 함께 골라도 됩니다.")
+            return
+        self.win.extract_to_library(p)
 
     def send_to_list(self) -> None:
         anims, meshes = self._leaf_paths("anim"), self._leaf_paths("mesh")

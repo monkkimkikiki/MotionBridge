@@ -166,10 +166,10 @@ with tempfile.TemporaryDirectory() as d:
 
     bar.clear_marks()
     n_a = mw.vd.n_frames
-    wev = QWheelEvent(_QPF(50, 20), _QPF(50, 20), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    wev = QWheelEvent(_QPF(50, 20), _QPF(50, 20), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.ControlModifier, _Q2.ScrollPhase.NoScrollPhase, False)
     bar.strip.wheelEvent(wev)
     bar._wheel_flush()
-    check(mw.vd.n_frames == n_a + 1, "휠 한 칸 = 대상 조각 1프레임 늘림")
+    check(mw.vd.n_frames == n_a + 1, "Ctrl+휠 한 칸 = 대상 조각 1프레임 늘림")
     mw.undo()
     check(mw.vd.n_frames == n_a, "Ctrl+Z 가 프레임 편집을 되돌림")
     # 뷰포트 배치 드래그: Shift+왼쪽 드래그가 진짜 마우스 이벤트로 애니메이션 위치를 바꾼다
@@ -237,10 +237,18 @@ with tempfile.TemporaryDirectory() as d:
     ce.refresh()
     app.processEvents()
     check(ce.canvas.T > 0 and not ce.canvas.grab().isNull(), "곡선 그래프: 그리기")
-    wev2 = QWheelEvent(_QPF(100, 50), _QPF(100, 50), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    wev2 = QWheelEvent(_QPF(100, 50), _QPF(100, 50), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.ControlModifier, _Q2.ScrollPhase.NoScrollPhase, False)
     span0 = ce.canvas.view[1] - ce.canvas.view[0]
     ce.canvas.wheelEvent(wev2)
-    check(ce.canvas.view[1] - ce.canvas.view[0] < span0, "곡선 그래프: 휠로 가로 확대")
+    check(ce.canvas.view[1] - ce.canvas.view[0] < span0, "곡선 그래프: Ctrl+휠로 가로 확대")
+    plain = QWheelEvent(_QPF(100, 50), _QPF(100, 50), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    span1 = ce.canvas.view[1] - ce.canvas.view[0]
+    ce.canvas.wheelEvent(plain)
+    check(ce.canvas.view[1] - ce.canvas.view[0] == span1 and not plain.isAccepted(), "곡선 그래프: 그냥 휠은 줌이 안 걸리고 위로 넘어감")
+    n_b = mw.vd.n_frames
+    bar.strip.wheelEvent(plain)
+    bar._wheel_flush()
+    check(mw.vd.n_frames == n_b, "타임바: 그냥 휠은 조각 길이를 안 바꿈")
     # IK 구간 직접 지정 패널: 제목 줄을 눌러 접었다 펴지고, 펴면 안의 버튼이 보이고, 눌러 구간 지정이 된다 (진짜 Qt)
     ikp = mw.ik_panel
     mw.tabs.setCurrentIndex(2)
@@ -319,6 +327,12 @@ with tempfile.TemporaryDirectory() as d:
     _QA2.sendEvent(nf_.slider, wv_)
     app.processEvents()
     check(nf_.slider.value() == v0_ and nf_.spin.value() == vs0_, "슬라이더 휠 잠금 켜짐: 파란 슬라이더가 휠로 안 바뀜 (%s)" % nf_.slider.value())
+    cw_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.ControlModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    _QA2.sendEvent(nf_.slider, cw_)
+    app.processEvents()
+    check(nf_.slider.value() != v0_, "Ctrl+휠이면 잠금이 켜져 있어도 슬라이더 값이 바뀜 (%s)" % nf_.slider.value())
+    nf_.spin.setValue(vs0_)
+    app.processEvents()
     sp2_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.NoModifier, _Q2.ScrollPhase.NoScrollPhase, False)
     check(not mw.wheel_guard.watched(nf_.spin) and not mw.wheel_guard.watched(mw.frame_slider), "숫자칸·프레임 슬라이더는 잠금 대상이 아님")
     mw.toggle_wheel_lock()

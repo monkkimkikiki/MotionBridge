@@ -445,6 +445,7 @@ def retarget(
                 wsum += wb
                 D = Db if D is None else Q.slerp(D, Db, wb / wsum)
         rot_des[t] = Q.mul(D, Q.mul(corr[t], brt[t]))
+    pelvis_off = np.array([1.0, 0.0, 0.0, 0.0])      # 골반(루트)에 걸린 회전 보정의 합 — 발 IK 목표의 '골반 기준 위치'도 같이 돌리기 위해 모은다
     for tj, eul in st.rot_offsets.items():
         if not any(abs(x) > 1e-9 for x in eul) or tj < 0 or tj >= Jt:
             continue
@@ -452,6 +453,8 @@ def retarget(
         for u in [tj] + tgt.descendants(tj):
             if u in rot_des:
                 rot_des[u] = Q.mul(qo, rot_des[u])
+            if u == com:
+                pelvis_off = Q.mul(qo, pelvis_off)
     for t in rot_des:
         rot_des[t] = Q.mul(yaw_q, rot_des[t])
     rot_world = {t: Q.mul(FtI, R) for t, R in rot_des.items()}
@@ -559,7 +562,11 @@ def retarget(
             auto_c = contact
             contact = with_manual(ch.label, contact)
             fkc = Q.rotate(Ft, Wp[:, ch.foot])
-            Dc = bpt[ch.foot] + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)  # 스케일된 소스 발 위치 (루트 이동 보정 포함)
+            # 스케일된 소스 발 위치 (루트 이동 보정 포함). 골반이 Yaw/루트 회전으로 돌면 '골반에서 발까지의 바인드 거리'도 같이 돌아야
+            # 발이 몸을 따라 제자리에 서 있다 (예전에는 변위만 돌려서, 돌린 만큼 발이 몸과 어긋난 자리에 고정됐다).
+            pivot = bpt[com] if com >= 0 else bpt[ch.foot]
+            Rb = Q.mul(yaw_q, pelvis_off)
+            Dc = pivot + Q.rotate(Rb, bpt[ch.foot] - pivot) + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)
             def ramp_weights(mask: np.ndarray):
                 """접촉 구간마다 앞뒤를 부드럽게 올리고 내리는 가중치와 (a, b, n) 목록."""
                 ww = np.zeros(T)
@@ -604,6 +611,9 @@ def retarget(
                 goal[:, 1] = floor_y + k * np.maximum(hs, 0.0)
                 target = fkc * (1 - w)[:, None] + goal * w[:, None]
                 target[:, 1] = np.where(w > 1e-9, np.maximum(target[:, 1], floor_y), target[:, 1])
+                off = st.ik_offsets.get(ch.foot) if st.ik_offsets else None
+                if off is not None and any(abs(x) > 1e-12 for x in off):
+                    target = target + np.asarray(off, dtype=float)[None, :]     # 손 IK 가 걸린 손을 사용자가 옮긴 만큼
                 plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg, auto_c))
                 continue
 

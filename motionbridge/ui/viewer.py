@@ -406,7 +406,7 @@ class Viewport(QWidget):
         K = Qt.Key
         name = {K.Key_Left: "prev", K.Key_Right: "next", K.Key_Home: "first", K.Key_End: "last", K.Key_Space: "play"}.get(key)
         if not name and not (ev.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
-            name = {K.Key_Q: "tool_select", K.Key_W: "tool_move", K.Key_E: "tool_rotate", K.Key_R: "tool_scale"}.get(key)   # 3ds Max 와 같은 키
+            name = {K.Key_Q: "tool_select", K.Key_W: "tool_move", K.Key_E: "tool_rotate", K.Key_R: "tool_scale", K.Key_K: "key_selected"}.get(key)   # 3ds Max 와 같은 키 (K = 지금 프레임에 키 찍기)
         if name:
             self.key_action.emit(name)
         else:

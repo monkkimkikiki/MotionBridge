@@ -417,6 +417,22 @@ class QListWidget(QWidget):
     def item(self, i):
         return self._items[i]
 
+    def row(self, it):
+        for i, x in enumerate(self._items):
+            if x is it:
+                return i
+        return -1
+
+    def takeItem(self, r):
+        if not (0 <= r < len(self._items)):
+            return None
+        it = self._items.pop(r)
+        if it in self._sel:
+            self._sel.remove(it)
+        if self.__dict__.get("_row", -1) >= len(self._items):
+            self._row = len(self._items) - 1
+        return it
+
     def selectAll(self):
         self._sel = list(self._items)
 

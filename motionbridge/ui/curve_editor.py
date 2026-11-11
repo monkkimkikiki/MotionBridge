@@ -30,6 +30,12 @@ class CurveCanvas(QWidget):
     key_dragged = Signal()       # 키를 끄는 중 (값이 바뀜 -> 가벼운 재계산)
     key_changed = Signal()       # 키 추가/삭제/끌기 끝 (확정)
     range_picked = Signal(int, int)   # Shift+끌기로 고른 프레임 구간 (a, b, 0부터)
+    ik_moved = Signal(int, int, int)  # Ctrl+끌기로 옮기거나 늘인 IK 직접 지정 박스: (번호, 시작, 끝) 0부터
+    ik_deleted = Signal(int)          # 고른 IK 박스를 Delete 키로 지움
+    ik_pending_moved = Signal(int)    # Ctrl+끌기로 옮긴 'IK 시작 표시선' 프레임
+
+    BOX_H = 10                   # IK 직접 지정 박스 높이(px) — 그래프 아래쪽 띠
+    EDGE_PX = 6                  # 박스 가장자리를 이만큼(px) 안에서 잡으면 크기 조절
 
     PULL_PX = 3.0                # 곡선을 이만큼(px) 끌어야 키가 생김 (그냥 클릭은 프레임 이동)
 
@@ -39,6 +45,7 @@ class CurveCanvas(QWidget):
         super().__init__()
         self.setMinimumHeight(self.H)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._size = None                     # 시험용: (w, h) 를 직접 지정
         self.chans: tuple = ()
         self.final: Dict[str, np.ndarray] = {}
@@ -59,6 +66,10 @@ class CurveCanvas(QWidget):
         self._rng_anchor = 0
         self.range: Optional[tuple] = None    # 선택한 프레임 구간 (a, b) 0부터
         self.msg = ""
+        self.ik_label: Optional[str] = None   # 아래 박스가 속한 팔다리 이름
+        self.ik_boxes: List[list] = []        # 직접 지정한 IK 구간 [[a, b, 켬], ...] (0부터, 끝 포함)
+        self.ik_sel = -1                      # 고른 박스 번호 (Delete 로 지움)
+        self.ik_pending: Optional[tuple] = None   # (프레임, 켬) — [IK 켜기] 로 시작만 찍어 둔 표시선
 
     # ---- 데이터
     def set_data(self, chans, final, below, key_frames, contact, layer, anim, j, T, fit_key) -> None:
@@ -69,6 +80,44 @@ class CurveCanvas(QWidget):
             self._fit_key = fit_key
             self.fit()
         self.update()
+
+    def set_ik(self, label, boxes, pending=None) -> None:
+        if label != self.ik_label or len(boxes or []) != len(self.ik_boxes):
+            self.ik_sel = -1
+        if self._mode and self._mode.startswith("ik"):
+            return                                     # 끄는 동안에는 미리보기를 덮어쓰지 않는다
+        self.ik_label, self.ik_boxes, self.ik_pending = label, [list(b) for b in (boxes or [])], pending
+        self.update()
+
+    def _box_rect_y(self):
+        gm = self.geom()
+        y1 = int(gm.h - gm.bottom)
+        return y1 - self.BOX_H, y1
+
+    def _box_at(self, x: float, y: float):
+        """(번호, 'L'|'R'|'M') 또는 None — 띠 위에서 잡은 박스와 잡은 자리 (가장자리=크기 조절, 가운데=통째 이동)."""
+        if not self.ik_boxes:
+            return None
+        ya, yb = self._box_rect_y()
+        if not (ya - 3 <= y <= yb + 3):
+            return None
+        gm = self.geom()
+        for i, (a, b, _on) in enumerate(self.ik_boxes):
+            xa, xb = float(gm.x_of(a - 0.5)), float(gm.x_of(b + 0.5))
+            if xa - 2 <= x <= xb + 2:
+                if abs(x - xa) <= self.EDGE_PX and abs(x - xa) <= abs(x - xb):
+                    return i, "L"
+                if abs(x - xb) <= self.EDGE_PX:
+                    return i, "R"
+                return i, "M"
+        return None
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and 0 <= self.ik_sel < len(self.ik_boxes):
+            i, self.ik_sel = self.ik_sel, -1
+            self.ik_deleted.emit(int(i))
+            return
+        super().keyPressEvent(ev)
 
     def set_frame(self, f: int) -> None:
         self.frame = int(f)
@@ -98,11 +147,29 @@ class CurveCanvas(QWidget):
         return pts
 
     # ---- 마우스 (그림과 무관한 계산 함수들 — 시험에서 직접 부른다)
-    def press_at(self, x: float, y: float, right: bool = False, double: bool = False, shift: bool = False) -> None:
+    def press_at(self, x: float, y: float, right: bool = False, double: bool = False, shift: bool = False, ctrl: bool = False) -> None:
         self.msg = ""
         if self.T <= 0 or not self.chans:
             return
         gm = self.geom()
+        if not right and not double:
+            if ctrl and self.ik_pending is not None and abs(x - float(gm.x_of(self.ik_pending[0]))) <= self.EDGE_PX:
+                self._mode = "ik_pending"                           # Ctrl+끌기: 시작 표시선 옮기기
+                return
+            hit_box = self._box_at(x, y)
+            if hit_box is not None:
+                i, part = hit_box
+                self.ik_sel = i
+                self.update()
+                if ctrl:                                            # Ctrl+끌기: 가장자리 = 크기, 가운데 = 통째 이동
+                    a, b, _on = self.ik_boxes[i]
+                    self._mode = "ik_" + part
+                    self._ik_drag = (i, a, b, int(np.clip(round(float(gm.f_of(x))), 0, self.T - 1)))
+                else:
+                    self.msg = "IK 박스를 골랐습니다 — Delete = 지우기 · Ctrl+끌기 = 옮기기/늘이기"
+                return
+            if self.ik_sel >= 0:
+                self.ik_sel = -1
         if shift and not right and not double:                       # 구간 고르기
             f = int(np.clip(round(float(gm.f_of(x))), 0, self.T - 1))
             self._mode, self._rng_anchor = "range", f
@@ -155,6 +222,24 @@ class CurveCanvas(QWidget):
         self.scrub.emit(f)
 
     def drag_to(self, x: float, y: float) -> None:
+        if self._mode == "ik_pending" and self.ik_pending is not None:
+            f = int(np.clip(round(float(self.geom().f_of(x))), 0, max(self.T - 1, 0)))
+            self.ik_pending = (f, self.ik_pending[1])
+            self.update()
+            return
+        if self._mode in ("ik_L", "ik_R", "ik_M") and getattr(self, "_ik_drag", None) is not None:
+            i, a, b, f0 = self._ik_drag
+            f = int(np.clip(round(float(self.geom().f_of(x))), 0, max(self.T - 1, 0)))
+            if self._mode == "ik_L":
+                na, nb = min(f, b), b
+            elif self._mode == "ik_R":
+                na, nb = a, max(f, a)
+            else:
+                d = int(np.clip(f - f0, -a, self.T - 1 - b))
+                na, nb = a + d, b + d
+            self.ik_boxes[i][0], self.ik_boxes[i][1] = int(na), int(nb)
+            self.update()
+            return
         if self._mode == "key" and self._drag is not None:
             v = float(self.geom().v_of(y))
             if curves.drag_to(self.layer, self._drag, self._drag_ch, v):
@@ -184,6 +269,14 @@ class CurveCanvas(QWidget):
         self._mode, self._drag, self._pull = None, None, None
         if was == "key":
             self.key_changed.emit()
+        elif was == "ik_pending" and self.ik_pending is not None:
+            self.ik_pending_moved.emit(int(self.ik_pending[0]))
+        elif was in ("ik_L", "ik_R", "ik_M") and getattr(self, "_ik_drag", None) is not None:
+            i = self._ik_drag[0]
+            self._ik_drag = None
+            if 0 <= i < len(self.ik_boxes):
+                a, b, _on = self.ik_boxes[i]
+                self.ik_moved.emit(int(i), int(a), int(b))
 
     def wheel_zoom(self, delta: float, x: float, y: float, vertical: bool = False) -> None:
         factor = 0.8 if delta > 0 else 1.25
@@ -194,8 +287,10 @@ class CurveCanvas(QWidget):
 
     def mousePressEvent(self, ev) -> None:
         p = ev.position()
+        self.setFocus()
         self.press_at(p.x(), p.y(), right=ev.button() == Qt.MouseButton.RightButton,
-                      shift=bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+                      shift=bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier),
+                      ctrl=bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier))
 
     def mouseDoubleClickEvent(self, ev) -> None:
         p = ev.position()
@@ -210,6 +305,10 @@ class CurveCanvas(QWidget):
         self.release()
 
     def wheelEvent(self, ev) -> None:
+        # Ctrl+휠 = 확대/축소 (Ctrl+Shift+휠 = 세로). 그냥 휠은 위쪽 스크롤 영역으로 넘겨 화면이 스크롤되게 한다 (그래프 위에서 휠을 굴리다 줌이 걸리는 사고 방지)
+        if not (ev.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            ev.ignore()
+            return
         d = ev.angleDelta().y() or ev.angleDelta().x()
         if d:
             p = ev.position()
@@ -237,7 +336,7 @@ class CurveCanvas(QWidget):
                 runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
                 for r in runs:
                     xa, xb = int(gm.x_of(r[0] - 0.5)), int(gm.x_of(r[-1] + 0.5))
-                    p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 1), y1 - y0, QColor(255, 220, 80, 38))
+                    p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 1), (y1 - y0) // 2, QColor(255, 220, 80, 46))     # 자동 접지 띠는 위쪽 절반만
         if self.range is not None:
             xa, xb = int(gm.x_of(self.range[0] - 0.5)), int(gm.x_of(self.range[1] + 0.5))
             p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 2), y1 - y0, QColor(90, 150, 255, 55))
@@ -269,6 +368,20 @@ class CurveCanvas(QWidget):
             ys = gm.y_of(self.final[ch])
             for i in range(self.T - 1):
                 p.drawLine(int(xs[i]), int(ys[i]), int(xs[i + 1]), int(ys[i + 1]))
+        if self.ik_boxes or self.ik_pending is not None:
+            ya = y1 - self.BOX_H
+            for i, (a, b, on) in enumerate(self.ik_boxes):
+                xa, xb = int(gm.x_of(a - 0.5)), int(gm.x_of(b + 0.5))
+                xa, xb = max(xa, x0), min(xb, x1)
+                col = QColor(70, 200, 120, 190) if on else QColor(230, 90, 90, 190)
+                p.fillRect(xa, ya, max(xb - xa, 3), self.BOX_H, col)
+                p.setPen(QPen(QColor("#ffffff") if i == self.ik_sel else QColor(0, 0, 0, 160), 2 if i == self.ik_sel else 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(xa, ya, max(xb - xa, 3), self.BOX_H)
+            if self.ik_pending is not None:
+                xp = int(gm.x_of(self.ik_pending[0]))
+                p.setPen(QPen(QColor(70, 220, 130) if self.ik_pending[1] else QColor(240, 100, 100), 2, Qt.PenStyle.DashLine))
+                p.drawLine(xp, y0, xp, y1)
         xc = int(gm.x_of(self.frame))
         p.setPen(QPen(QColor("#ffffff"), 1))
         p.drawLine(xc, y0, xc, y1)
@@ -306,12 +419,16 @@ class CurveEditor(CollapsibleBox):
         v.addLayout(top)
         self.canvas = CurveCanvas()
         self.canvas.setToolTip("선을 잡고 위아래로 끌기 = 그 프레임에 키가 생기며 따라옴 · 네모 = 키 (끌기 · 우클릭 삭제) · 빈 곳 더블클릭 = 키 추가 · 빈 곳 클릭/끌기 = 프레임 이동\n"
-                               "Shift+끌기 = 고칠 구간 선택 (아래 버튼으로 지우고 블렌드 / 일직선 / 떨림 정리) · 휠 = 확대(Shift = 세로)\n"
+                               "Shift+끌기 = 고칠 구간 선택 (아래 버튼으로 지우고 블렌드 / 일직선 / 떨림 정리) · Ctrl+휠 = 확대(Shift = 세로)\n"
+                               "아래쪽 초록/빨강 박스 = 직접 지정한 IK 구간 (클릭=선택 · Ctrl+끌기=옮기기 · 가장자리 Ctrl+끌기=늘이기/줄이기 · Delete=지우기)\n"
                                "굵은 선 = 지금 상태, 흐린 선 = 맨 위 레이어를 적용하기 전, 노란 띠 = IK 접지 구간")
         self.canvas.range_picked.connect(self._range_picked)
         self.canvas.scrub.connect(self._scrub)
         self.canvas.key_dragged.connect(self._dragged)
         self.canvas.key_changed.connect(self._changed)
+        self.canvas.ik_moved.connect(self._ik_moved)
+        self.canvas.ik_deleted.connect(self._ik_deleted)
+        self.canvas.ik_pending_moved.connect(self._ik_pending_moved)
         v.addWidget(self.canvas)
         rb = QHBoxLayout()
         self.btns = {}
@@ -374,10 +491,33 @@ class CurveEditor(CollapsibleBox):
         self.lbl.setText("%s — %s" % (self.app._bone_label(j), ("레이어 '%s' 편집 중" % lay.name) if lay else "원본 상태 (레이어 없음)"))
         cv.set_data(chans, {c: final[c] for c in chans}, {c: below[c] for c in chans} if below else {}, lay.frames(j) if lay else [], contact,
                     lay, res.anim, j, res.anim.n_frames, (j, self.group.currentData(), res.anim.n_frames, id(pr.tgt)))
+        ikp = self.app.__dict__.get("ik_panel")
+        lab = ikp.chain_for_bone(j) if ikp is not None else None
+        pend = None
+        if ikp is not None and lab is not None:
+            pf = ikp.pending_frame(lab)
+            if pf is not None:
+                pend = (pf, bool(ikp._pending[0]))
+        cv.set_ik(lab, ikp.boxes(lab) if (ikp is not None and lab is not None) else [], pend)
         cv.set_frame(self.app.viewport.frame)
 
     def set_frame(self, f: int) -> None:
         self.canvas.set_frame(f)
+
+    def _ik_moved(self, i: int, a: int, b: int) -> None:
+        ikp = self.app.__dict__.get("ik_panel")
+        if ikp is not None and self.canvas.ik_label is not None:
+            ikp.edit_range(self.canvas.ik_label, i, a, b)
+
+    def _ik_deleted(self, i: int) -> None:
+        ikp = self.app.__dict__.get("ik_panel")
+        if ikp is not None and self.canvas.ik_label is not None:
+            ikp.remove_index(self.canvas.ik_label, i)
+
+    def _ik_pending_moved(self, f: int) -> None:
+        ikp = self.app.__dict__.get("ik_panel")
+        if ikp is not None:
+            ikp.move_pending(f)
 
     def _range_picked(self, a: int, b: int) -> None:
         lp = self.app.layer_panel

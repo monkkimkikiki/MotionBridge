@@ -180,7 +180,22 @@ class LayerPanel(CollapsibleBox):
 
     def recording(self) -> bool:
         """본 편집을 레이어 키로 기록할지: 레이어가 골라져 있고 기록이 켜져 있을 때."""
-        return bool(self.rec.isChecked()) and self.stack().current() is not None
+        if not self.rec.isChecked():
+            return False
+        return self.stack().current() is not None or self.autokey_on()
+
+    def autokey_on(self) -> bool:
+        """뷰포트의 '오토키' 체크박스. 켜져 있으면 본을 고칠 때 (레이어가 없거나 '원본'을 보고 있어도) 알아서 레이어를 만들어 키를 찍는다."""
+        cb = self.app.__dict__.get("cb_autokey")
+        return bool(cb is not None and cb.isChecked())
+
+    def _auto_layer(self):
+        """오토키: 지금 고른 레이어가 없으면 '오토키' 레이어를 새로 만들어 쌓고 고른다."""
+        cur = self.layer()
+        if cur is None and self.autokey_on() and self.app.pr.src is not None:
+            cur = self.stack().add("오토키")
+            self.refresh()
+        return cur
 
     def note_base_edit(self) -> None:
         """본 편집이 레이어가 아닌 '본별 보정'으로 들어갈 때 알려 준다 (레이어를 꺼도 남기 때문에 헷갈리기 쉽다)."""
@@ -426,6 +441,14 @@ class LayerPanel(CollapsibleBox):
         self.app.statusBar().showMessage(self._msg)
         self._changed()
 
+    def key_selected(self) -> None:
+        """K 키: 고른 본(없으면 '대상 본' 설정)에 지금 프레임의 키를 지금 보이는 값 그대로 찍는다. 레이어가 없으면 새로 만든다."""
+        j = self._joint()
+        if j is None:
+            self.app.statusBar().showMessage("키를 찍을 본을 먼저 고르세요 (뷰포트의 점 또는 본 목록)")
+            return
+        self.key_bone(j)
+
     def key_original(self) -> None:
         """지금 프레임의 키를 '이 레이어 아래 상태(원본)의 값' = 변화 0 으로 찍는다."""
         cur, js = self._need_targets()
@@ -514,7 +537,7 @@ class LayerPanel(CollapsibleBox):
             self.app.statusBar().showMessage(why)
 
     def on_rot_drag(self, j: int, q_view) -> bool:
-        cur = self.layer()
+        cur = self._auto_layer() or self.layer()
         why = layeredit.editable(cur)
         ctx = self._ctx(j)
         if why or ctx is None:
@@ -527,7 +550,7 @@ class LayerPanel(CollapsibleBox):
         return False
 
     def on_pos_drag(self, j: int, dview) -> bool:
-        cur = self.layer()
+        cur = self._auto_layer() or self.layer()
         why = layeredit.editable(cur)
         ctx = self._ctx(j)
         if why or ctx is None:

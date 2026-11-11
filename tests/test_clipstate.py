@@ -166,8 +166,58 @@ def test_add_remove_motions():
     print("add / remove motions OK")
 
 
+def test_mixed_skeletons():
+    """본 구조가 다른 몬스터의 모션도 한 목록에 올라가고, 고르면 소스 스켈레톤·매핑이 그 구조로 바뀌며 각자 리타겟된다."""
+    import synth
+    from test_pipeline import write_glb
+    with tempfile.TemporaryDirectory() as d:
+        src, src2, tgt, (sk, an), _tk = TP.make_inputs(d)
+        sk2, meta2 = synth.build_skeleton("ue", "z_up_x", 100.0, "A", "bone_x", height=1.3)
+        an2, _ = synth.walk_animation(sk2, meta2, n_frames=30, name="other_walk")
+        other = os.path.join(d, "other.glb")
+        write_glb(other, sk2, an2)
+        assert sk2.n != sk.n or list(sk2.names) != list(sk.names), "시험 전제: 두 구조가 다름"
+        pr = Project()
+        pr.load_target(tgt)
+        added, skipped = pr.add_motions([src])
+        assert added == [0] and not skipped
+        added, skipped = pr.add_motions([other, src2])
+        assert added == [1, 2] and not skipped, (added, skipped)
+        assert len(pr.src.animations) == 3
+        n_a, n_b = pr.clip_skeleton(0).n, pr.clip_skeleton(1).n
+        assert n_a == sk.n and n_b == sk2.n and pr.clip_skeleton(2).n == sk.n
+        assert pr.src.skeleton.n == n_a and pr.clip == 0
+        r0 = pr.run(0)
+        slots_a = pr.src_slots
+        pr.clip = 1
+        assert pr.src.skeleton.n == n_b and pr.src_slots is not slots_a and pr.src_slots.get("Hips") is not None
+        assert pr.src_slots["Hips"] < n_b
+        r1 = pr.run(1)
+        assert r1.anim.rot.shape[0] == 30 and r0.anim.rot.shape[0] == 40
+        pr.clip = 2
+        assert pr.src.skeleton.n == n_a and pr.src_slots is slots_a, "같은 구조의 클립은 같은 매핑을 공유"
+        # 매핑을 고치면 그 구조의 클립에 계속 남는다 (다른 구조 클립을 갔다 와도)
+        pr.src_slots = dict(pr.src_slots)
+        pr.src_slots["Head"] = pr.src_slots["Neck"]
+        pr.clip = 1
+        pr.clip = 0
+        assert pr.src_slots["Head"] == pr.src_slots["Neck"], "매핑 수정이 구조별로 유지됨"
+        # 한 구조 클립을 빼도 번호가 맞게 당겨지고, 보던 클립의 구조로 바뀐다
+        pr.clip = 1
+        pr.remove_clip(0)
+        assert pr.clip == 0 and pr.src.animations[0].name == "other_walk" and pr.src.skeleton.n == n_b
+        assert pr.clip_skeleton(1).n == n_a
+        pr.remove_clip(0)
+        assert pr.src.skeleton.n == n_a and len(pr.src.animations) == 1
+        pr.run(0)
+        # 다시 비우면 구조 기록도 비워진다
+        pr.unload_source()
+        assert pr._skels == [] and pr._clip_skel == {}
+
+
 if __name__ == "__main__":
     test_add_remove_motions()
     test_per_clip_settings()
     test_import_and_undo()
     test_touched()
+    test_mixed_skeletons()
