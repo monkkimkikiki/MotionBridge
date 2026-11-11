@@ -42,7 +42,7 @@ def _objects(env) -> Iterable:
     return objects.values() if isinstance(objects, dict) else objects
 
 def _safe_name(value: str, fallback: str) -> str:
-    value = "".join("_" if ch in '< >:"/\\\\|?*' or ord(ch) < 32 else ch for ch in str(value or "")).replace("_", "_")
+    value = "".join("_" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in str(value or "")).strip(" .")
     return value[:120] or fallback
 
 def _name(obj) -> str:
