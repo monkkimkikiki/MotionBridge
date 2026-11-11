@@ -14,7 +14,7 @@ def test_detect_unity_markers():
 
 def test_safe_names_and_cli():
     name = _safe_name(r"..\\bad/name:asset?", "fallback")
-    assert "/" not in name and "\\\\" not in name and ":" not in name and "?" not in name
+    assert "/" not in name and "\\" not in name and ":" not in name and "?" not in name
     args = build_parser().parse_args(["universal", "list", "--game", ".", "--engine", "unity"])
     assert args.cmd == "universal" and args.action == "list" and args.engine == "unity"
     print("universal CLI and filename safety OK")
