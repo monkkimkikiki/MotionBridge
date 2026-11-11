@@ -51,6 +51,6 @@ AES keys and mapping files are format-specific inputs, not universal decryption 
 ## Known limitations
 
 - Unity Mesh exports are OBJ and do not preserve a complete skinned rig. The renderer export path is documented by UnityPy as alpha-version.
-- Unity AnimationClip data is preserved as a raw serialized payload with a metadata sidecar; it is not yet decoded to FBX/PSA or retarget-ready motion.
+- Unity AnimationClip data is preserved as a raw serialized payload with a typetree JSON sidecar; it is not yet decoded to FBX/PSA or retarget-ready motion.
 - Unity games that wrap assets in unsupported custom encryption/compression need a dedicated adapter.
 - Detection is heuristic. Use --engine unity or an installed adapter name when auto-detection is inconclusive.
