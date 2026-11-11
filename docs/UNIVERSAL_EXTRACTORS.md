@@ -10,6 +10,10 @@
 
 This is an extensible adapter framework, not a claim that every commercial game's private format is universally readable. A custom engine requires a parser for its container, compression, serialization, and asset schema.
 
+## Desktop UI
+
+Open MotionBridge and select the **Unity** tab beside the existing extraction tab. Choose the Unity game installation folder (or its `*_Data` directory), optionally enter a UnityPy-supported AssetBundle key, scan, filter/select assets, and export. The key is kept in the current UI session and is not written to the application settings file. The output folder defaults to `~/MotionBridge_extracted/Unity`.
+
 ## CLI
 
 Install the Unity extra:
