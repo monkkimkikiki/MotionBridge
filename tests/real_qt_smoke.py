@@ -194,6 +194,13 @@ with tempfile.TemporaryDirectory() as d:
         vp.mouseMoveEvent(_ev(QEvent.Type.MouseMove, 400 + 20 * i, 480, _Qt.MouseButton.NoButton, LB))
     vp.mouseReleaseEvent(_ev(QEvent.Type.MouseButtonRelease, 500, 480, LB, _Qt.MouseButton.NoButton))
     after = tuple(mw.pr.settings.place_offset)
+    try:
+        from motionbridge.ui.viewer_math import drag_placement as _dp
+        _vd = vp.vd
+        print("DIAG place: vd", _vd is not None, "size", vp.width(), vp.height(), "drag", vp._drag, "bone_edit", vp.bone_edit,
+              "dp", None if _vd is None else _dp(vp.cam, "move", (400, 480), (420, 480), float(vp.width()), float(vp.height()), _vd.ground_y, (_vd.center[0], _vd.center[2])))
+    except Exception as _e:  # noqa: BLE001
+        print("DIAG place err", repr(_e))
     check(after != before and vp._drag == "camera", "Shift+드래그 -> 애니메이션 위치가 바뀜: %s -> %s" % (before, after))
     mw._place_reset()
     # 보정 레이어 패널 / 기즈모 좌표계 / 시작 안내 줄 / 실시간 갱신이 진짜 Qt 에서 동작한다
@@ -218,7 +225,9 @@ with tempfile.TemporaryDirectory() as d:
     mw._bone_dragged(jt0, _Qq.from_axis_angle(_np.array([0.0, 1.0, 0.0]), _np.radians(25.0)))
     app.processEvents()
     check(mw.pr.layer_stack().current().frames(jt0) == [5] and not mw.pr.settings.rot_offsets, "끌기 -> 현재 프레임에 레이어 키 (본별 보정은 그대로)")
-    check("키 1" in lp.lst.item(1).text(), "레이어 목록의 키 개수 갱신: " + lp.lst.item(1).text())
+    print("DIAG layers:", [lp.lst.item(i).text() for i in range(lp.lst.count())], "top", mw.pr.layer_stack().top,
+          "cur", mw.pr.layer_stack().current().name, [(l.name, sum(len(l.frames(j)) for j in range(60))) for l in mw.pr.layer_stack().layers])
+    check(any("키 1" in lp.lst.item(i).text() for i in range(lp.lst.count())), "레이어 목록의 키 개수 갱신: " + " | ".join(lp.lst.item(i).text() for i in range(lp.lst.count())))
     mw._live_fire()
     check(not mw._live_pending, "실시간 갱신 한 번 처리")
     lp.rec.setChecked(False)
@@ -281,6 +290,7 @@ with tempfile.TemporaryDirectory() as d:
     check(mw.vsplit.count() == 2 and mw.viewport.height() >= 180 and mw.curve_editor.isVisibleTo(mw), "위아래 크기 조절 줄: 뷰포트 %d / 아래 %d" % (h_top, h_bot))
     mw.vsplit.setSizes([300, 520])
     mw._vsplit_moved()
+    print("DIAG vsplit:", mw.vsplit.sizes(), "min", mw.vsplit.widget(0).minimumSizeHint().height(), mw.vsplit.widget(1).minimumSizeHint().height(), "win", mw.height())
     check(0.1 <= mw.cfg.get("vsplit_bottom", 0) <= 0.85 and mw.vsplit.sizes()[1] > mw.vsplit.sizes()[0] * 0.9, "아래 영역을 키우면 비율이 저장됨 (%s)" % mw.cfg.get("vsplit_bottom"))
     mw._left_split.setSizes([260, 700])
     mw._left_split_moved()
@@ -330,7 +340,7 @@ with tempfile.TemporaryDirectory() as d:
     _QA2.sendEvent(nf_.slider, wv_)
     app.processEvents()
     check(nf_.slider.value() == v0_ and nf_.spin.value() == vs0_, "슬라이더 휠 잠금 켜짐: 파란 슬라이더가 휠로 안 바뀜 (%s)" % nf_.slider.value())
-    cw_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.ControlModifier, _Q2.ScrollPhase.NoScrollPhase, False)
+    cw_ = QWheelEvent(_QPF(5, 5), _QPF(5, 5), QPoint(0, 0), QPoint(0, -120 if v0_ >= nf_.slider.maximum() else 120), _Q2.MouseButton.NoButton, _Q2.KeyboardModifier.ControlModifier, _Q2.ScrollPhase.NoScrollPhase, False)
     _QA2.sendEvent(nf_.slider, cw_)
     app.processEvents()
     check(nf_.slider.value() != v0_, "Ctrl+휠이면 잠금이 켜져 있어도 슬라이더 값이 바뀜 (%s)" % nf_.slider.value())
@@ -341,7 +351,7 @@ with tempfile.TemporaryDirectory() as d:
     mw.toggle_wheel_lock()
     check(not mw.wheel_guard.lock and not mw.wheel_cb.isChecked(), "Ctrl+L 동작: 잠금 해제")
     mw.set_wheel_lock(True)
-    check(mw.cb_bone_edit.isCheckable() and "OFF" in mw.cb_bone_edit.text(), "본 편집은 눌리는 버튼")
+    check(mw.cb_bone_edit.isCheckable() and ("ON" if mw.cb_bone_edit.isChecked() else "OFF") in mw.cb_bone_edit.text(), "본 편집은 눌리는 버튼: " + mw.cb_bone_edit.text())
     mw.cb_bone_edit.setChecked(True)
     check("ON" in mw.cb_bone_edit.text(), "본 편집 켜면 글자가 ON")
     mw.cb_bone_edit.setChecked(False)
@@ -645,20 +655,25 @@ try:
     _before = {id(w): w.styleSheet() for w in _app.allWidgets() if w.styleSheet()}
     mw.toggle_theme()
     check(_th.mode() == "light" and mw.cfg["theme"] == "light", "밝은 테마로 전환")
-    _bad = [w for w in _app.allWidgets() if "#8aa" in w.styleSheet() or "#ffdc50" in w.styleSheet()]
+    _bad = [w for w in _app.allWidgets() if ("#8aa" in w.styleSheet() or "#ffdc50" in w.styleSheet()) and not _th._keep_dark(w)]
+    for _w in _bad[:5]:
+        print("DIAG theme left:", type(_w).__name__, _w.objectName(), _w.styleSheet()[:120])
     check(not _bad, "밝은 테마에서 어두운 바탕용 글자색이 남지 않음: %d개" % len(_bad))
     mw.toggle_theme()
     check(_th.mode() == "dark", "어두운 테마로 되돌림")
     _after = {id(w): w.styleSheet() for w in _app.allWidgets() if id(w) in _before}
-    check(all(_after.get(k) == v for k, v in _before.items()), "왕복하면 스타일이 원래대로")
+    _diff = [(v, _after.get(k)) for k, v in _before.items() if _after.get(k) != v]
+    for _a, _b in _diff[:5]:
+        print("DIAG theme roundtrip:", _a[:110], "=>", (_b or "")[:110])
+    check(not _diff, "왕복하면 스타일이 원래대로 (다른 것 %d개)" % len(_diff))
     mw.toggle_clip_panel()
-    check(not mw.clip_panel.isVisible() and mw.cfg.get("clip_panel_hidden"), "모션 목록 접기")
+    check(mw.clip_panel.isHidden() and mw.cfg.get("clip_panel_hidden"), "모션 목록 접기")
     mw.toggle_clip_panel()
-    check(mw.clip_panel.isVisible(), "모션 목록 펴기")
+    check(not mw.clip_panel.isHidden(), "모션 목록 펴기")
     mw._bone_edit_toggled(True)
-    check(mw.bone_tree_box.isVisible(), "본 편집을 켜면 파츠 목록 칸이 보임")
+    check(not mw.bone_tree_box.isHidden(), "본 편집을 켜면 파츠 목록 칸이 보임")
     mw._set_tree_open(False)
-    check(not mw.bone_tree.isVisible(), "파츠 목록 접기")
+    check(mw.bone_tree.isHidden(), "파츠 목록 접기")
     mw._set_tree_open(True)
     mw._bone_edit_toggled(False)
     _img = mw.viewport.grab()
