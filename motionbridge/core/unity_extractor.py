@@ -81,7 +81,7 @@ def scan(root: str, on_event: Optional[Callable[[dict], None]] = None,
          bundle_key: Optional[str] = None) -> list[dict]:
     if not os.path.isdir(root):
         raise UnityExtractError("게임 폴더가 없습니다: " + root)
-    env = _load(root)
+    env = _load(root, bundle_key)
     result = []
     for obj in _objects(env):
         try:
@@ -123,24 +123,24 @@ def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
                     stream.write(data.export())
                 files.append(path)
             elif kind in ("MeshRenderer", "SkinnedMeshRenderer"):
-                data = obj.read()
+                data = obj.parse_as_object()
                 os.makedirs(target, exist_ok=True)
                 data.export(target)
                 files.extend(str(p) for p in Path(target).rglob("*") if p.is_file())
-            elif kind == "Texture2D":
-                data = obj.read()
+            elif kind in ("Texture2D", "Sprite"):
+                data = obj.parse_as_object()
                 path = target + ".png"
                 data.image.save(path)
                 files.append(path)
             elif kind == "AudioClip":
-                data = obj.read()
+                data = obj.parse_as_object()
                 for sample_name, payload in data.samples.items():
                     path = os.path.join(out_dir, _safe_name(sample_name, f"{name}.wav"))
                     with open(path, "wb") as stream:
                         stream.write(payload)
                     files.append(path)
             elif kind == "Font":
-                data = obj.read()
+                data = obj.parse_as_object()
                 payload = data.m_FontData
                 if payload:
                     ext = ".otf" if payload[:4] == b"OTTO" else ".ttf"
@@ -149,13 +149,20 @@ def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
                         stream.write(payload)
                     files.append(path)
             elif kind == "TextAsset":
-                data = obj.read()
+                data = obj.parse_as_object()
                 payload = getattr(data, "m_Script", b"")
                 if isinstance(payload, str):
                     payload = payload.encode("utf-8", "surrogateescape")
                 path = target + ".txt"
                 with open(path, "wb") as stream:
                     stream.write(payload)
+                files.append(path)
+            elif kind in ("MonoBehaviour", "ScriptableObject"):
+                tree = obj.parse_as_dict()
+                path = target + ".json"
+                with open(path, "w", encoding="utf-8") as stream:
+                    json.dump(tree, stream, ensure_ascii=False, indent=2,
+                              default=lambda value: value.hex() if isinstance(value, (bytes, bytearray)) else repr(value))
                 files.append(path)
             elif kind == "AnimationClip":
                 raw_getter = getattr(obj, "get_raw_data", None)
