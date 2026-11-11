@@ -1235,6 +1235,13 @@ class MainWindow(QMainWindow):
     def _after_scan(self, sc) -> None:
         self.scan = sc
         self.ex_summary.setText(sc.summary())
+        # Black Myth: Wukong uses CUE4Parse's game-specific version profile.
+        # Select it automatically when the chosen install path identifies the game.
+        game_path = (sc.root or "").replace("\\\\", "/").replace("\\", "/").lower()
+        if "blackmythwukong" in game_path or "/b1/" in game_path or game_path.endswith("/b1"):
+            wukong_index = self.ex_ue.findData("GAME_BlackMythWukong")
+            if wukong_index >= 0:
+                self.ex_ue.setCurrentIndex(wukong_index)
         self.ex_aes.setEnabled(bool(sc.encrypted))
         self.ex_aes.setPlaceholderText("이 게임은 AES 키가 필요합니다 (0x + 64자리 16진수)" if sc.encrypted else "필요 없음 (암호화되지 않은 게임)")
         if sc.found:
