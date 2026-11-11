@@ -158,7 +158,7 @@ class UnityExtractTab(QWidget):
             if rx and not rx.search(label):
                 continue
             item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, int(record["path_id"]))
+            item.setData(Qt.ItemDataRole.UserRole, str(record.get("asset_key") or (record.get("source", "") + "::" + str(record["path_id"]))))
             item.setToolTip("원본: " + str(record.get("source", "")))
             self.asset_list.addItem(item)
         if self.records:
@@ -174,13 +174,13 @@ class UnityExtractTab(QWidget):
         if not game or not out:
             QMessageBox.warning(self, "Unity 추출", "게임 폴더와 출력 폴더를 확인하세요.")
             return
-        ids = {int(item.data(Qt.ItemDataRole.UserRole)) for item in selected}
+        asset_keys = {str(item.data(Qt.ItemDataRole.UserRole)) for item in selected}
         key = self.bundle_key.text().strip() or None
         os.makedirs(out, exist_ok=True)
         self.export_button.setEnabled(False)
-        self.summary.setText("선택한 Unity 에셋 %d개 추출 중…" % len(ids))
+        self.summary.setText("선택한 Unity 에셋 %d개 추출 중…" % len(asset_keys))
         self.host.run_async(
-            lambda worker: unity_extractor.export(game, out, path_ids=ids, bundle_key=key),
+            lambda worker: unity_extractor.export(game, out, asset_keys=asset_keys, bundle_key=key),
             self._export_done,
             "Unity 에셋 추출 중",
         )
