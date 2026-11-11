@@ -622,5 +622,48 @@ except Exception as _e:  # noqa: BLE001
     traceback.print_exc()
     check(False, "AI 회의 버튼 스모크 예외: %r" % (_e,))
 
+# 공통 UI 부품: ? 아이콘 / 끌어서 크기 조절 / 테마 전환 / 접기 화살표 / 루트 표시
+try:
+    from PySide6.QtWidgets import QApplication as _QA, QLabel as _QL
+    from motionbridge.ui import theme as _th
+    from motionbridge.ui.uikit import HelpIcon as _HI, Resizable as _RZ
+
+    _icons = [w for w in mw.findChildren(_HI)]
+    check(len(_icons) >= 10, "? 도움말 아이콘이 화면 곳곳에 있음: %d개" % len(_icons))
+    check(all(i.toolTip() for i in _icons), "모든 ? 아이콘에 설명 글이 있음")
+    _rz = [w for w in mw.findChildren(_RZ)]
+    check(len(_rz) >= 6, "크기 조절 상자: %d개" % len(_rz))
+    _r0 = _rz[0]
+    _r0.set_height(200)
+    check(_r0.inner.minimumHeight() == 200 and _r0.inner.maximumHeight() == 200 and mw.cfg["sizes"].get(_r0.key) == 200, "끌어서 바꾼 높이가 적용되고 저장됨")
+    _r0.reset()
+    check(_r0.key not in mw.cfg["sizes"], "두 번 누르면(초기화) 저장 값이 지워짐")
+    _app = _QA.instance()
+    _before = {id(w): w.styleSheet() for w in _app.allWidgets() if w.styleSheet()}
+    mw.toggle_theme()
+    check(_th.mode() == "light" and mw.cfg["theme"] == "light", "밝은 테마로 전환")
+    _bad = [w for w in _app.allWidgets() if "#8aa" in w.styleSheet() or "#ffdc50" in w.styleSheet()]
+    check(not _bad, "밝은 테마에서 어두운 바탕용 글자색이 남지 않음: %d개" % len(_bad))
+    mw.toggle_theme()
+    check(_th.mode() == "dark", "어두운 테마로 되돌림")
+    _after = {id(w): w.styleSheet() for w in _app.allWidgets() if id(w) in _before}
+    check(all(_after.get(k) == v for k, v in _before.items()), "왕복하면 스타일이 원래대로")
+    mw.toggle_clip_panel()
+    check(not mw.clip_panel.isVisible() and mw.cfg.get("clip_panel_hidden"), "모션 목록 접기")
+    mw.toggle_clip_panel()
+    check(mw.clip_panel.isVisible(), "모션 목록 펴기")
+    mw._bone_edit_toggled(True)
+    check(mw.bone_tree_box.isVisible(), "본 편집을 켜면 파츠 목록 칸이 보임")
+    mw._set_tree_open(False)
+    check(not mw.bone_tree.isVisible(), "파츠 목록 접기")
+    mw._set_tree_open(True)
+    mw._bone_edit_toggled(False)
+    _img = mw.viewport.grab()
+    check(not _img.isNull(), "루트 표시를 포함해 뷰포트 그리기")
+except Exception as _e:  # noqa: BLE001
+    import traceback
+    traceback.print_exc()
+    check(False, "공통 UI 부품 스모크 예외: %r" % (_e,))
+
 print("모두 통과" if not fails else "실패 %d개" % len(fails))
 sys.exit(1 if fails else 0)

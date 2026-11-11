@@ -145,3 +145,27 @@ def summarize(clips: List[ClipInfo]) -> str:
     for c in clips:
         by[c.label or "분류 없음"] = by.get(c.label or "분류 없음", 0) + 1
     return "클립 %d개 — " % len(clips) + ", ".join("%s %d" % (k, v) for k, v in sorted(by.items(), key=lambda kv: -kv[1]))
+
+
+def motion_file(path: str) -> str:
+    """영상/클립 하나에 짝이 되는 3D 동작 파일(AnimRef AI 모캡이 만든 .bvh)을 찾는다. 없으면 빈 글자.
+
+    찾는 순서: ① 클립 옆 <이름>.json 의 motion.bvh 가 가리키는 파일 ② 클립 옆의 <이름>.bvh ③ <이름>.motion/ 같은 옆 폴더 안의 .bvh"""
+    import json
+    if not path:
+        return ""
+    base = os.path.splitext(path)[0]
+    meta = base + ".json" if not path.lower().endswith(".json") else path
+    try:
+        if os.path.isfile(meta):
+            with open(meta, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            bvh = ((d or {}).get("motion") or {}).get("bvh") if isinstance(d, dict) else ""
+            if bvh and os.path.isfile(bvh):
+                return str(bvh)
+    except (OSError, ValueError):
+        pass
+    for cand in (base + ".bvh",):
+        if os.path.isfile(cand):
+            return cand
+    return ""

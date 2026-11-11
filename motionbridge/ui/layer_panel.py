@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from ..core import layeredit, rangeedit
 from ..core.layers import DEFAULT_FADE, apply_layers
 from .viewer_math import subtree_mask
+from .uikit import HelpIcon, Resizable
 from .widgets import CollapsibleBox, NumField
 
 TITLE = "보정 레이어 스택 — 키프레임으로 고치기 (원본은 그대로)"
@@ -33,11 +34,11 @@ class LayerPanel(CollapsibleBox):
         note.setStyleSheet("color:#8aa")
         v.addWidget(note)
         self.lst = QListWidget()
-        self.lst.setMaximumHeight(150)
+        self.lst.setMinimumHeight(60)
         self.lst.setToolTip("위에서 아래로 쌓인 순서입니다. 줄을 고르면 그 줄까지만 적용된 상태를 봅니다 (회색 줄 = 지금은 적용 안 됨). 체크 = 켜짐.")
         self.lst.currentRowChanged.connect(self._row_changed)
         self.lst.itemChanged.connect(self._item_changed)
-        v.addWidget(self.lst)
+        v.addWidget(Resizable(self.lst, "layer_list_h", 60))
         row = QHBoxLayout()
         for text, tip, fn in (("＋ 새 레이어", "새 보정 레이어를 만들고 편집 대상으로 고릅니다", self.add_layer),
                               ("이름 바꾸기", "", self.rename_layer), ("삭제", "고른 레이어와 그 키를 모두 지웁니다", self.delete_layer),
@@ -49,7 +50,7 @@ class LayerPanel(CollapsibleBox):
             row.addWidget(b)
         v.addLayout(row)
         row = QHBoxLayout()
-        for text, tip, fn in (("⤓ 아래와 합치기", "고른 레이어를 바로 아래 레이어와 하나로 합칩니다 (가중치가 곡선에 구워지고, 키는 0.1° 오차 안으로 다시 맞춥니다)", self.merge_down),
+        for text, tip, fn in (("⤓ 아래와 합치기", "고른 레이어를 바로 아래 레이어와 하나로 합칩니다 (세기(가중치)가 곡선에 구워지고, 키는 0.1° 오차 안으로 다시 맞춥니다)", self.merge_down),
                               ("⤓⤓ 여기까지 모두 합치기", "원본 위로 쌓인, 지금 보이는 레이어를 전부 하나로 합칩니다 (위쪽 회색 레이어는 그대로)", self.merge_all)):
             b = QPushButton(text)
             b.setToolTip(tip)
@@ -57,11 +58,14 @@ class LayerPanel(CollapsibleBox):
             row.addWidget(b)
         v.addLayout(row)
         wr = QHBoxLayout()
-        wr.addWidget(QLabel("가중치"))
+        wr.addWidget(QLabel("레이어 세기"))
         self.weight = NumField(0.0, 1.0, 0.05, 1.0, 2)
-        self.weight.setToolTip("이 레이어가 얼마나 반영될지 (1 = 전부, 0 = 안 보임). 끄지 않고 세기만 줄여 비교할 때 씁니다.")
+        self.weight.setToolTip("이 레이어의 수정이 얼마나 반영될지 (1 = 100% 전부, 0.5 = 절반만, 0 = 안 보임). 끄지 않고 세기만 줄여 비교할 때 씁니다.")
         self.weight.changed.connect(self._weight_changed)
         wr.addWidget(self.weight, 1)
+        wr.addWidget(HelpIcon("레이어 세기 (이전 이름: 가중치)\n이 레이어에 찍은 키의 효과를 얼마나 섞을지입니다.\n"
+                              "· 1 = 레이어의 수정이 100% 적용\n· 0.5 = 수정의 절반만 적용 (원본과 반반)\n· 0 = 적용 안 됨 (레이어를 끄지 않고 효과만 없앰)\n"
+                              "키를 다시 찍지 않고도 '조금만 과장'하거나 '살짝만 줄이기'를 할 때 슬라이더로 조절합니다."))
         v.addLayout(wr)
         fd = QHBoxLayout()
         fd.addWidget(QLabel("퍼짐(프레임)"))
@@ -218,7 +222,7 @@ class LayerPanel(CollapsibleBox):
             it = QListWidgetItem("원본 (리타겟 결과 · 레이어 없음)")
             self.lst.addItem(it)
             for i, l in enumerate(st.layers):
-                it = QListWidgetItem("%d. %s  (키 %d · 가중치 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight))
+                it = QListWidgetItem("%d. %s  (키 %d · 세기 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight))
                 try:
                     it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 except TypeError:       # 가짜 Qt(시험용)에서는 플래그 연산이 안 된다
@@ -326,7 +330,14 @@ class LayerPanel(CollapsibleBox):
         i = self.lst.row(it) - 1            # 0번 줄은 '원본'
         st = self.stack()
         if 0 <= i < len(st.layers):
-            st.layers[i].mute = it.checkState() != Qt.CheckState.Checked
+            on = it.checkState() == Qt.CheckState.Checked
+            st.layers[i].mute = not on
+            if on and i >= st.top:
+                # 체크하는 순간 그 레이어까지 적용된 상태로 본다 (예전에는 회색 줄을 따로 눌러 골라야 화면에 나왔다)
+                st.set_top(i + 1)
+                self._msg = ""
+                self._changed()
+                return
             self.app.schedule()
 
     def _weight_changed(self, v: float) -> None:
@@ -486,7 +497,7 @@ class LayerPanel(CollapsibleBox):
         if ce is not None and getattr(ce, "anchor", None) is not None and ce.anchor.currentIndex() != self.flat_anchor.currentIndex():
             ce.anchor.setCurrentIndex(self.flat_anchor.currentIndex())
 
-    def range_action(self, mode: str, a: Optional[int] = None, b: Optional[int] = None) -> None:
+    def range_action(self, mode: str, a: Optional[int] = None, b: Optional[int] = None, chans=None) -> None:
         """대상 본의 프레임 구간(a..b, 0부터)을 mode(blend/line/smooth)대로 고친다. 레이어가 없으면 새로 만든다."""
         pr = self.app.pr
         js = self._targets()
@@ -509,7 +520,7 @@ class LayerPanel(CollapsibleBox):
         final = apply_layers(base, st)
         if a is None or b is None:
             a, b = self.rng_a.value() - 1, self.rng_b.value() - 1
-        n, msg = rangeedit.rewrite(cur, below, final, js, a, b, mode, float(self.smooth_strength.value()), anchor=self.flat_anchor.currentData() or "start")
+        n, msg = rangeedit.rewrite(cur, below, final, js, a, b, mode, float(self.smooth_strength.value()), anchor=self.flat_anchor.currentData() or "start", chans=chans)
         self._msg = msg
         self.app.statusBar().showMessage(msg)
         self._changed()

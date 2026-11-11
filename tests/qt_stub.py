@@ -284,6 +284,9 @@ class QComboBox(QWidget):
     def itemData(self, i):
         return self._items[i][1] if 0 <= i < len(self._items) else None
 
+    def itemText(self, i):
+        return self._items[i][0] if 0 <= i < len(self._items) else ""
+
     def findData(self, d):
         for i, (_, x) in enumerate(self._items):
             if x == d:

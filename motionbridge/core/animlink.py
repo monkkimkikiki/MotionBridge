@@ -56,17 +56,43 @@ def animref_settings() -> dict:
     return d if isinstance(d, dict) else {}
 
 
+def _safe_name(s) -> str:
+    """AnimRef 가 게임 이름으로 폴더를 만들 때 쓰는 규칙 (core/library.py safe_name 과 같음): 글자·숫자·_·- 외에는 _ 로."""
+    import re
+    return re.sub(r"[^\w\-]+", "_", str(s)).strip("_") or "x"
+
+
 def default_clip_dir() -> str:
-    """AnimRef 가 클립을 모아 두는 폴더(<라이브러리>/<게임>/clips). 없으면 라이브러리, 그것도 없으면 빈 글자."""
+    """AnimRef 가 클립을 모아 두는 폴더(<라이브러리>/<게임>/clips).
+
+    AnimRef 는 게임 이름의 띄어쓰기 등을 _ 로 바꿔 폴더를 만든다 ('Mortal Shell 2' → 'Mortal_Shell_2').
+    그래서 설정의 게임 이름 그대로 찾으면 폴더를 못 찾던 문제를 같은 규칙으로 고쳤다.
+    설정의 게임 폴더가 없으면 라이브러리 안에서 가장 최근에 클립이 생긴 게임 폴더, 그것도 없으면 라이브러리."""
     s = animref_settings()
     lib = str(s.get("library_dir") or "")
     if not lib:
         return ""
     game = str(s.get("game") or "")
-    for cand in (os.path.join(lib, game, "clips") if game else "", os.path.join(lib, game) if game else "", lib):
+    cands = []
+    if game:
+        for g in (_safe_name(game), game):
+            cands += [os.path.join(lib, g, "clips"), os.path.join(lib, g)]
+    for cand in cands:
         if cand and os.path.isdir(cand):
             return cand
-    return ""
+    best, best_t = "", -1.0
+    try:
+        for name in os.listdir(lib):
+            c = os.path.join(lib, name, "clips")
+            if os.path.isdir(c):
+                t = os.path.getmtime(c)
+                if t > best_t:
+                    best, best_t = c, t
+    except OSError:
+        pass
+    if best:
+        return best
+    return lib if os.path.isdir(lib) else ""
 
 
 def pid_alive(pid: int) -> bool:

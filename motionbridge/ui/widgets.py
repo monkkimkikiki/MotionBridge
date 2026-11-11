@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 from ..core import animops
 from ..core.pathtree import Node, build_tree
 from ..core import filekind
+from .uikit import HelpIcon
 
 
 def wrappable(text: str) -> str:
@@ -394,7 +395,10 @@ class EditPanel(CollapsibleBox):
         self.value.setRange(0.01, 99999.0)
         self.value.setValue(1.0)
         g.addWidget(self.value, r, 2)
-        self._hidden += [self.value]
+        hi = HelpIcon("모션 전체 길이(재생 시간)를 바꿉니다.\n· 속도 배율: 2 = 2배 빠르게(길이 절반), 0.5 = 2배 느리게\n· 프레임 수 / 길이(초): 클립 전체를 그 길이에 맞춰 늘리거나 줄임\n"
+                      "뷰어 아래 '프레임 편집' 막대로 구간을 직접 자르고 늘리는 것과 같은 일을, 여기서는 숫자로 한꺼번에(추출할 때 자동) 하는 것입니다.")
+        g.addWidget(hi, r, 3)
+        self._hidden += [self.value, hi]
         r += 1
         g.addWidget(QLabel("fps"), r, 0)
         self.fps = QDoubleSpinBox()
@@ -403,6 +407,7 @@ class EditPanel(CollapsibleBox):
         self.fps.setSpecialValueText("그대로")
         self.fps.setToolTip("0 = 그대로. 30 → 60 처럼 바꾸면 길이(초)는 유지하고 프레임 수만 바뀝니다.")
         g.addWidget(self.fps, r, 1)
+        g.addWidget(HelpIcon("1초에 몇 장면(프레임)으로 저장할지. 그대로(0)면 원본 그대로입니다. 30 → 60 으로 바꾸면 움직임은 같고 중간 프레임만 늘어납니다."), r, 3)
         r += 1
         lab_rng = QLabel("구간(프레임)")
         self._hidden.append(lab_rng)
@@ -415,7 +420,10 @@ class EditPanel(CollapsibleBox):
         self.end.setToolTip("0 = 끝까지. 시작/끝 프레임은 0부터 셉니다(포함).")
         g.addWidget(self.start, r, 1)
         g.addWidget(self.end, r, 2)
-        self._hidden += [self.start, self.end]
+        hi2 = HelpIcon("모션의 일부만 쓰고 싶을 때 시작~끝 프레임을 적습니다 (0부터 셈, 끝 칸 '끝까지' = 마지막까지).\n"
+                       "뷰어 아래 '프레임 편집' 막대에서 구간을 표시해 자르는 것과 같은 기능입니다.")
+        g.addWidget(hi2, r, 3)
+        self._hidden += [self.start, self.end, hi2]
         r += 1
         g.addWidget(QLabel("루프 이음"), r, 0)
         self.loop = QSpinBox()
@@ -423,10 +431,12 @@ class EditPanel(CollapsibleBox):
         self.loop.setSuffix(" 프레임")
         self.loop.setToolTip("0 = 끔. 끝 N프레임을 첫 포즈로 서서히 이어서 반복 재생이 튀지 않게 합니다(루트 이동량은 유지).")
         g.addWidget(self.loop, r, 1)
+        g.addWidget(HelpIcon("반복 재생(루프)할 때 끝에서 처음으로 돌아가며 튀지 않게, 끝부분 N프레임을 첫 포즈로 서서히 이어 줍니다. 0 이면 쓰지 않습니다."), r, 3)
         r += 1
         self.compress = QCheckBox("키프레임 압축")
         self.compress.setToolTip("오차 허용치 안에서 군더더기 키를 줄입니다. GLB/JSON 은 줄어든 키만 저장하고, FBX 는 Blender 단순화로 줄이며,\nBVH/Biped/PSA 는 프레임마다 값을 쓰는 형식이라 '정리된 모션'으로 저장됩니다.")
         g.addWidget(self.compress, r, 0, 1, 3)
+        g.addWidget(HelpIcon("프레임마다 저장된 값 중 거의 변하지 않는 군더더기 키를 줄여 파일을 작게 만듭니다. 아래 '허용 오차' 안에서만 줄이므로 눈에 띄게 달라지지 않습니다."), r, 3)
         r += 1
         g.addWidget(QLabel("허용 오차"), r, 0)
         self.rot = QDoubleSpinBox()
@@ -441,6 +451,8 @@ class EditPanel(CollapsibleBox):
         self.pos.setValue(0.1)
         g.addWidget(self.rot, r, 1)
         g.addWidget(self.pos, r, 2)
+        g.addWidget(HelpIcon("키프레임 압축이 '이 정도 차이까지는 같은 값으로 봐도 된다'고 보는 한계입니다.\n· 왼쪽(°): 회전이 이만큼(도)까지 달라져도 키를 줄임\n· 오른쪽(cm): 위치가 이만큼까지 달라져도 키를 줄임\n"
+                             "작을수록 원본에 가깝고 파일이 큽니다. 기본값(0.5° / 0.1cm)은 눈으로 구분하기 어려운 수준입니다."), r, 3)
         if self.simple:
             for w in self._hidden:
                 w.setVisible(False)

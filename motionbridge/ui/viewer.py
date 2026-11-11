@@ -253,6 +253,7 @@ class Viewport(QWidget):
                     p.setBrush(QColor(r, g, b))
                     for x, y in xy:
                         p.drawEllipse(QPointF(float(x), float(y)), rad, rad)
+        self._draw_root_marker(p, w, h, sc, cam)
         if self.bone_edit:
             self._draw_bone_edit(p, w, h)
         # 범례
@@ -262,6 +263,9 @@ class Viewport(QWidget):
             p.setPen(QColor(*col))
             p.drawText(12, y0, "● " + text)
             y0 += 16
+        p.setPen(QColor(255, 120, 220))
+        p.drawText(12, y0, "◎ 루트 = 모션 기준점 (점선은 바닥 위치)")
+        y0 += 16
         y0 += 6
         p.setPen(QColor(220, 226, 238))
         for line in overlay_names(self.pr):  # 지금 재생 중인 애니메이션 / 메시 이름
@@ -301,6 +305,31 @@ class Viewport(QWidget):
         eye = self.cam.eye()
         depth = np.linalg.norm(self.vd.tgt_pos[f][[ids[i] for i in near]] - eye, axis=1)
         return int(ids[int(near[int(np.argmin(depth + d[near] * 1e-3))])])
+
+    def _draw_root_marker(self, p: QPainter, w: float, h: float, sc, cam) -> None:
+        """스켈레톤의 루트(맨 위 본)를 분홍 고리 + 바닥까지 점선으로 표시한다. 흰 점은 모든 관절이고, 이 고리가 있는 점이 '루트'다.
+        모션의 이동(수평 이동·루트 회전·배치)은 이 점을 기준으로 적용된다 (루트가 골반과 같은 스켈레톤이 많다)."""
+        a, g = sc.get("pt_root"), sc.get("pt_root_ground")
+        if a is None or g is None:
+            return
+        try:
+            xy, z = cam.project(a, w, h)
+            gy, gz = cam.project(g, w, h)
+            if not (z[0] > 0 and np.isfinite(xy[0, 0] + xy[0, 1] + gy[0, 0] + gy[0, 1])):
+                return
+            pen = QPen(QColor(255, 120, 220), 1.5)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(float(xy[0, 0]), float(xy[0, 1])), QPointF(float(gy[0, 0]), float(gy[0, 1])))
+            p.setPen(QPen(QColor(255, 120, 220), 2.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QPointF(float(xy[0, 0]), float(xy[0, 1])), 9.0, 9.0)
+            p.drawLine(QPointF(float(gy[0, 0]) - 6, float(gy[0, 1])), QPointF(float(gy[0, 0]) + 6, float(gy[0, 1])))
+            p.drawLine(QPointF(float(gy[0, 0]), float(gy[0, 1]) - 6), QPointF(float(gy[0, 0]), float(gy[0, 1]) + 6))
+            p.setFont(QFont("", 9))
+            p.drawText(QPointF(float(xy[0, 0]) + 13, float(xy[0, 1]) - 8), "루트 (기준점)")
+        except Exception:  # noqa: BLE001 - 표시용이라 오류가 앱을 멈추지 않게
+            pass
 
     def _draw_bone_edit(self, p: QPainter, w: float, h: float) -> None:
         ids, xy = self._joint_screen(w, h)

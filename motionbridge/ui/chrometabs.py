@@ -408,3 +408,15 @@ class TabHub:
             self.floats.remove(win)
         if win.view in self.views:
             self.views.remove(win.view)
+
+STYLE_LIGHT = (
+    "QTabBar::tab{background:#e6e9ef;color:#454c5a;padding:6px 10px;border:1px solid #b7bdca;border-bottom:none;"
+    "border-top-left-radius:8px;border-top-right-radius:8px;margin-right:2px;min-width:36px;}"
+    "QTabBar::tab:selected{background:#ffffff;color:#10131a;border-color:#0f5fb0;font-weight:bold;}"
+    "QTabBar::tab:hover:!selected{background:#f1f3f8;color:#10131a;}"
+)
+try:
+    from . import theme as _theme
+    _theme.register_whole(STYLE, STYLE_LIGHT)
+except Exception:  # noqa: BLE001
+    pass

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
+from .uikit import HelpIcon, Resizable, with_help
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
 
 INDEX_CACHE = os.path.join(bridge.CONFIG_DIR, "assets.json")
@@ -155,10 +156,10 @@ class VidFindTab(QWidget):
         v = QVBoxLayout(g)
         self.src_list = _DeleteList()
         self.src_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.src_list.setMinimumHeight(90)
+        self.src_list.setMinimumHeight(45)
         self.src_list.setToolTip("고르지 않으면 목록 전체를 씁니다. 원본이 많으면 고르게 솎아서 씁니다. 고르고 Delete 키로 뺄 수 있습니다.")
         self.src_list.on_delete = self.remove_sources
-        v.addWidget(self.src_list)
+        v.addWidget(Resizable(self.src_list, "vf_src_list", 45))
         h = QHBoxLayout()
         b = QPushButton("영상/이미지 추가…")
         b.clicked.connect(self.add_files)
@@ -262,20 +263,37 @@ class VidFindTab(QWidget):
         h = QHBoxLayout()
         h.addWidget(QLabel("게임 이름(선택)"))
         self.hint = QLineEdit(self.cfg.get("vf_hint", ""))
-        self.hint.setPlaceholderText("예: Mortal Shell 2 — 적으면 인식에 도움이 됩니다")
+        self.hint.setPlaceholderText("비워 두면 0번 탭에서 찾은 게임 이름을 자동으로 씁니다")
         h.addWidget(self.hint, 1)
+        h.addWidget(HelpIcon("게임 이름을 알면 AI 가 그 게임의 몬스터를 떠올리기 쉬워 정확도가 올라갑니다.\n"
+                             "비워 두면 [0. 게임에서 추출] 탭에서 게임 폴더를 검사할 때 자동으로 잡힌 이름(폴더 이름 기준)을 그대로 씁니다.\n"
+                             "직접 적은 이름이 있으면 그것이 우선입니다."))
         h.addWidget(QLabel("이름 필터(정규식)"))
         self.filter = QLineEdit(self.cfg.get("vf_filter", ""))
         self.filter.setPlaceholderText("예: (?i)(monster|boss) — 비우면 자동")
         self.filter.setToolTip("AI에게 알려줄 후보 이름을 경로로 줄입니다. 무기/소품이 섞이면 정확도가 떨어집니다.")
         h.addWidget(self.filter, 1)
+        h.addWidget(HelpIcon("게임 파일의 '경로 글자'를 거르는 규칙입니다. 비우면 자동입니다.\n\n"
+                             "· 쉼표(,)로 나누면 모두 들어간 것만 남깁니다 (예: boss,skeleton)\n"
+                             "· 정규식도 됩니다 — 예: (?i)(monster|boss) 는 대소문자 무시하고 monster 또는 boss 가 든 경로\n"
+                             "· 한글로 적어도 오류는 없지만, 게임 파일 경로는 대부분 영어라 한글 글자는 경로에 한글이 있을 때만 맞습니다.\n"
+                             "  한글 이름으로 캐릭터를 찾고 싶으면 아래 4) 검수의 '게임 속 이름' 칸(글자 사전을 써서 한글 이름을 내부 이름으로 바꿔 찾음)을 쓰세요."))
         v.addLayout(h)
-        v.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모"))
+        kl = QHBoxLayout()
+        kl.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모"), 1)
+        kl.addWidget(HelpIcon("한 줄에 캐릭터 하나씩, 'Enter' 로 줄을 나눠 적으세요. 형식: 이름 — 메모 (메모는 없어도 됩니다)\n\n"
+                              "메모에 적으면 도움이 되는 정보:\n"
+                              "· 찾으려는 몬스터 이름\n"
+                              "· 외형적 특징 (색, 크기, 갑옷, 뿔 …)\n"
+                              "· 인간형인지 / 4족 보행인지 / 크리처(괴물)인지\n"
+                              "· 쓰는 무기가 무엇인지 (검, 도끼, 창, 맨손 …)\n"
+                              "· 공격 방식이 무엇인지 (내려찍기, 돌진, 회전 …)"))
+        v.addLayout(kl)
         self.known = QPlainTextEdit()
         self.known.setPlainText(self.cfg.get("vf_known", ""))
-        self.known.setPlaceholderText("예)\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형\nDwarf Warrior\n(비워도 됩니다. 적으면 이름이 달라도 리소스를 먼저 찾아 AI에게 알려 주고, AI가 놓친 캐릭터도 표에 넣어 줍니다)")
-        self.known.setMaximumHeight(90)
-        v.addWidget(self.known)
+        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\nDwarf Warrior — 도끼를 든 작은 인간형\n(비워도 됩니다. 적으면 이름이 달라도 리소스를 먼저 찾아 AI에게 알려 주고, AI가 놓친 캐릭터도 표에 넣어 줍니다)")
+        self.known.setMinimumHeight(50)
+        v.addWidget(Resizable(self.known, "vf_known_h", 50))
         self.engine_note = QLabel("")
         self.engine_note.setWordWrap(True)
         v.addWidget(self.engine_note)
@@ -290,7 +308,7 @@ class VidFindTab(QWidget):
         self.min_conf.setRange(0, 100)
         self.min_conf.setSuffix("%")
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
-        self.min_conf.setToolTip("AI 확신이 이 값보다 낮으면 메시를 자동으로 고르지 않고 '직접 고르세요'로 둡니다 (엉뚱한 캐릭터로 넘어가는 것을 막음).")
+        self.min_conf.setToolTip("AI 확신이 이 값보다 낮은 줄에는 검수 표에 '⚠ 확신 낮음' 표시를 붙여 한 번 더 보게 합니다 (메시는 가장 유력한 후보가 그래도 골라져 있습니다).")
         r = QHBoxLayout()
         self.rb_mode_monster = QRadioButton("몬스터 찾기 (영상으로 AI 추측)")
         self.rb_mode_char = QRadioButton("캐릭터 메쉬 찾기 (캐릭터 모델링 전체 검색)")
@@ -350,7 +368,7 @@ class VidFindTab(QWidget):
                                         "목록에 없는 캐릭터(이름 없는 보스 등)는 '(모름)' 줄에 생김새만 적어 둡니다. 토론 기록도 창으로 볼 수 있습니다.")
         self.btn_guess_panel.clicked.connect(lambda *_a: self.start_guess_panel())
         h.addWidget(self.btn_guess_panel, 1)
-        h.addWidget(QLabel("자동 선택 최소 확신"))
+        h.addWidget(QLabel("낮은 확신 경고 기준"))
         h.addWidget(self.min_conf)
         b = QPushButton("에셋 목록 새로 읽기")
         b.setToolTip("게임 파일에서 메시/애니메이션 이름 목록을 다시 만듭니다 (처음 한 번 만들면 저장해 두고 씁니다).")
@@ -369,13 +387,13 @@ class VidFindTab(QWidget):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["장면", "AI 추측", "메시 (후보 / 검색)", "제외"])
         self.table.setIconSize(QSize(168, 96))
-        self.table.setMinimumHeight(260)
+        self.table.setMinimumHeight(180)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         for c, wd in ((0, 176), (1, 150), (3, 60)):
             self.table.setColumnWidth(c, wd)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setStretchLastSection(False)
-        v.addWidget(self.table)
+        v.addWidget(Resizable(self.table, "vf_table", 180))
         # 게임 속 이름으로 찾기: 리소스 이름이 화면에 보이는 이름과 다를 때
         h = QHBoxLayout()
         h.addWidget(QLabel("게임 속 이름"))
@@ -436,6 +454,9 @@ class VidFindTab(QWidget):
         self.btn_confirm.clicked.connect(self.confirm)
         h.addWidget(self.btn_confirm)
         v.addLayout(h)
+        self.choice_summary = QLabel("")
+        self.choice_summary.setStyleSheet("color:#5ab0ff")
+        v.addWidget(self.choice_summary)
         lay.addWidget(g)
 
         # 5) 후보 / 추출
@@ -444,11 +465,11 @@ class VidFindTab(QWidget):
         v.addWidget(QLabel("메시 (확정한 캐릭터 / 캐릭터 메쉬 검색 결과)"))
         self.mesh_list = _AssetList("mesh")
         self.mesh_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.mesh_list.setMinimumHeight(70)
+        self.mesh_list.setMinimumHeight(40)
         self.mesh_list.itemSelectionChanged.connect(self._mesh_sel_changed)
         self.mesh_list.itemDoubleClicked.connect(self._mesh_double_clicked)
         self.mesh_list.setToolTip("더블클릭 또는 오른쪽 뷰포트로 끌어다 놓기: 이 메시를 바로 뷰포트(타깃)로 엽니다 — 리깅(스켈레톤·스킨)이 든 GLB 로 뽑아서 바로 불러와요. 탭은 그대로 있습니다.")
-        v.addWidget(self.mesh_list)
+        v.addWidget(Resizable(self.mesh_list, "vf_mesh_list", 40))
         v.addWidget(QLabel("↑ 더블클릭하거나 뷰포트로 끌어다 놓으면 그 메시가 바로 뷰포트에 열려요 (추출 없이 확인)"))
         h = QHBoxLayout()
         h.addWidget(QLabel("애니메이션 분류"))
@@ -458,12 +479,18 @@ class VidFindTab(QWidget):
             self.label.addItem(x, x)
         self.label.currentIndexChanged.connect(self._refill_anims)
         h.addWidget(self.label)
+        h.addWidget(HelpIcon("애니메이션 이름에서 알아낸 종류(공격·피격·사망 …)로 목록을 좁힙니다. '상관없음'이면 모두 보여 줍니다."))
         h.addWidget(QLabel("타수"))
         self.hits = QSpinBox()
         self.hits.setRange(0, 9)
         self.hits.setSpecialValueText("상관없음")
         self.hits.valueChanged.connect(self._refill_anims)
         h.addWidget(self.hits)
+        h.addWidget(HelpIcon("연속 공격의 타수(몇 번 때리는지). 이름에서 알아낸 값이 있는 것만 맞춰 보여 줍니다. 상관없음 = 거르지 않음."))
+        self.react_only = QCheckBox("🥊 피격·그로기·처형 계열만 보기")
+        self.react_only.setToolTip("이름에 hit/react/stagger/groggy/execute/finisher/victim 같은 낱말이 든 애니메이션만 남깁니다 (상대 캐릭터의 '맞는 모션'을 찾을 때).")
+        self.react_only.toggled.connect(lambda *_a: self._apply_anim_filter())
+        h.addWidget(self.react_only)
         h.addStretch(1)
         v.addLayout(h)
         h = QHBoxLayout()
@@ -480,6 +507,11 @@ class VidFindTab(QWidget):
         b.clicked.connect(lambda *_a: self.search_anims_by_text())
         h.addWidget(b)
         v.addLayout(h)
+        self.btn_panel = QPushButton("🧑‍⚖ AI 회의로 찾기… (여러 AI 가 영상과 목록을 보며 토론)")
+        self.btn_panel.setToolTip("고른 영상 장면을 한 장의 시트로 붙여, 이미지를 보는 AI(Qwen-VL·Claude·Gemini …)가 직접 보고, 글 전용 AI(GPT-OSS)는 그 묘사를 읽고,\n"
+                                  "모두 지금 목록(위쪽 %d개)에서 맞는 애니메이션을 고르고 서로의 이유를 보며 고칩니다. 합의 순위로 목록을 다시 줄 세웁니다." % MAX_PANEL_NAMES)
+        self.btn_panel.clicked.connect(lambda *_a: self.open_panel())
+        v.addWidget(self.btn_panel)
         h = QHBoxLayout()
         h.addWidget(QLabel("찾는 종류"))
         self.ck_k_monster = QCheckBox("몬스터·보스·NPC")
@@ -499,19 +531,15 @@ class VidFindTab(QWidget):
         self.anim_filter.setClearButtonEnabled(True)
         self.anim_filter.textChanged.connect(lambda *_a: self._apply_anim_filter())
         h.addWidget(self.anim_filter, 1)
+        h.addWidget(HelpIcon("지금 목록 안에서 이름 글자로 바로 좁힙니다 (다시 검색하지 않음). 쉼표나 띄어쓰기로 나누면 모두 들어간 것만 남습니다."))
         self.anim_count = QLabel("")
         self.anim_count.setStyleSheet("color:#8a93a6")
         h.addWidget(self.anim_count)
         v.addLayout(h)
         self.anim_list = _AssetList("anim")
         self.anim_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.anim_list.setMinimumHeight(200)
-        v.addWidget(self.anim_list)
-        self.ck_player = QCheckBox("플레이어블 캐릭터 애니메이션으로 찾기")
-        self.ck_player.setToolTip("플레이어가 조종하는 캐릭터는 몸(메시)이 여러 벌이어도 애니메이션을 공유해서, 메시 이름이 아니라 player/pc/hero 같은 "
-                                  "이름이 든 공용 애니메이션을 보여줍니다. 메시 경로에 그런 낱말이 있으면 자동으로 켜지고, 아니면 여기서 직접 켜세요.")
-        self.ck_player.toggled.connect(self._refill_anims)
-        v.addWidget(self.ck_player)
+        self.anim_list.setMinimumHeight(50)
+        v.addWidget(Resizable(self.anim_list, "vf_anim_list", 50))
         self.anim_note = QLabel("")
         self.anim_note.setWordWrap(True)
         v.addWidget(self.anim_note)
@@ -526,17 +554,13 @@ class VidFindTab(QWidget):
         b = QPushButton("선택 해제")
         b.clicked.connect(lambda *_a: self.anim_list.clearSelection())
         h.addWidget(b)
-        h.addStretch(1)
-        v.addLayout(h)
-        self.btn_mrank = QPushButton("🎬 영상 속 동작과 비슷한 순으로 정렬…")
+        self.btn_mrank = QPushButton("🎬 영상 동작과 비슷한 순 정렬")
         self.btn_mrank.setToolTip("영상에서 뽑은 3D 동작 파일(AnimRef 의 AI 모캡 .bvh 등)을 고르면, 지금 목록 위쪽 %d개를 임시로 뽑아서 팔다리 움직임이 얼마나 비슷한지로\n"
                                   "다시 줄 세웁니다. 이름이 비슷해도 동작이 다른 것, 이름이 달라도 동작이 같은 것을 가려냅니다. 좌우 반전(거울) 동작도 같이 봅니다." % MAX_MOTION_RANK)
         self.btn_mrank.clicked.connect(lambda *_a: self.rank_by_motion())
-        v.addWidget(self.btn_mrank)
-        self.react_only = QCheckBox("🥊 피격·그로기·처형 계열만 보기")
-        self.react_only.setToolTip("이름에 hit/react/stagger/groggy/execute/finisher/victim 같은 낱말이 든 애니메이션만 남깁니다 (상대 캐릭터의 '맞는 모션'을 찾을 때).")
-        self.react_only.toggled.connect(lambda *_a: self._apply_anim_filter())
-        v.addWidget(self.react_only)
+        h.addWidget(self.btn_mrank)
+        h.addStretch(1)
+        v.addLayout(h)
         ph = QHBoxLayout()
         self.btn_pair = QPushButton("🔗 고른 모션의 짝 찾기 (상대 쪽 모션 목록으로)")
         self.btn_pair.setToolTip("목록에서 모션 하나(예: 보스가 처형당하는 모션)를 고르고 누르면, 반대편 캐릭터(보스 ↔ 플레이어)의 모션 중\n"
@@ -549,12 +573,8 @@ class VidFindTab(QWidget):
         self.pair_tol.setRange(1, 300)
         self.pair_tol.setValue(int(self.cfg.get("vf_pair_tol", 30)))
         ph.addWidget(self.pair_tol)
+        ph.addWidget(HelpIcon("짝 찾기에서 '길이가 비슷하다'고 볼 프레임 차이 한계입니다. 기본 ±30프레임. 서로 맞물리는 연출은 길이가 거의 같아서, 작게 할수록 엄격합니다."))
         v.addLayout(ph)
-        self.btn_panel = QPushButton("🧑‍⚖ AI 회의로 찾기… (여러 AI 가 영상과 목록을 보며 토론)")
-        self.btn_panel.setToolTip("고른 영상 장면을 한 장의 시트로 붙여, 이미지를 보는 AI(Qwen-VL·Claude·Gemini …)가 직접 보고, 글 전용 AI(GPT-OSS)는 그 묘사를 읽고,\n"
-                                  "모두 지금 목록(위쪽 %d개)에서 맞는 애니메이션을 고르고 서로의 이유를 보며 고칩니다. 합의 순위로 목록을 다시 줄 세웁니다." % MAX_PANEL_NAMES)
-        self.btn_panel.clicked.connect(lambda *_a: self.open_panel())
-        v.addWidget(self.btn_panel)
         self.btn_view = QPushButton("선택한 애니메이션을 뷰포트로 열기 (리타겟 작업)")
         self.btn_view.setMinimumHeight(34)
         self.btn_view.setToolTip("고른 애니메이션(여러 개 가능)을 PSA 로 뽑아 소스 모션으로 엽니다. 뷰포트로 끌어다 놓아도 같고, 탭은 옮기지 않습니다. 클립 목록에서 바꿔 가며 볼 수 있습니다.\n"
@@ -1160,12 +1180,10 @@ class VidFindTab(QWidget):
     def _fill_combo(self, combo, cands: List[assetidx.MeshCandidate], pick_first: bool = True) -> None:
         """후보를 채운다. pick_first=False 면 맨 위에 '직접 고르세요'를 두고 그것이 선택된 채로 시작한다."""
         combo.clear()
-        if not pick_first and cands:
-            combo.addItem("(확신이 낮아 자동 선택 안 함 — 후보에서 고르거나 아래 칸에서 검색)", None)
-        for c in cands:
+        for c in cands:      # 확신이 낮아도 가장 유력한 후보를 골라 둔다 (틀리면 검수자가 바꿈). 낮은 확신은 표에 ⚠ 로만 알린다
             combo.addItem(self._cand_text(c), c.path)
         if not cands:
-            combo.addItem("(후보 없음 — 아래 칸에서 이름으로 검색)", None)
+            combo.addItem("(이름이 비슷한 메시를 못 찾았어요 — 아래 칸에 이름 일부를 적어 검색하세요)", None)
 
     def fill_table(self, groups: List[vision.Group]) -> None:
         self.rows = []
@@ -1199,13 +1217,61 @@ class VidFindTab(QWidget):
         search.setPlaceholderText("다른 메시 찾기: 이름 일부를 입력")
         bl.addWidget(combo)
         bl.addWidget(search)
+        pick = QHBoxLayout()
+        sel_lb = QLabel("")
+        sel_lb.setWordWrap(True)
+        pick.addWidget(sel_lb, 1)
+        btn_see = QPushButton("👁 뷰포트에서 보기")
+        btn_see.setToolTip("지금 고른 메시를 뷰포트(타깃)로 열어 모양을 직접 확인합니다 (추출 없이 확인).")
+        pick.addWidget(btn_see)
+        bl.addLayout(pick)
         self.table.setCellWidget(r, 2, box)
         ex = QCheckBox("제외")
         self.table.setCellWidget(r, 3, ex)
         row = _Row(g, combo, search, ex, base, sure)
+        row.sel_label = sel_lb
         search.textChanged.connect(lambda text, rw=row: self._on_search(rw, text))
+        combo.currentIndexChanged.connect(lambda *_a, rw=row: self._row_choice_changed(rw))
+        ex.toggled.connect(lambda *_a, rw=row: self._row_choice_changed(rw))
+        btn_see.clicked.connect(lambda *_a, rw=row: self._see_row(rw))
         self.rows.append(row)
-        self.table.setRowHeight(r, 108)
+        self.table.setRowHeight(r, 124)
+        self._refresh_choice(row)
+
+    def _refresh_choice(self, row: _Row) -> None:
+        """줄에 '지금 무엇을 골랐는지'를 크게 보여 준다 (✔ 선택됨 / 제외 / 아직 못 골랐음) + 맨 아래 요약."""
+        lb = getattr(row, "sel_label", None)
+        if lb is not None:
+            p = row.chosen()
+            if row.exclude.isChecked():
+                lb.setText("🚫 제외됨 (추출하지 않음)")
+                lb.setStyleSheet("color:#8a93a6")
+            elif p:
+                m = self.index.mesh(p) if self.index else None
+                lb.setText("✔ 선택됨: " + (m.name if m else assetidx.mesh_name(p)))
+                lb.setStyleSheet("color:#5ab0ff;font-weight:700")
+            else:
+                lb.setText("❓ 아직 못 골랐음 — 후보에서 고르거나 검색하세요")
+                lb.setStyleSheet("color:#e0a050;font-weight:700")
+        self._update_choice_summary()
+
+    def _row_choice_changed(self, row: _Row) -> None:
+        self._refresh_choice(row)
+
+    def _update_choice_summary(self) -> None:
+        lb = self.__dict__.get("choice_summary")
+        if lb is None:
+            return
+        rows = self.__dict__.get("rows") or []
+        n_ok = sum(1 for r in rows if r.chosen())
+        n_ex = sum(1 for r in rows if r.exclude.isChecked())
+        n_no = len(rows) - n_ok - n_ex
+        lb.setText("확정하면: 메시 %d개 선택됨 · 제외 %d · 못 고른 줄 %d%s" % (n_ok, n_ex, n_no, "  (못 고른 줄은 빠집니다)" if n_no else ""))
+
+    def _see_row(self, row: _Row) -> None:
+        p = row.combo.currentData()
+        if p:
+            self.open_mesh_in_viewport(p)
 
     def _on_search(self, row: _Row, text: str) -> None:
         text = (text or "").strip()
@@ -1579,7 +1645,7 @@ class VidFindTab(QWidget):
         empty: List[str] = []
         players: List[str] = []
         kinds = self._kinds()
-        force = True if (self.ck_player.isChecked() or kinds == {assetidx.KIND_PLAYER}) else None
+        force = True if kinds == {assetidx.KIND_PLAYER} else None     # 메시 경로에 player/pc/hero 가 있으면 아래에서 자동 판단
         hidden_kind = 0
         n_drop = 0
         skel_state: Dict[str, int] = {}
@@ -1988,6 +2054,13 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "동작으로 정렬", "정렬할 애니메이션 목록이 비어 있습니다. 먼저 후보를 만들거나 검색하세요.")
             return
         win = self.win
+        auto_note = ""
+        if query_path is None:       # 1번 박스에서 고른(없으면 전체) 영상 중 AI 모캡 .bvh 가 이미 있는 것을 자동으로 쓴다
+            for sp in self.source_paths(True):
+                mf = animref.motion_file(sp)
+                if mf:
+                    query_path, auto_note = mf, os.path.basename(sp)
+                    break
         if query_path is None:
             start = self.cfg.get("vf_motion_dir", "") or ""
             query_path, _f = QFileDialog.getOpenFileName(self, "영상에서 뽑은 3D 동작 파일 (AnimRef AI 모캡 .bvh 등)", start,
@@ -2059,7 +2132,7 @@ class VidFindTab(QWidget):
                 self.anim_list.addItem(it)
             top = max(res.values(), key=lambda s: s.score)
             more = (" (위쪽 %d개만 비교, 나머지는 뒤에)" % len(paths)) if total > len(paths) else ""
-            self.anim_note.setText("영상 동작과 비슷한 순으로 정렬했습니다 — %d개 비교, 가장 비슷한 점수 %d%%%s. 점수는 팔다리·몸통 뼈 방향이 얼마나 같은지(시간 맞춤, 좌우 반전 포함)이고, ↔ 는 거울 반전입니다.%s"
+            self.anim_note.setText(("[%s 의 모캡 파일을 자동으로 썼습니다] " % auto_note if auto_note else "") + "영상 동작과 비슷한 순으로 정렬했습니다 — %d개 비교, 가장 비슷한 점수 %d%%%s. 점수는 팔다리·몸통 뼈 방향이 얼마나 같은지(시간 맞춤, 좌우 반전 포함)이고, ↔ 는 거울 반전입니다.%s"
                                    % (len(res), round(top.score * 100), more, (" 건너뜀 %d" % len(skips)) if skips else ""))
             self._apply_anim_filter()
 

@@ -309,6 +309,14 @@ def build_scene(vd: ViewData, pr, frame: int, show_ghost=True, show_mesh=True, s
         ft = min(f, vd.tgt_pos.shape[0] - 1)
         sc["seg_target"] = bone_segments(vd.tgt_parents, vd.tgt_pos[ft])
         sc["pt_target_joints"] = vd.tgt_pos[ft]
+        try:      # 루트(스켈레톤 맨 위 본) — 모션이 이 점을 기준으로 이동·회전한다. 뷰포트에 따로 표시한다
+            roots = [i for i, pa in enumerate(vd.tgt_parents) if int(pa) < 0]
+            if roots:
+                r0 = np.asarray(vd.tgt_pos[ft][roots[0]], dtype=float)
+                sc["pt_root"] = r0[None, :]
+                sc["pt_root_ground"] = np.array([[r0[0], vd.ground_y, r0[2]]])
+        except Exception:  # noqa: BLE001
+            pass
         if show_mesh:
             m = vd.mesh_points(pr, ft)
             if m is not None:

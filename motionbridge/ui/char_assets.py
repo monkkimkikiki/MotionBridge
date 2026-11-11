@@ -12,6 +12,7 @@ from typing import List, Optional, Set
 import json
 
 from PySide6.QtCore import QMimeData, Qt
+from .uikit import Resizable
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
@@ -106,11 +107,11 @@ class CharAssetPanel(QWidget):
         self.tree.setDragEnabled(True)
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self.tree.setHeaderHidden(True)
-        self.tree.setMinimumHeight(260)
+        self.tree.setMinimumHeight(110)
         self.tree.setToolTip("메쉬/애니메이션을 고른 뒤 오른쪽 뷰포트로 끌어다 놓으면 바로 열립니다")
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self._double_clicked)
-        v.addWidget(self.tree)
+        v.addWidget(Resizable(self.tree, "ex_char_tree_h", 110))
         self.status = QLabel("[자동으로 캐릭터 찾기]를 누르면 게임에서 캐릭터를 알아서 찾아 정리합니다. 게임 폴더와 도우미는 위 1)·2)에서 설정합니다.")
         self._shown_once = False
         self.status.setWordWrap(True)
@@ -130,18 +131,17 @@ class CharAssetPanel(QWidget):
         self.btn_send.clicked.connect(lambda *_a: self.send_to_list())
         h.addWidget(self.btn_send)
         v.addLayout(h)
-        h = QHBoxLayout()
-        self.btn_lib = QPushButton("📚 같은 종류 모션 모으기 (라이브러리 폴더 생성)")
+        h = QHBoxLayout()           # 플레이어 버튼 · 모으기 · 검사 기록 지우기를 한 줄에
+        self.btn_find_player = self.btn_player = None
+        if PLAYER_FEATURE:
+            self._build_player_buttons(h)
+        self.btn_lib = QPushButton("📚 같은 종류 모션 모으기")
         self.btn_lib.setToolTip("고른 애니메이션(폴더를 고르면 안의 전부)을 추출해서 '출력 폴더/Library/종류/동작/' 으로 모읍니다.\n"
                                 "attack 은 attack 끼리, run 은 run 끼리 — 여러 캐릭터를 골라 두면 같은 종류가 한 폴더에 쌓여 모션 라이브러리가 됩니다.")
         self.btn_lib.clicked.connect(lambda *_a: self.collect_library())
         h.addWidget(self.btn_lib)
-        v.addLayout(h)
-        h = QHBoxLayout()
-        self.btn_find_player = self.btn_player = None
-        if PLAYER_FEATURE:
-            self._build_player_buttons(h)
         self.btn_clear = QPushButton("검사 기록 지우기")
+        self.btn_clear.setToolTip("'자동으로 캐릭터 찾기'로 읽어 둔 기록을 지웁니다 (게임 파일은 그대로, 다시 찾으면 처음부터 읽습니다).")
         self.btn_clear.clicked.connect(lambda *_a: self.clear_index())
         h.addWidget(self.btn_clear)
         h.addStretch(1)

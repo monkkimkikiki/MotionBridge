@@ -13,6 +13,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from . import curves
 from . import quat as Q
 from .layeredit import MIN_WEIGHT, editable
 from .layers import Layer, fit_keys
@@ -85,8 +86,28 @@ def _targets(mode: str, rot: np.ndarray, pos: np.ndarray, lo: int, hi: int, a: i
     return tr, tp
 
 
+def _only_channels(tr: np.ndarray, tp: np.ndarray, rot: np.ndarray, pos: np.ndarray, lo: int, hi: int, chans) -> Tuple[np.ndarray, np.ndarray]:
+    """고른 채널만 목표(tr, tp)를 따르고, 고르지 않은 채널은 지금 값(rot, pos)을 그대로 둔다. 회전은 오일러 XYZ 축 단위로 섞는다."""
+    cs = set(chans)
+    if not cs >= {"rx", "ry", "rz"}:
+        cur = curves.euler_curve(rot)[lo:hi + 1]
+        want = curves.euler_curve(tr)
+        # 목표 곡선의 360° 이어 붙임을 지금 곡선에 맞춘다 (한 바퀴 어긋나 있으면 키가 한 바퀴 돈다)
+        want = want + np.round((cur[:1] - want[:1]) / 360.0) * 360.0
+        mix = cur.copy()
+        for i, c in enumerate(("rx", "ry", "rz")):
+            if c in cs:
+                mix[:, i] = want[:, i]
+        tr = Q.normalize(Q.from_euler(mix, "XYZ"))
+    pos_sel = np.asarray(pos[lo:hi + 1], dtype=float).copy()
+    for i, c in enumerate(("px", "py", "pz")):
+        if c in cs:
+            pos_sel[:, i] = tp[:, i]
+    return tr, pos_sel
+
+
 def rewrite(layer: Layer, below, final, joints: Sequence[int], a: int, b: int, mode: str = "blend", sigma: float = 2.0, pad: int = 3,
-            tol_deg: float = 0.1, tol_pos: float = 1e-4, anchor: str = "start") -> Tuple[int, str]:
+            tol_deg: float = 0.1, tol_pos: float = 1e-4, anchor: str = "start", chans=None) -> Tuple[int, str]:
     """맨 위 레이어(layer)의 키를 고쳐 joints 의 프레임 a..b(끝 포함, 0부터)를 mode 대로 만든다. below = 이 레이어 아래 상태, final = 지금 상태(이 레이어 포함).
     돌려주는 값: (바뀐 본 수, 한국어 설명). 안 되면 (0, 이유)."""
     why = editable(layer)
@@ -102,6 +123,9 @@ def rewrite(layer: Layer, below, final, joints: Sequence[int], a: int, b: int, m
                    "'일직선으로(평평하게)' 는 구간이 2프레임 이상이어야 합니다." if mode == "flat" else
                    "'시작-끝 이어서' 는 구간이 3프레임 이상이어야 합니다 (시작·끝 값은 그대로 두고 그 사이를 이어요).")
     lo, hi = plan
+    # 새 레이어는 첫/마지막 키 밖에서도 그 키 값을 유지(fade 0)하므로, 고친 구간 바로 앞·뒤 한 프레임에 '원래 값' 키를 못 박아 둔다
+    # (안 그러면 일직선·떨림 정리가 구간 밖 프레임까지 값을 끌고 간다)
+    elo, ehi = max(lo - 1, 0), min(hi + 1, T - 1)
     w = float(np.clip(layer.weight, 0.0, 1.0))
     n_j, n_keys = 0, 0
     for j in joints:
@@ -109,23 +133,34 @@ def rewrite(layer: Layer, below, final, joints: Sequence[int], a: int, b: int, m
         if not (0 <= j < final.rot.shape[1]):
             continue
         tr, tp = _targets(mode, final.rot[:, j], np.asarray(final.pos[:, j], dtype=float), lo, hi, a, b, float(max(sigma, 0.3)), pad, anchor)
-        bw = Q.make_continuous(Q.normalize(below.rot[lo:hi + 1, j]))
+        if chans and set(chans) != set(curves.CHANNELS):
+            tr, tp = _only_channels(tr, tp, final.rot[:, j], final.pos[:, j], lo, hi, chans)
+        if elo < lo:
+            tr = np.concatenate([final.rot[elo:lo, j], tr], axis=0)
+            tp = np.concatenate([np.asarray(final.pos[elo:lo, j], dtype=float), tp], axis=0)
+        if ehi > hi:
+            tr = np.concatenate([tr, final.rot[hi + 1:ehi + 1, j]], axis=0)
+            tp = np.concatenate([tp, np.asarray(final.pos[hi + 1:ehi + 1, j], dtype=float)], axis=0)
+        bw = Q.make_continuous(Q.normalize(below.rot[elo:ehi + 1, j]))
         d_rot = Q.make_continuous(Q.normalize(Q.mul(tr, Q.conj(bw))))
-        d_pos = tp - np.asarray(below.pos[lo:hi + 1, j], dtype=float)
+        d_pos = tp - np.asarray(below.pos[elo:ehi + 1, j], dtype=float)
         if w < 1.0:                                                  # 레이어 가중치가 낮아도 보이는 값이 목표가 되도록 거꾸로 계산
             d_rot = Q.slerp(np.repeat(_ID[None], len(d_rot), axis=0), d_rot, 1.0 / max(w, MIN_WEIGHT))
             d_pos = d_pos / max(w, MIN_WEIGHT)
-        ks = fit_keys(d_rot, d_pos, [0, hi - lo], tol_deg, tol_pos)
+        ks = fit_keys(d_rot, d_pos, [0, ehi - elo], tol_deg, tol_pos)
         old = layer.keys.get(j, {})
         if not ks and not old:
             continue
-        for f in [f for f in old if lo <= f <= hi]:
+        for f in [f for f in old if elo <= f <= ehi]:
             layer.remove_key(j, f)
         if all(k.is_identity(1e-7) for k in ks.values()) and not layer.keys.get(j):
             continue                                                 # 바꿀 게 없다 (이 본은 이미 목표대로)
         for f, k in ks.items():
-            layer.keys.setdefault(j, {})[lo + f] = k
+            layer.keys.setdefault(j, {})[elo + f] = k
         n_j += 1
         n_keys += len(ks)
     label = {"blend": "지우고 블렌드", "flat": "일직선으로(평평하게, %s 값)" % ("구간 평균" if anchor == "mean" else "구간 시작"), "line": "시작-끝 이어서", "smooth": "떨림 정리"}[mode]
-    return n_j, "%s: 프레임 %d~%d, 본 %d개 (키 %d개 기록)" % (label, a + 1, b + 1, n_j, n_keys)
+    which = ""
+    if chans and set(chans) != set(curves.CHANNELS):
+        which = " · 축 " + ", ".join(curves.LABELS[c].replace("회전 ", "회전").replace("위치 ", "위치") for c in curves.CHANNELS if c in set(chans))
+    return n_j, "%s: 프레임 %d~%d, 본 %d개 (키 %d개 기록)%s" % (label, a + 1, b + 1, n_j, n_keys, which)

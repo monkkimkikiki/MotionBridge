@@ -44,6 +44,9 @@ from .animreftab import AnimRefTab
 from .chrometabs import ChromeTabs
 from ..core import posik
 from .clip_panel import ClipPanel
+from . import theme as _theme
+from .uikit import HelpIcon, Resizable, arrow_button, label_with_help, with_help
+from .help_text import EXTRACT_SEARCH_TIPS
 from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
 
 AXES = ["auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z"]
@@ -69,6 +72,9 @@ class MainWindow(QMainWindow):
         if not isinstance(self.cfg.get("collapsed"), dict):
             self.cfg["collapsed"] = {}
         CollapsibleBox.bind(self.cfg["collapsed"], lambda: bridge.save_config(self.cfg))   # 섹션 접힘 상태 기억
+        if not isinstance(self.cfg.get("sizes"), dict):
+            self.cfg["sizes"] = {}
+        Resizable.bind(self.cfg["sizes"], lambda: bridge.save_config(self.cfg))             # 끌어서 바꾼 상자 높이 기억
         self.pr.blender = self.cfg.get("blender")
         self.vd: Optional[ViewData] = None
         self._worker: Optional[Worker] = None
@@ -219,6 +225,8 @@ class MainWindow(QMainWindow):
         spec += [("보기", k, n, a, sc) for k, n, a, sc in mesh_items]
         spec += [
             ("보기", "mesh_cycle", "메시 보기 방식 순환", "mesh_cycle", ("M",)),
+            ("보기", "theme", "밝은 / 어두운 테마 전환", "toggle_theme", ("Ctrl+Shift+T",)),
+            ("보기", "clip_panel", "왼쪽 모션 목록 접기/펴기", "toggle_clip_panel", ("Ctrl+B",)),
             ("보기", "wheel_lock", "슬라이더 휠 잠금 켜기/끄기 (파란 선이 휠로 안 바뀜)", "toggle_wheel_lock", ("Ctrl+L",)),
             ("탭", "tab0", "0. 게임에서 추출", "goto_tab:0", ("Ctrl+1",)),
             ("탭", "tab1", "1. 파일·매핑", "goto_tab:1", ("Ctrl+2",)),
@@ -443,7 +451,18 @@ class MainWindow(QMainWindow):
         mv_ = getattr(left, "splitterMoved", None)
         if mv_ is not None and hasattr(mv_, "connect"):
             mv_.connect(self._left_split_moved)
-        split.addWidget(left)
+        # 왼쪽 모션 목록 접기/펴기 화살표 (얇은 세로 막대)
+        left_wrap = QWidget()
+        lw = QHBoxLayout(left_wrap)
+        lw.setContentsMargins(0, 0, 0, 0)
+        lw.setSpacing(0)
+        self.btn_clip_fold = arrow_button("\u25c0", "모션 목록 접기 / 펴기 (Ctrl+B)")
+        self.btn_clip_fold.clicked.connect(lambda *_: self.toggle_clip_panel())
+        lw.addWidget(self.btn_clip_fold)
+        lw.addWidget(left, 1)
+        split.addWidget(left_wrap)
+        if self.cfg.get("clip_panel_hidden"):
+            QTimer.singleShot(0, lambda: self.set_clip_panel_visible(False))
 
         right = QWidget()
         self.right_box = right
@@ -618,14 +637,35 @@ class MainWindow(QMainWindow):
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
         bl.addWidget(self.btn_bone_reset)
+        self.btn_place_reset = QPushButton("배치 초기화")
+        self.btn_place_reset.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
+        self.btn_place_reset.clicked.connect(self._place_reset)
+        bl.addWidget(self.btn_place_reset)
+        bl.addWidget(HelpIcon("배치 초기화 ≠ 본 초기화\n"
+                              "· 이 본 초기화: 고른 '본 하나'를 손본 것(회전·위치·크기, 레이어 키)을 되돌립니다.\n"
+                              "· 배치 초기화: 모션 '전체'를 바닥에서 옮기거나 돌린 값(Shift+드래그 이동, Ctrl+드래그 회전, 루트 회전)을 0으로 되돌립니다.\n"
+                              "본 수정은 그대로 두고 자리/방향만 처음으로 돌리고 싶을 때 씁니다."))
         rl.addLayout(bl)
         self.bone_tree = QTreeWidget()
         self.bone_tree.setHeaderHidden(True)
-        self.bone_tree.setMaximumHeight(170)
+        self.bone_tree.setMinimumHeight(60)
         self.bone_tree.setToolTip("몸 부위(파츠) 목록입니다. 클릭하면 그 본이 선택되고, 뷰포트에서 노란 원으로 표시돼요. ● 는 회전 보정이 걸린 본.")
         self.bone_tree.itemClicked.connect(self._bone_tree_clicked)
         self.bone_tree.hide()
-        rl.addWidget(self.bone_tree)
+        # 파츠 목록: 제목 줄의 ▼/▶ 로 접고 펴고, 아래 손잡이로 높이를 조절
+        self.bone_tree_box = QWidget()
+        btl = QVBoxLayout(self.bone_tree_box)
+        btl.setContentsMargins(0, 0, 0, 0)
+        btl.setSpacing(0)
+        self.btn_tree_fold = QPushButton("\u25bc 파츠 목록")
+        self.btn_tree_fold.setFlat(True)
+        self.btn_tree_fold.setToolTip("눌러서 파츠 목록을 접거나 폅니다")
+        self.btn_tree_fold.setStyleSheet("QPushButton{text-align:left;font-weight:700;border:none;padding:2px 4px}")
+        self.btn_tree_fold.clicked.connect(lambda *_a: self._set_tree_open(not bool(self.cfg.get("bone_tree_open", True))))
+        btl.addWidget(self.btn_tree_fold)
+        btl.addWidget(Resizable(self.bone_tree, "bone_tree_h", 60))
+        self.bone_tree_box.setVisible(False)
+        rl.addWidget(self.bone_tree_box)
         self.viewport.bone_picked.connect(self._bone_picked)
         self.viewport.bone_ctrl_clicked.connect(self._bone_ctrl_clicked)
         self.viewport.bone_dragged.connect(self._bone_dragged)
@@ -643,10 +683,6 @@ class MainWindow(QMainWindow):
         self.place_label = QLabel("")
         self.place_label.setStyleSheet("color:#8a93a6")
         pl.addWidget(self.place_label, 1)
-        b = QPushButton("배치 초기화")
-        b.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
-        b.clicked.connect(self._place_reset)
-        pl.addWidget(b)
         rl.addLayout(pl)
         self.viewport.placement_dragged.connect(self._placement_dragged)
         tl = QHBoxLayout()
@@ -734,6 +770,32 @@ class MainWindow(QMainWindow):
         a, b = self.vsplit.sizes()[:2]
         if a + b > 0 and b > 0:
             self.cfg["vsplit_bottom"] = round(min(max(b / (a + b), 0.10), 0.85), 3)
+
+    def set_clip_panel_visible(self, on: bool) -> None:
+        cp = getattr(self, "clip_panel", None)
+        if cp is None:
+            return
+        cp.setVisible(bool(on))
+        try:
+            self.btn_clip_fold.setText("\u25c0" if on else "\u25b6")
+        except Exception:  # noqa: BLE001
+            pass
+        self.cfg["clip_panel_hidden"] = (not on)
+        bridge.save_config(self.cfg)
+
+    def toggle_clip_panel(self) -> None:
+        cp = getattr(self, "clip_panel", None)
+        if cp is None:
+            return
+        vis = self.cfg.get("clip_panel_hidden")       # 숨겨져 있으면 펴고, 아니면 접는다
+        self.set_clip_panel_visible(bool(vis))
+
+    def toggle_theme(self) -> None:
+        new = "light" if _theme.mode() == "dark" else "dark"
+        _theme.apply_theme(QApplication.instance(), new)
+        self.cfg["theme"] = new
+        bridge.save_config(self.cfg)
+        self.statusBar().showMessage("밝은 테마" if new == "light" else "어두운 테마")
 
     def _left_split_moved(self, *_a) -> None:
         a = self._left_split.sizes()[0]
@@ -830,6 +892,7 @@ class MainWindow(QMainWindow):
             self.ex_kind.addItem(label, key)
         self.ex_kind.currentIndexChanged.connect(self._kind_changed)
         h.addWidget(self.ex_kind, 1)
+        h.addWidget(HelpIcon(EXTRACT_SEARCH_TIPS))
         v.addLayout(h)
 
         self.mesh_opts = QWidget()
@@ -878,13 +941,15 @@ class MainWindow(QMainWindow):
         b = QPushButton("검색")
         b.clicked.connect(self._search_anims)
         h.addWidget(b)
+        h.addWidget(HelpIcon("에셋 경로에서 찾을 글자입니다 (정규식 가능). 쉼표로 나누면 모두 들어간 것만 찾습니다.\n"
+                             "어떤 글자로 찾으면 좋은지는 '종류' 줄 오른쪽 ? 를 보세요."))
         v.addLayout(h)
         self.ex_list = PathTree(strip_ext=True)  # 폴더 구조대로 접고 펼치는 트리
-        self.ex_list.setMinimumHeight(220)
+        self.ex_list.setMinimumHeight(110)
         self.ex_list.itemSelectionChanged.connect(self._update_ex_count)
         self.ex_list.enable_asset_drag(lambda: "anim" if self.ex_kind.currentData() == "anim" else "mesh")  # 뷰포트로 끌어다 놓으면 바로 추출해 연다
         self.ex_list.setToolTip("파일을 골라 오른쪽 뷰포트로 끌어다 놓으면 바로 추출해서 엽니다")
-        v.addWidget(self.ex_list)
+        v.addWidget(Resizable(self.ex_list, "ex_list_h", 110))
         self.ex_count = QLabel("")
         self.ex_count.setWordWrap(True)
         v.addWidget(self.ex_count)
@@ -939,9 +1004,9 @@ class MainWindow(QMainWindow):
         v.addWidget(self.ex_dir_label)
         self.ex_files = PathTree(tag_kinds=True)  # [모델링 · 리깅 포함] / [애니메이션] 같은 이름표를 붙인다
         self.ex_files.on_set = self.note_extracted  # 추출하면 그 폴더를 기억 -> 모델/모션 열기 창이 거기서 시작
-        self.ex_files.setMinimumHeight(130)
+        self.ex_files.setMinimumHeight(60)
         self.ex_files.itemDoubleClicked.connect(self._ex_files_double_clicked)
-        v.addWidget(self.ex_files)
+        v.addWidget(Resizable(self.ex_files, "ex_files_h", 60))
         h = QHBoxLayout()
         b = QPushButton("선택 항목 위치 열기")
         b.setToolTip("선택한 파일/폴더가 있는 폴더를 탐색기로 엽니다 (아무것도 안 골랐으면 출력 폴더)")
@@ -966,10 +1031,14 @@ class MainWindow(QMainWindow):
         b.setToolTip("게임에서 뽑은 메시(GLB)를 타깃(내 모델) 자리에 불러옵니다. 소스 모션과 같은 캐릭터면 그대로 확인할 수 있습니다.")
         b.clicked.connect(self._open_extracted_as_target)
         v.addWidget(b)
-        self.btn_convert = QPushButton("선택한 메시(PSK/PSKX/GLB)를 위 형식으로 변환")
+        self.btn_convert = QPushButton("이미 뽑은 메시를 FBX/OBJ/GLB 로 변환")
         self.btn_convert.setToolTip("3) 에서 고른 형식/리깅/대상 프로그램 설정으로 변환합니다. 이미 뽑아 둔 PSKX 도 변환할 수 있습니다.")
         self.btn_convert.clicked.connect(self._convert_selected_meshes)
-        v.addWidget(self.btn_convert)
+        v.addWidget(with_help(self.btn_convert,
+                              "왜 있나요?  '3) 에셋 찾기 / 추출'에서 메시를 뽑을 때는 그 자리에서 곧바로 FBX/OBJ/GLB 로 변환되어 저장됩니다.\n"
+                              "이 버튼은 그때 변환하지 않고 PSK/PSKX(언리얼 원본 형식)로만 뽑아 두었거나, 다른 때 받아 둔 메시를 나중에 3ds Max·Maya 용으로 바꾸고 싶을 때 씁니다.\n"
+                              "위 목록에서 메시 파일을 고르고 누르면, 3) 에서 정해 둔 형식·리깅·대상 프로그램으로 변환합니다.\n"
+                              "그런 경우가 없다면 쓰지 않아도 됩니다."))
         lay.addWidget(g)
         self.ex_out.textChanged.connect(self._update_dir_label)
         self._update_dir_label()
@@ -1550,16 +1619,20 @@ class MainWindow(QMainWindow):
         self.warn_label.setStyleSheet("color:#e0a050")
         lay.addWidget(self.warn_label)
 
-        g = CollapsibleBox("크기 · 위치 · 방향")
+        g = CollapsibleBox("모션 맞춤 — 크기 · 위치 · 방향 (소스 모션을 내 모델에 맞춤)")
         f = QFormLayout(g)
+        f.addRow(with_help(QLabel("여기서 바꾸는 것은 '리타겟 결과'입니다. 원본 파일(소스 모션·내 모델)은 건드리지 않습니다."),
+                           "이 칸들은 소스(원본) 모션을 내 모델에 입힐 때 크기·위치·방향을 어떻게 맞출지 정합니다.\n"
+                           "· 원본 모션 파일과 내 모델 파일은 바뀌지 않고, 결과(미리보기·내보내기)에만 적용됩니다.\n"
+                           "· 모델의 크기를 바꾸는 것이 아니라, 모션의 이동 거리·발 위치를 모델 크기에 맞추는 것입니다."))
         f.addRow(self._chk("auto_scale", "자동 스케일 (다리 길이 기준)", "소스 대비 타깃의 체형 비율로 이동량을 맞춥니다"))
-        f.addRow("스케일 배율", self._num("scale_mult", 0.05, 5.0, 0.01, 2, tip="자동 스케일에 곱하는 값. 보폭/이동 거리를 키우거나 줄입니다"))
+        f.addRow("모션 크기 배율", self._num("scale_mult", 0.05, 5.0, 0.01, 2, tip="자동 스케일에 곱하는 값. 보폭/이동 거리를 키우거나 줄입니다"))
         self.scale_basis = QComboBox()
         for key, text in scalefit.BASES:
             self.scale_basis.addItem(text, key)
         self.scale_basis.setToolTip("모션 크기를 모델에 맞출 때 무엇의 비율을 기준으로 할지.\n골반 높이=걸음 폭/접지에 가장 안정적, 전체 키=겉보기 크기, 다리 길이=보폭 기준")
         self.btn_fit_scale = QPushButton("모델에 맞춰 스케일 자동 맞춤")
-        self.btn_fit_scale.setToolTip("소스 모션과 타깃 모델의 크기를 재서, 모션 스케일이 모델에 맞도록 '스케일 배율'을 자동으로 정합니다.")
+        self.btn_fit_scale.setToolTip("소스 모션과 타깃 모델의 크기를 재서, 모션 스케일이 모델에 맞도록 '모션 크기 배율'을 자동으로 정합니다.")
         self.btn_fit_scale.clicked.connect(lambda *_a: self.fit_scale())
         row = QHBoxLayout()
         row.addWidget(self.scale_basis, 1)
@@ -1569,21 +1642,21 @@ class MainWindow(QMainWindow):
         self.scale_note.setWordWrap(True)
         f.addRow(self.scale_note)
         self.manual_scale = self._num("manual_scale", 0.0001, 1000.0, 0.0001, 4, slider=False, tip="자동 스케일을 끄면 이 값을 씁니다")
-        f.addRow("수동 스케일", self.manual_scale)
+        f.addRow("수동 크기 배율", self.manual_scale)
         self.hip_fields = []
-        for i, lab in enumerate(("골반 좌우(X)", "골반 높이(Y)", "골반 앞뒤(Z)")):
+        for i, lab in enumerate(("골반 위치 보정 좌우(X)", "골반 위치 보정 높이(Y)", "골반 위치 보정 앞뒤(Z)")):
             nf = NumField(-100, 100, 0.1, 0.0, 2, slider=True)
             nf.changed.connect(lambda v, ax=i: self._hip_changed(ax, v))
             self.hip_fields.append(nf)
             f.addRow(lab, nf)
         self.place_fields = []
-        for i, lab in enumerate(("배치 이동 좌우(X)", "배치 이동 앞뒤(Z)")):
+        for i, lab in enumerate(("모션 놓을 자리 좌우(X)", "모션 놓을 자리 앞뒤(Z)")):
             nf = NumField(-100, 100, 0.1, 0.0, 2, slider=True)
             nf.setToolTip("모션 전체(골반과 발)를 바닥 위에서 옮깁니다. 뷰포트에서 Shift+드래그로도 조절됩니다")
             nf.changed.connect(lambda v, ax=i: self._place_changed(ax, v))
             self.place_fields.append(nf)
             f.addRow(lab, nf)
-        f.addRow("루트 회전(Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
+        f.addRow("모션 전체 회전 (루트 Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
         f.addRow(self._chk("transfer_root_motion", "제자리(인플레이스) — 수평 이동 제거", "체크하면 캐릭터가 앞으로 나아가지 않고 제자리에서 움직입니다", invert=True))
         f.addRow(self._chk("same_rig", "같은 스켈레톤이면 본 이름대로 그대로 적용 (사람 모양이 아닌 캐릭터)", "몬스터처럼 사람 본(골반·팔·다리)이 아닌 캐릭터는 사람 기준 매핑·좌표축 추정이 엉뚱하게 돌아갑니다. 소스 모션과 타깃 메시가 같은 스켈레톤(본 이름·계층·모양이 같음)이면 그 추정을 건너뛰고 본 이름대로 1:1 로 적용합니다. 꺼 두면 항상 사람 기준 리타겟을 씁니다."))
         f.addRow(self._chk("start_at_origin", "시작 위치를 모델 원점에 맞춤", "게임 모션은 월드 좌표에서 시작하는 경우가 많습니다. 켜면 첫 프레임의 수평 위치를 모델이 서 있는 자리로 옮기고 이동량만 따라갑니다. 끄면 원본 절대 위치를 그대로 씁니다."))
@@ -1644,9 +1717,14 @@ class MainWindow(QMainWindow):
         self.ik_panel = IKRangePanel(self)
         lay.addWidget(self.ik_panel)
 
-        g = CollapsibleBox("좌표축 (자동 인식이 틀릴 때만)")
+        g = CollapsibleBox("방향 맞추기 — 위쪽 · 앞쪽 (자동 인식이 틀릴 때만)")
         f = QFormLayout(g)
-        for key, lab in (("src_up", "소스 상방"), ("src_fwd", "소스 전방"), ("tgt_up", "타깃 상방"), ("tgt_fwd", "타깃 전방")):
+        f.addRow(with_help(QLabel("모션이 옆으로 눕거나 뒤돌아 있을 때만 손대세요."),
+                           "프로그램마다 '위'와 '앞'이 되는 축이 다릅니다 (3ds Max·언리얼은 Z가 위, Maya·Blender 일부는 Y가 위).\n"
+                           "그래서 원본 모션과 내 모델이 각각 '어느 축이 위쪽이고 어느 축이 앞쪽인지'를 알아야 방향을 맞춰 입힐 수 있습니다.\n"
+                           "보통은 자동 인식이 맞으니 건드리지 않아도 됩니다. 캐릭터가 누워 있거나 뒤돌아 있거나 옆으로 걸으면 아래 [소스 빠른 수정] 버튼부터 눌러 보세요.\n"
+                           "· 위쪽 방향: 머리가 향하는 쪽\n· 앞 방향: 얼굴/가슴이 향하는 쪽"))
+        for key, lab in (("src_up", "원본 모션의 위쪽"), ("src_fwd", "원본 모션의 앞쪽"), ("tgt_up", "내 모델의 위쪽"), ("tgt_fwd", "내 모델의 앞쪽")):
             cb = QComboBox()
             for a in AXES:
                 cb.addItem(AXIS_LABEL.get(a, a), a)
@@ -1657,19 +1735,22 @@ class MainWindow(QMainWindow):
         self.axis_notes = {}
         for side, title in (("src", "소스"), ("tgt", "타깃")):
             row = QHBoxLayout()
-            for op, text, tip in (("yaw90", "↻ 90° 돌리기", "위를 축으로 앞 방향을 90° 돌립니다 (옆을 보고 있을 때). 여러 번 누르면 계속 돌아요."),
+            # 타깃은 빠른 수정 버튼(돌리기·눕히기)을 두지 않는다: 타깃은 '내 모델이 원래 어느 방향으로 서 있는지'를 읽는 값이라, 눌러서 바꾸면
+            # 오히려 멀쩡한 모델이 누워 보였다 (눕히기/세우기). 틀렸을 때는 위의 상방/전방 선택으로 직접 고르거나 [자동]으로 되돌린다.
+            ops = (("yaw90", "↻ 90° 돌리기", "위를 축으로 앞 방향을 90° 돌립니다 (옆을 보고 있을 때). 여러 번 누르면 계속 돌아요."),
                                   ("yaw180", "↔ 앞뒤 반전", "앞과 뒤를 바꿉니다 (뒤돌아 있을 때)"),
                                   ("flip_up", "⇅ 위아래 반전", "위와 아래를 바꿉니다 (거꾸로 서 있을 때)"),
-                                  ("pitch90", "⤴ 눕히기/세우기 90°", "좌우 축 기준으로 90° 굴립니다 (Z-up 모델이 누워 보일 때)")):
+                                  ("pitch90", "⤴ 눕히기/세우기 90°", "좌우 축 기준으로 90° 굴립니다 (Z-up 모델이 누워 보일 때)"))
+            for op, text, tip in (ops if side == "src" else ()):
                 b = QPushButton(text)
                 b.setToolTip(title + ": " + tip)
                 b.clicked.connect(lambda *_a, sd=side, o=op: self.axis_quick(sd, o))
                 row.addWidget(b)
-            b = QPushButton("자동")
-            b.setToolTip("자동 인식으로 되돌립니다")
+            b = QPushButton("자동" if side == "src" else "자동으로 되돌리기")
+            b.setToolTip("자동 인식으로 되돌립니다" + ("" if side == "src" else " (타깃이 이상하게 서 있거나 누워 보일 때 먼저 눌러 보세요)"))
             b.clicked.connect(lambda *_a, sd=side: self.axis_quick(sd, "auto"))
             row.addWidget(b)
-            f.addRow(title + " 빠른 수정", row)
+            f.addRow(("원본 모션 빠른 수정" if side == "src" else "내 모델 방향"), row)
             lb = QLabel("")
             lb.setWordWrap(True)
             lb.setTextFormat(Qt.TextFormat.RichText)
@@ -2329,7 +2410,7 @@ class MainWindow(QMainWindow):
             if res is not None:
                 desc = (res.frame_src if side == "src" else res.frame_tgt)[1]
                 manual = getattr(st, side + "_up") != "auto" and getattr(st, side + "_fwd") != "auto"
-                parts.append("<b>%s</b> 적용 축: %s%s" % ("소스" if side == "src" else "타깃", desc, "" if manual else " (자동)"))
+                parts.append("<b>%s</b> 적용 축: %s%s" % ("원본 모션" if side == "src" else "내 모델", desc, "" if manual else " (자동)"))
             if getattr(st, side + "_up") == "auto" or getattr(st, side + "_fwd") == "auto":
                 slots = self.pr.src_slots if side == "src" else self.pr.tgt_slots
                 for n in diagnose_frame(m.skeleton, slots):
@@ -2578,6 +2659,18 @@ class MainWindow(QMainWindow):
                 self.cb_bone_edit.setChecked(True)
             self.statusBar().showMessage("오토키 켜짐 — 본을 고치면 지금 프레임에 키가 찍힙니다 (K = 고른 본에 지금 값으로 키)")
 
+    def _set_tree_open(self, on: bool) -> None:
+        self.cfg["bone_tree_open"] = bool(on)
+        self.bone_tree.setVisible(bool(on) and self.cb_bone_edit.isChecked())
+        try:
+            self.btn_tree_fold.setText(("\u25bc" if on else "\u25b6") + " 파츠 목록")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            bridge.save_config(self.cfg)
+        except Exception:  # noqa: BLE001
+            pass
+
     # ---- 뷰포트 본 편집 (파츠 목록 / 클릭 선택 / 끌어서 회전)
     def _bone_edit_toggled(self, on: bool) -> None:
         try:
@@ -2585,7 +2678,8 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         self.viewport.bone_edit = bool(on)
-        self.bone_tree.setVisible(bool(on))
+        self.bone_tree_box.setVisible(bool(on))
+        self.bone_tree.setVisible(bool(on) and bool(self.cfg.get("bone_tree_open", True)))
         self._bone_sig = None
         self._maybe_refresh_bone_ui()
         self.viewport.update()
@@ -3292,7 +3386,11 @@ class MainWindow(QMainWindow):
         self.run_async(job, done, "내보내는 중")
 
 
-def _dark_palette(app: QApplication) -> None:
+def _dark_palette(app: QApplication, mode: str = "dark") -> None:
+    _theme.apply_theme(app, mode)
+
+
+def _old_dark_palette(app: QApplication) -> None:   # 예전 구현 (참고용, 쓰지 않음)
     app.setStyle("Fusion")
     p = QPalette()
     p.setColor(QPalette.ColorRole.Window, QColor(38, 41, 48))
@@ -3314,7 +3412,10 @@ def run_gui(handoff: str = "") -> int:
         return 0
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("MotionBridge")
-    _dark_palette(app)
+    try:
+        _dark_palette(app, str(bridge.load_config().get("theme", "dark")))
+    except Exception:  # noqa: BLE001
+        _dark_palette(app)
     w = MainWindow()
     w.resize(1600, 920)
     w.show()

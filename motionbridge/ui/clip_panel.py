@@ -108,13 +108,17 @@ class ClipPanel(QWidget):
             self._checked &= alive                       # 지워졌거나 새로 연 소스의 옛 체크는 버린다
             self._set_count(len(anims))
             cur = self.src.currentData()
-            self.src.clear()
-            for i, a in enumerate(anims):
-                if i != pr.clip:
-                    self.src.addItem("%d. %s%s" % (i + 1, a.name, "" if pr.settings_of(i) is not None else "  (아직 손대지 않음)"), i)
-            j = self.src.findData(cur) if cur is not None else -1
-            if j >= 0:
-                self.src.setCurrentIndex(j)
+            entries = [("%d. %s%s" % (i + 1, a.name, "" if pr.settings_of(i) is not None else "  (아직 손대지 않음)"), i)
+                       for i, a in enumerate(anims) if i != pr.clip]
+            have = [(self.src.itemText(k), self.src.itemData(k)) for k in range(self.src.count())]
+            if have != entries:
+                # 내용이 같으면 건드리지 않는다: 사용자가 상자를 눌러 목록을 펼친 사이에 재계산이 끝나 clear() 하면 펼친 목록이 비어 버렸다
+                self.src.clear()
+                for text, i in entries:
+                    self.src.addItem(text, i)
+                j = self.src.findData(cur) if cur is not None else -1
+                if j >= 0:
+                    self.src.setCurrentIndex(j)
             self.b_rm.setEnabled(bool(anims))
             self.b_all.setEnabled(bool(anims))
             self.b_none.setEnabled(bool(self._checked))
