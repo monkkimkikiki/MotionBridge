@@ -5,3 +5,5 @@ opencv-python-headless>=4.8  # AnimRef 탭 (영상 읽기). headless: Qt 플러�
 Pillow>=10.0
 obsws-python>=1.7  # AnimRef: OBS 녹화 연동
 pynput>=1.7.6  # AnimRef: 전역 단축키
+
+UnityPy>=1.25,<2  # Unity asset bundle and serialized-file adapter
