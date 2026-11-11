@@ -45,6 +45,7 @@ from .chrometabs import ChromeTabs
 from ..core import posik
 from .clip_panel import ClipPanel
 from . import theme as _theme
+from .unity_tab import UnityExtractTab
 from .uikit import HelpIcon, Resizable, arrow_button, label_with_help, with_help
 from .help_text import EXTRACT_SEARCH_TIPS
 from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
@@ -417,6 +418,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = ChromeTabs()  # 크롬식 탭 줄: 누르면 전환 · 끌어내면 별도 창 · 다른 창 탭 줄에 놓으면 합쳐짐
         self.tabs.addTab(self._tab_extract(), "추출", "0. 게임에서 추출")
+        self.unity_tab = UnityExtractTab(self)
+        self.tabs.addTab(self.unity_tab, "Unity", "Unity 에셋 추출")
         self.tabs.addTab(self._tab_files(), "파일·매핑", "1. 파일·매핑")
         self.tabs.addTab(self._tab_retarget(), "리타겟", "2. 리타겟 조절")
         self.tabs.addTab(self._tab_quality(), "검수", "3. 품질 검수")
