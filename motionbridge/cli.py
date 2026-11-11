@@ -344,6 +344,10 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--kind", choices=["anim", "mesh"], default="anim")
     u.add_argument("--format", choices=["glb", "psk"], default="glb")
     u.add_argument("--textures", action="store_true")
+    u.add_argument("--to", nargs="+", choices=["fbx", "obj", "glb"])
+    u.add_argument("--rig", choices=["both", "rigged", "static"], default="both")
+    u.add_argument("--target", choices=sorted(PRESETS), default="max")
+    u.add_argument("--blender")
     u.set_defaults(fn=cmd_universal)
 
     ad = sub.add_parser("adapters", help="설치된 게임 추출 어댑터 목록")
