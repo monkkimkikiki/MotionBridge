@@ -242,10 +242,11 @@ def cmd_universal(args) -> int:
         _p("이 어댑터는 export 기능을 제공하지 않습니다.")
         return 2
     ids = set(args.ids) if args.ids else {int(r["path_id"]) for r in records[:args.limit] if "path_id" in r}
+    export_ids = ids if engine == "unity" or ids else None
     if engine == "unity":
-        made = adapter.export(args.game, args.out, path_ids=ids, on_event=on_event, bundle_key=args.bundle_key)
+        made = adapter.export(args.game, args.out, path_ids=export_ids, on_event=on_event, bundle_key=args.bundle_key)
     else:
-        made = adapter.export(args.game, args.out, path_ids=ids, aes=args.aes, mapping=args.mapping, bundle_key=args.bundle_key,
+        made = adapter.export(args.game, args.out, path_ids=export_ids, aes=args.aes, mapping=args.mapping, bundle_key=args.bundle_key,
                               on_event=on_event)
     _p("완료: 파일 %d개 -> %s" % (len(made), args.out))
     return 0
