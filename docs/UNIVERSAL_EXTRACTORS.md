@@ -5,7 +5,7 @@
 | Adapter | Detection | Listing | Export |
 |---|---|---|---|
 | Unreal | Existing .pak / .utoc scanner | Existing CUE4Parse helper | Existing PSA / PSK / GLB paths |
-| Unity | UnityPlayer.dll, GameAssembly.dll, global managers, *_Data folder | UnityPy object catalog | OBJ, PNG, WAV, TTF/OTF, TextAsset, raw AnimationClip payload + metadata |
+| Unity | UnityPlayer.dll, GameAssembly.dll, global managers, *_Data folder | UnityPy object catalog | OBJ, PNG, WAV, TTF/OTF, TextAsset, raw AnimationClip payload + typetree JSON |
 | Custom engines | Plug-in entry point | Adapter-defined | Adapter-defined |
 
 This is an extensible adapter framework, not a claim that every commercial game's private format is universally readable. A custom engine requires a parser for its container, compression, serialization, and asset schema.
@@ -38,7 +38,7 @@ Publish a Python package with this entry point:
 
 The factory returns an object with:
 - description: str (optional)
-- detect(root: str) -> bool
+- detect(root: str) -> bool (optional; used for auto-detection)
 - scan(root: str, aes=None, mapping=None, bundle_key=None, on_event=None) -> list[dict]
 - export(root: str, out_dir: str, **options) -> list[str] (options may include aes, mapping, bundle_key, path_ids, on_event)
 
@@ -50,7 +50,7 @@ AES keys and mapping files are format-specific inputs, not universal decryption 
 
 ## Known limitations
 
-- Unity Mesh exports are OBJ and do not preserve a complete skinned rig.
+- Unity Mesh exports are OBJ and do not preserve a complete skinned rig. The renderer export path is documented by UnityPy as alpha-version.
 - Unity AnimationClip data is preserved as a raw serialized payload with a metadata sidecar; it is not yet decoded to FBX/PSA or retarget-ready motion.
 - Unity games that wrap assets in unsupported custom encryption/compression need a dedicated adapter.
 - Detection is heuristic. Use --engine unity or an installed adapter name when auto-detection is inconclusive.
