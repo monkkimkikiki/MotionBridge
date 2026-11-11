@@ -31,6 +31,25 @@ packaging\build_windows.bat
 GitHub 에 올리면 `.github/workflows/build-windows.yml` 이 같은 일을 자동으로 합니다.
 설치 마법사 문구는 영어입니다(Inno Setup 기본). 한국어로 바꾸려면 `Korean.isl` 을 구해 `installer.iss` 의 `[Languages]` 에 추가하세요.
 
+## 범용 게임 에셋 추출기 (CLI 1차 지원)
+
+기존 Unreal 추출 경로를 유지하면서 Unity 및 커스텀 엔진 어댑터 구조를 추가했습니다.
+
+- Unreal: 기존 CUE4Parse 기반 추출 경로 유지
+- Unity: UnityPy 기반 에셋 목록 및 지원 객체 추출 (OBJ, PNG, WAV, TTF/OTF, TextAsset, MonoBehaviour/ScriptableObject JSON, AnimationClip 원본/typetree)
+- Custom Engine: Python entry point 플러그인으로 게임별 컨테이너/압축/직렬화 파서를 추가하는 구조
+
+명령 예시:
+
+```powershell
+python -m motionbridge adapters
+python -m motionbridge universal scan --game "D:\Games\Example"
+python -m motionbridge universal list --game "D:\Games\Example" --engine auto
+python -m motionbridge universal export --game "D:\Games\Example" --engine unity --out extracted
+```
+
+Unity 추출기는 현재 CLI 경로로 먼저 제공됩니다. GUI의 게임 추출 탭 통합과 Unity AnimationClip의 FBX/PSA 변환은 후속 작업입니다. 모든 커스텀 엔진이 키/매핑 파일만으로 자동 해독되는 것은 아니며, 게임별 포맷 어댑터가 필요할 수 있습니다. 자세한 계약과 한계는 [Universal Extractors 문서](docs/UNIVERSAL_EXTRACTORS.md)를 참고하세요.
+
 ## 게임에서 추출 (탭 "0. 게임에서 추출")
 
 1. **게임 폴더** 지정 → **검사**: `Content/Paks` 의 `.pak` / `.utoc` 를 읽어 암호화 여부, 형식, 크기를 보여 줍니다(수십 GB 파일은 열지 않고 헤더만 읽음).
