@@ -606,7 +606,8 @@ class MainWindow(QMainWindow):
         self.bone_sel_label.setStyleSheet("color:#ffdc50")
         bl.addWidget(self.bone_sel_label, 1)
         self.btn_bone_reset = QPushButton("이 본 초기화")
-        self.btn_bone_reset.setToolTip("선택한 본의 회전·위치·크기 보정을 모두 처음 상태로 되돌립니다")
+        self.btn_bone_reset.setToolTip("선택한 본의 수정을 처음 상태로 되돌립니다.\n레이어를 고른 상태면 그 레이어에서 이 본의 키를 모두 지우고, '원본' 상태(또는 그 레이어에 키가 없을 때)면 전체 구간 '본별 보정'(회전·위치·크기)을 지웁니다.\n"
+                                        "손·발을 끌어 옮긴 경우 위/아래 팔다리에 기록된 값도 함께 되돌립니다.")
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
         bl.addWidget(self.btn_bone_reset)
@@ -2444,11 +2445,16 @@ class MainWindow(QMainWindow):
         self.schedule()
 
     def _edited(self, j: int) -> bool:
-        return j in self._edited_set()
+        s = self._edited_set()
+        if j in s:
+            return True
+        # 손·발 끝은 옮기면 위/아래 팔다리에 기록된다(IK 방식) -> 그쪽에 수정이 있어도 '이 본 초기화'를 누를 수 있어야 한다
+        ch = posik.end_chain(self.pr.tgt_slots, j) if (self.pr.tgt is not None and j is not None) else None
+        return ch is not None and (ch[0] in s or ch[1] in s)
 
     def _edited_set(self) -> set:
         st = self.pr.settings
-        out = set(st.rot_offsets) | set(st.pos_offsets) | set(st.scale_offsets)
+        out = set(st.rot_offsets) | set(st.pos_offsets) | set(st.scale_offsets) | set(st.ik_offsets)
         ls = self.pr.layers.get(self.pr.clip)
         if ls is not None:
             for lay in ls.layers:
@@ -2751,6 +2757,15 @@ class MainWindow(QMainWindow):
         self.cfg["pos_only"] = bool(on)
         self._ik_drag = None
 
+    def _foot_ik_on(self, end: int) -> bool:
+        """본 end 가 '발 IK 가 실제로 걸리는 다리'의 발인가."""
+        if not self.pr.settings.foot_ik or not self.pr.ready():
+            return False
+        try:
+            return any(c.kind == "foot" and int(c.foot) == int(end) for c in self.pr.chains())
+        except Exception:  # noqa: BLE001
+            return False
+
     def _pos_ik_move(self, j: int, dview) -> bool:
         """손/발 끝을 옮기면 위팔·아래팔(허벅지·정강이)을 돌려 IK 처럼 따라오게 한다 (바이패드식). 해당 안 되면 False — 그 본만 옮기는 기존 방식으로."""
         if self.pr.tgt is None or self.cb_pos_only.isChecked():
@@ -2760,6 +2775,20 @@ class MainWindow(QMainWindow):
         if ch is None or vd is None or vd.tgt_pos is None:
             return False
         up, lo, end, _name = ch
+        if not self.layer_panel.recording() and self._foot_ik_on(end):
+            # '원본' 상태 + 발 IK 가 켜진 다리: 다리 회전 보정으로 넣으면 바로 뒤의 발 IK 가 발을 원래 목표로 되돌린다 -> IK 목표 자체를 옮긴다 (전체 프레임)
+            self.layer_panel.note_base_edit()
+            self.viewport.preview_move(j, dview)
+            st = self.pr.settings
+            new = np.array(st.ik_offsets.get(end, (0.0, 0.0, 0.0)), dtype=float) + np.asarray(dview, dtype=float)
+            if np.max(np.abs(new)) > 1e-9:
+                st.ik_offsets[end] = tuple(float(round(x, 5)) for x in new)
+            else:
+                st.ik_offsets.pop(end, None)
+            self.viewport.edited_joints = self._edited_set()
+            self.btn_bone_reset.setEnabled(self._edited(j))
+            self.schedule_live()
+            return True
         f = min(self.viewport.frame, vd.tgt_pos.shape[0] - 1)
         P = vd.tgt_pos[f]
         if self._ik_drag is None or self._ik_drag[0] != j:
@@ -2846,8 +2875,27 @@ class MainWindow(QMainWindow):
         j = self.viewport.selected_joint
         if j is None:
             return
-        for d in (self.pr.settings.rot_offsets, self.pr.settings.pos_offsets, self.pr.settings.scale_offsets):
-            d.pop(j, None)
+        # 손·발 끝은 옮길 때 위/아래 팔다리 회전으로 기록되므로(IK 방식) 그 두 본도 같이 되돌린다
+        ch = posik.end_chain(self.pr.tgt_slots, j) if self.pr.tgt is not None else None
+        js = [int(j)] + ([int(ch[0]), int(ch[1])] if ch is not None else [])
+        cur = self.layer_panel.layer()
+        n_keys = 0
+        if cur is not None:                       # 레이어를 보고 있으면 먼저 그 레이어의 키를 지운다
+            for b in js:
+                n_keys += len(cur.frames(b))
+                cur.clear_joint(b)
+        n_base = 0
+        if cur is None or n_keys == 0:            # '원본' 상태이거나 이 레이어에 그 본의 키가 없으면 전체 구간 '본별 보정'을 지운다
+            for d in (self.pr.settings.rot_offsets, self.pr.settings.pos_offsets, self.pr.settings.scale_offsets, self.pr.settings.ik_offsets):
+                for b in js:
+                    n_base += 1 if d.pop(b, None) is not None else 0
+        if n_keys:
+            self.statusBar().showMessage("본 초기화: 레이어 '%s' 에서 키 %d개를 지웠습니다" % (cur.name, n_keys))
+        elif n_base:
+            self.statusBar().showMessage("본 초기화: 전체 구간 '본별 보정'을 지웠습니다")
+        else:
+            others = [l.name for l in self.pr.layer_stack().layers if l is not cur and any(l.frames(b) for b in js)]
+            self.statusBar().showMessage(("이 본의 수정은 다른 레이어(%s)에 있습니다 — 그 레이어를 고른 뒤 초기화하세요" % ", ".join(others)) if others else "이 본에는 되돌릴 수정이 없습니다")
         self._fill_joint_combos()
         self.viewport.edited_joints = self._edited_set()
         self._sync_bone_fields(j)
@@ -2858,7 +2906,8 @@ class MainWindow(QMainWindow):
         self.pr.settings.rot_offsets = {}
         self.pr.settings.pos_offsets = {}
         self.pr.settings.scale_offsets = {}
-        self.viewport.edited_joints = set()
+        self.pr.settings.ik_offsets = {}
+        self.viewport.edited_joints = self._edited_set()
         self._fill_joint_combos()
         self.schedule()
 

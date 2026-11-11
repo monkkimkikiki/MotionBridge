@@ -485,7 +485,7 @@ def test_full_flow():
         assert cv.msg and not lp.stack().total_keys() == 0, "원본 상태에서는 키를 못 만들고 이유를 알려 준다"
         mw.pr.layers = {}
         mw.recompute()
-        # 한 프레임만 고치면 앞뒤로 서서히 원래 값으로 돌아간다 (맥스 바이패드 레이어처럼). 레이어가 골라져 있으면 기록 체크 없이도 레이어 키, 원본 상태면 본별 보정
+        # 한 프레임만 고치면 모션 전체가 그만큼 바뀐다 (맥스 레이어처럼, 퍼짐 0 이 기본). 퍼짐을 주면 앞뒤로 서서히 원래 값. 레이어가 골라져 있으면 기록 체크 없이도 레이어 키, 원본 상태면 본별 보정
         mw.pr.layers = {}
         mw.pr.settings.rot_offsets.clear()
         mw.recompute()
@@ -503,13 +503,34 @@ def test_full_flow():
         mw.recompute()
         ch = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt]))
         assert ch[fm] > 20, ch[fm]
+        assert lp.layer().fade == 0 and all(abs(ch[f] - ch[fm]) < 1e-6 for f in range(Tn)), "키 하나만 고쳐도 전체 프레임이 같은 만큼 바뀜 (중간에 원본으로 안 돌아감)"
+        lp.fade.set_value(8.0)
+        lp._fade_changed(8.0)
+        mw.recompute()
+        ch = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt]))
         far = [f for f in range(Tn) if abs(f - fm) >= 9]
-        assert far and all(ch[f] < 1e-6 for f in far), "퍼짐 구간 밖은 원래 각도"
+        assert far and all(ch[f] < 1e-6 for f in far), "퍼짐을 주면 그 구간 밖은 원래 각도"
         lp.fade.set_value(0.0)
         lp._fade_changed(0.0)
         mw.recompute()
         ch0 = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt]))
         assert all(abs(ch0[f] - ch0[fm]) < 1e-6 for f in range(Tn)), "퍼짐 0 이면 끝 키 값을 계속 유지"
+        # '원본 키'를 찍으면 그 키부터 원본
+        f_o = min(fm + 10, Tn - 1)
+        mw.frame_slider.setValue(f_o)
+        mw.viewport.frame = f_o
+        lp.key_original()
+        mw.recompute()
+        ch1 = np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt]))
+        assert ch1[fm] > 20 and ch1[0] > 20 and all(ch1[f] < 1e-6 for f in range(f_o, Tn)), "원본 키 뒤는 원본, 앞은 수정 유지"
+        mw.frame_slider.setValue(fm)
+        mw.viewport.frame = fm
+        # 레이어에서 '이 본 초기화': 그 레이어의 이 본 키가 지워진다
+        mw._select_bone(jt)
+        assert mw.btn_bone_reset.isEnabled()
+        mw._bone_reset_selected()
+        mw.recompute()
+        assert not lp.layer().frames(jt) and np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt])).max() < 1e-6, "레이어에서 본 초기화"
         lp._row_changed(0)                                        # 원본 상태: 본 편집은 전체 구간 보정으로
         mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(10.0)))
         assert jt in mw.pr.settings.rot_offsets and not lp.recording()
@@ -562,6 +583,28 @@ def test_full_flow():
         assert np.linalg.norm(P1[end_] - (P0[end_] + d_)) < 0.02 * (len1 + len2), "발이 끈 곳으로 따라옴"
         assert abs(np.linalg.norm(P1[up_] - P1[lo_]) - len1) < 1e-4 * (1 + len1) and abs(np.linalg.norm(P1[lo_] - P1[end_]) - len2) < 1e-4 * (1 + len2), "뼈 길이 유지"
         assert lay_.layer().frames(up_) == [6] and lay_.layer().frames(lo_) == [6] and not lay_.layer().frames(foot), "위/가운데 본 회전 키, 발 위치 키는 없음"
+        # 레이어에서 발(끝 본) 초기화: 실제 키가 찍힌 허벅지·정강이까지 지워진다
+        mw._select_bone(foot)
+        assert mw.btn_bone_reset.isEnabled(), "발 자체에 키가 없어도(위/아래 다리에 기록) 초기화 버튼이 켜짐"
+        mw._bone_reset_selected()
+        mw.recompute()
+        assert lay_.layer().n_keys() == 0 and np.abs(np.array(mw.vd.tgt_pos[6]) - P0).max() < 1e-6, "레이어에서 발 초기화"
+        # '원본' 상태 + 발 IK: 발을 옮기면 IK 목표가 옮겨져 전체 프레임에서 그대로 따라온다 (예전엔 발 IK 가 되돌려서 0)
+        mw.pr.layers = {}
+        mw.recompute()
+        assert mw.pr.settings.foot_ik and not lay_.recording()
+        Pa = np.array(mw.vd.tgt_pos, dtype=float)
+        dv_ = np.array([0.02, 0.03, 0.0])
+        mw._bone_drag_started()
+        mw._bone_moved(foot, dv_)
+        mw.recompute()
+        Pb = np.array(mw.vd.tgt_pos, dtype=float)
+        assert np.abs((Pb[:, foot] - Pa[:, foot]) - dv_).max() < 1e-4, "원본 상태에서 발 위치 이동이 전체 프레임에 먹힘: %s" % np.abs((Pb[:, foot] - Pa[:, foot]) - dv_).max()
+        assert mw.pr.settings.ik_offsets and not mw.pr.settings.rot_offsets, "발 IK 목표 이동으로 기록"
+        mw._select_bone(foot)
+        mw._bone_reset_selected()
+        mw.recompute()
+        assert not mw.pr.settings.ik_offsets and np.abs(np.array(mw.vd.tgt_pos) - Pa).max() < 1e-6, "원본 상태에서 발 초기화"
         # 이 본만 움직이기: 발에 위치 키만 생기고 위쪽 본은 그대로
         mw.pr.layers = {}
         mw.recompute()

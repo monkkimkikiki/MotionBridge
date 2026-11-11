@@ -59,12 +59,24 @@ def test_base_cache():
 
 
 def test_layer_fade():
-    """키를 하나만 찍으면 그 프레임만 고쳐지고 앞뒤는 fade 프레임에 걸쳐 원래 값으로 돌아간다 (맥스 바이패드 레이어처럼)."""
+    """기본(퍼짐 0): 키를 하나만 찍으면 모션 전체가 그만큼 바뀐다 (맥스 레이어처럼). '원본 키'를 찍으면 그 키부터 원본.
+    퍼짐을 0 보다 크게 주면 끝 키 밖에서 그 프레임 수에 걸쳐 원래 값으로 돌아간다."""
     X = np.array([1.0, 0, 0])
-    lay = Layer("a")                                 # 기본 fade
+    idn = np.tile(np.array([1.0, 0, 0, 0]), (60, 1))
+    lay0 = Layer("기본")
+    assert lay0.fade == 0, "새 레이어는 끝 키 값 유지가 기본"
+    lay0.set_key(3, 0, rot=Q.from_axis_angle(X, np.radians(30)), pos=np.array([0.0, 0.1, 0.0]))
+    r0, p0 = lay0.eval(3, 60)
+    a0 = np.degrees(Q.angle_between(r0, idn))
+    assert np.allclose(a0, 30, atol=1e-6) and np.allclose(p0[:, 1], 0.1), "첫 프레임 키 하나 -> 끝까지 같은 변화 (중간에 원본으로 돌아가지 않음)"
+    lay0.set_key(3, 40, rot=np.array([1.0, 0, 0, 0]), pos=np.zeros(3))      # 원본 키
+    r0, p0 = lay0.eval(3, 60)
+    a0 = np.degrees(Q.angle_between(r0, idn))
+    assert abs(a0[0] - 30) < 1e-6 and 0 < a0[20] < 30 and a0[40] < 1e-6 and a0[59] < 1e-6 and abs(p0[59, 1]) < 1e-12, "원본 키부터는 원본"
+    lay = Layer("a", fade=8)                         # 퍼짐을 직접 준 경우
     lay.set_key(3, 20, rot=Q.from_axis_angle(X, np.radians(30)))
     r, _ = lay.eval(3, 60)
-    ang = np.degrees(Q.angle_between(r, np.tile(np.array([1.0, 0, 0, 0]), (60, 1))))
+    ang = np.degrees(Q.angle_between(r, idn))
     assert abs(ang[20] - 30) < 1e-6
     assert ang[0] < 1e-6 and ang[60 - 1] < 1e-6 and ang[20 - 8] < 1e-6 and ang[20 + 8] < 1e-6, "fade 프레임 뒤에는 원래 값"
     assert 0 < ang[24] < 30 and ang[22] > ang[24] > ang[27], "서서히 돌아감"

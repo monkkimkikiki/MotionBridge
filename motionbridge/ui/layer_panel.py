@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import layeredit, rangeedit
-from ..core.layers import apply_layers
+from ..core.layers import DEFAULT_FADE, apply_layers
 from .viewer_math import subtree_mask
 from .widgets import CollapsibleBox, NumField
 
@@ -65,9 +65,10 @@ class LayerPanel(CollapsibleBox):
         v.addLayout(wr)
         fd = QHBoxLayout()
         fd.addWidget(QLabel("퍼짐(프레임)"))
-        self.fade = NumField(0, 60, 1, 8, 0, slider=False)
-        self.fade.setToolTip("첫 키 앞/마지막 키 뒤에서 변화가 원래 값으로 돌아가는 데 걸리는 프레임 수 (맥스 바이패드 레이어처럼 한 프레임만 고치면 앞뒤로 서서히 사라집니다).\n"
-                             "0 = 끝 키 값을 계속 유지. 앞뒤에 키를 직접 찍어 두면 그 사이만 블렌드되고 바깥은 퍼짐 규칙을 따릅니다.")
+        self.fade = NumField(0, 60, 1, DEFAULT_FADE, 0, slider=False)
+        self.fade.setToolTip("0 (기본) = 맥스 레이어처럼 첫 키 앞/마지막 키 뒤에서도 그 키 값을 계속 유지합니다 — 키를 하나만 고치면 모션 전체가 그만큼 바뀝니다.\n"
+                             "일부 구간만 바꾸려면 그 앞뒤 프레임에 '🔑 아래 값으로 키 (원본 가져오기)'를 찍으세요. 그 키부터 원본으로 돌아갑니다.\n"
+                             "0 보다 크게 주면, 키를 따로 찍지 않아도 끝 키에서 이 프레임 수에 걸쳐 서서히 원본으로 돌아갑니다.")
         self.fade.changed.connect(self._fade_changed)
         fd.addWidget(self.fade, 1)
         v.addLayout(fd)
@@ -96,7 +97,7 @@ class LayerPanel(CollapsibleBox):
         row = QHBoxLayout()
         for text, tip, fn in (("🔑 지금 보이는 값으로 키", "지금 프레임에 '지금 보이는 모습 그대로' 키를 찍어 고정합니다 (앞뒤 키와 블렌드되기 전에 이 프레임을 못 박을 때)", self.key_now),
                               ("🔑 아래 값으로 키 (원본 가져오기)", "지금 프레임의 키를 '이 레이어 아래 상태(원본)의 값'으로 찍습니다 = 변화 0.\n"
-                                                           "맥스처럼 0프레임에 원본 키를 찍고 → 10프레임에서 각도를 고치고 → 15프레임에 다시 원본 키를 찍으면 10프레임 주변만 바뀌고 나머지는 원본으로 돌아갑니다.", self.key_original)):
+                                                           "키를 하나만 고치면 모션 전체가 바뀝니다. 0프레임에 원본 키 → 10프레임에서 각도 수정 → 15프레임에 다시 원본 키를 찍으면 0~15 사이만 바뀌고 나머지는 원본 그대로입니다.", self.key_original)):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _c=False, f=fn: f())
@@ -218,7 +219,7 @@ class LayerPanel(CollapsibleBox):
             cur = st.current()
             self.weight.set_value(cur.weight if cur else 1.0)
             self.weight.setEnabled(cur is not None)
-            self.fade.set_value(cur.fade if cur else 8)
+            self.fade.set_value(cur.fade if cur else DEFAULT_FADE)
             self.fade.setEnabled(cur is not None)
             self.sync_range()
         finally:

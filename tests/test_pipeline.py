@@ -152,6 +152,7 @@ def test_profile_roundtrip_and_settings():
         pr.settings.com_joint = pr.tgt_slots["Hips"]
         pr.settings.pos_offsets = {pr.tgt_slots["Head"]: (0.0, 0.02, 0.01)}
         pr.settings.scale_offsets = {pr.tgt_slots["L_Hand"]: 1.5}
+        pr.settings.ik_offsets = {pr.tgt_slots["L_Foot"]: (0.01, 0.02, 0.0)}
         pr.use_chain["R"] = False
         p = os.path.join(d, "prof.json")
         pr.save_profile(p)
@@ -164,6 +165,7 @@ def test_profile_roundtrip_and_settings():
         assert pr2.settings.rot_offsets == pr.settings.rot_offsets and pr2.settings.com_joint == pr.settings.com_joint
         assert len([c for c in pr2.chains() if c.kind == 'foot']) == 1
         assert pr2.settings.pos_offsets == pr.settings.pos_offsets and pr2.settings.scale_offsets == pr.settings.scale_offsets
+        assert pr2.settings.ik_offsets == pr.settings.ik_offsets, "발 IK 목표 이동도 프로필에 저장"
         r2 = pr2.run()
         assert np.allclose(r1.anim.rot, r2.anim.rot) and np.allclose(r1.anim.pos, r2.anim.pos)
         # 다른 이름의 타깃에는 경고만 내고 적용

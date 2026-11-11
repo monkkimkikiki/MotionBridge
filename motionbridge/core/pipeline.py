@@ -228,7 +228,7 @@ class Project:
     def clip_touched(self, ci: int) -> bool:
         """그 클립에 사용자가 손댄 것(본별 보정·레이어·IK 구간·프레임 편집)이 있는가 — 목록 표시용."""
         st = self.settings_of(ci)
-        if st is not None and (st.rot_offsets or st.pos_offsets or st.scale_offsets):
+        if st is not None and (st.rot_offsets or st.pos_offsets or st.scale_offsets or st.ik_offsets):
             return True
         ls = self.layers.get(ci)
         if ls is not None and len(ls) and ls.total_keys():
@@ -259,7 +259,7 @@ class Project:
         snap = self._state_snapshot()
         cur = self.settings
         if "settings" in parts and src_st is not None:
-            keep = {"rot_offsets", "pos_offsets", "scale_offsets", "com_joint", "ik_ranges"}
+            keep = {"rot_offsets", "pos_offsets", "scale_offsets", "ik_offsets", "com_joint", "ik_ranges"}
             for f in dataclasses.fields(RetargetSettings):
                 if f.name not in keep:
                     setattr(cur, f.name, copy.deepcopy(getattr(src_st, f.name)))
@@ -268,6 +268,7 @@ class Project:
             cur.rot_offsets = copy.deepcopy(src_st.rot_offsets)
             cur.pos_offsets = copy.deepcopy(src_st.pos_offsets)
             cur.scale_offsets = copy.deepcopy(src_st.scale_offsets)
+            cur.ik_offsets = copy.deepcopy(src_st.ik_offsets)
             cur.com_joint = src_st.com_joint
             got.append("본별 보정")
         if "layers" in parts:
@@ -375,6 +376,7 @@ class Project:
             _st.rot_offsets = {}
             _st.pos_offsets = {}
             _st.scale_offsets = {}
+            _st.ik_offsets = {}
             _st.com_joint = -1
         self._import_undo = {}
         self.result = None
@@ -388,6 +390,7 @@ class Project:
             _st.rot_offsets = {}
             _st.pos_offsets = {}
             _st.scale_offsets = {}
+            _st.ik_offsets = {}
             _st.com_joint = -1
         self._import_undo = {}
         self.result, self.issues = None, []
@@ -526,6 +529,7 @@ class Project:
         st["rot_offsets"] = {tn[j]: list(v) for j, v in self.settings.rot_offsets.items() if j < len(tn)}
         st["pos_offsets"] = {tn[j]: list(v) for j, v in self.settings.pos_offsets.items() if j < len(tn)}
         st["scale_offsets"] = {tn[j]: float(v) for j, v in self.settings.scale_offsets.items() if j < len(tn)}
+        st["ik_offsets"] = {tn[j]: list(v) for j, v in self.settings.ik_offsets.items() if j < len(tn)}
         st["com_joint"] = tn[self.settings.com_joint] if (self.tgt and 0 <= self.settings.com_joint < len(tn)) else None
         st["hip_offset"] = list(self.settings.hip_offset)
         st.pop("ik_ranges", None)     # 프레임 번호는 그 클립에만 맞는 값이라 프로필(여러 클립에 재사용)에는 넣지 않는다
@@ -580,11 +584,12 @@ class Project:
         ro = st.pop("rot_offsets", {})
         po = st.pop("pos_offsets", {})
         so = st.pop("scale_offsets", {})
+        io = st.pop("ik_offsets", {})
         com = st.pop("com_joint", None)
         fields = {f.name for f in dataclasses.fields(RetargetSettings)}
         base = dataclasses.asdict(RetargetSettings())
         for k, v in st.items():
-            if k in fields and k not in ("rot_offsets", "pos_offsets", "scale_offsets", "com_joint", "ik_ranges"):
+            if k in fields and k not in ("rot_offsets", "pos_offsets", "scale_offsets", "ik_offsets", "com_joint", "ik_ranges"):
                 base[k] = tuple(v) if k in ("hip_offset", "place_offset") else v
         base["rot_offsets"] = {}
         for nm, v in ro.items():
@@ -603,6 +608,7 @@ class Project:
                 base["scale_offsets"][tidx[nm]] = float(v)
             else:
                 warns.append("크기 보정의 '%s' 본이 타깃에 없음" % nm)
+        base["ik_offsets"] = {tidx[nm]: tuple(v) for nm, v in io.items() if nm in tidx}
         base["com_joint"] = tidx.get(com, -1) if com else -1
         base["ik_ranges"] = self.settings.ik_ranges      # 직접 지정한 IK 구간은 프로필이 아니라 클립에 속하므로 그대로 둔다
         self.settings = RetargetSettings(**base)

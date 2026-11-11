@@ -73,6 +73,9 @@ class RetargetSettings:
     pos_offsets: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
     # 본별 크기 보정: 타깃 관절 -> 배율(1=그대로). 그 본을 기준점으로 하위 본 위치와 그 본들에 붙은 메시를 키운다/줄인다.
     scale_offsets: Dict[int, float] = field(default_factory=dict)
+    # 발 IK 목표 이동: 타깃 발 관절 -> (x,y,z) 타깃 단위, 표준 프레임(화면에 보이는 방향). 발 IK 가 켜진 다리의 발을 '원본' 상태에서 옮기면 여기에 쌓인다
+    # (위/아래 다리 회전 보정으로 넣으면 바로 뒤의 발 IK 가 발을 원래 목표로 되돌려 버리기 때문). 모션 전체 프레임에 똑같이 적용된다.
+    ik_offsets: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
     # 소스와 타깃이 같은 스켈레톤(본 이름·계층·모양이 같음)이고 사람 모양이 아니면 사람 본 매핑·좌표축 추정을 거치지 않고 본 이름대로 그대로 적용한다 (core/rigmatch)
     same_rig: bool = True
     # IK 구간 직접 지정: 클립 번호 -> {체인 라벨: [[시작, 끝, 켬/끔], ...]} (프레임은 0부터, 끝 포함). 자동 접지 판정 위에 덮어쓴다
@@ -571,6 +574,16 @@ def retarget(
                     runs.append((a, b, ramp))
                 return ww, runs
 
+            def anchor(arr: np.ndarray, a: int, b: int) -> np.ndarray:
+                """접촉 구간 a..b 에서 발(손)을 고정할 한 점. 자동 판정 구간은 거의 안 움직이므로 평균(떨림 제거),
+                직접 켠 구간은 그 안의 자동 접지 프레임 평균, 그것도 없으면 '켠 첫 프레임에 있던 자리' (움직이는 구간의 평균은 발이 있던 적 없는 중간 지점이 된다)."""
+                seg = np.asarray(auto_c[a : b + 1], dtype=bool)
+                if seg.all():
+                    return arr[a : b + 1].mean(axis=0)
+                if seg.any():
+                    return arr[a : b + 1][seg].mean(axis=0)
+                return np.array(arr[a], dtype=float)
+
             if ch.kind == "hand":
                 # 손은 '바인드 포즈 대비 이동량'이 아니라 '바닥 대비 높이'로 계산한다.
                 # (소스 A 포즈 / 타깃 T 포즈처럼 바인드 때 손 높이가 다르면 그 차이가 목표 높이에 더해져 손이 공중으로 끌려갔다)
@@ -580,10 +593,11 @@ def retarget(
                 hs = sc[:, 1] - ground_src
                 vh = np.linalg.norm(vel[:, [0, 2]], axis=1)
                 still = clean_mask(contact & (vh < st.contact_speed * Ls), min_len=2, max_gap=1)
+                still = still | (contact & ~np.asarray(auto_c, dtype=bool))      # 직접 켠 구간은 손이 움직이고 있어도 한 점에 고정한다
                 goal = fkc.copy()
                 _pw, still_runs = ramp_weights(still)
                 for a, b, ramp in still_runs:
-                    plant = fkc[a : b + 1][:, [0, 2]].mean(axis=0)
+                    plant = anchor(fkc[:, [0, 2]], a, b)
                     goal[a : b + 1, 0] = fkc[a : b + 1, 0] * (1 - ramp) + plant[0] * ramp
                     goal[a : b + 1, 2] = fkc[a : b + 1, 2] * (1 - ramp) + plant[1] * ramp
                 floor_y = ground_tgt + st.ground_offset
@@ -596,13 +610,16 @@ def retarget(
             goal = Dc.copy()
             w, runs_w = ramp_weights(contact)
             for a, b, ramp in runs_w:
-                plant = Dc[a : b + 1].mean(axis=0)
+                plant = anchor(Dc, a, b)
                 goal[a : b + 1] = Dc[a : b + 1] * (1 - ramp)[:, None] + plant[None, :] * ramp[:, None]
             follow = float(np.clip(st.ik_follow, 0.0, 1.0))
             amt = np.maximum(follow, w)  # IK 를 얼마나 적용할지
             target = fkc * (1 - amt)[:, None] + goal * amt[:, None]
             if st.ground_clamp:
                 target[:, 1] = np.maximum(target[:, 1], bpt[ch.foot, 1] + st.ground_offset)
+            off = st.ik_offsets.get(ch.foot) if st.ik_offsets else None
+            if off is not None and any(abs(x) > 1e-12 for x in off):
+                target = target + np.asarray(off, dtype=float)[None, :]     # 사용자가 발을 직접 옮긴 만큼 (바닥 고정보다 우선)
             plans.append(ChainPlan(ch.label, contact, w, target, np.zeros(T, bool), Lleg, auto_c))
         return plans
 

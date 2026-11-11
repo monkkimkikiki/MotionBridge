@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
+from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
 
@@ -845,6 +845,41 @@ class VidFindTab(QWidget):
             return None
         return list(ch.anims) if ch is not None and ch.anims else None
 
+    def _moves(self, idx: assetidx.AssetIndex, mesh_path: str):
+        """이 메시의 캐릭터 폴더 애니메이션을 '동작' 단위로 묶은 목록 (캐릭터를 모르면 None)."""
+        try:
+            cat = self._catalog(idx)
+            if len(cat.all()) < charcatalog.MIN_CHARS:
+                return None
+            ch = cat.of_path(mesh_path)
+            if ch is None or not ch.anims:
+                return None
+            return movecatalog.build(ch.anims, [ch.leaf])
+        except Exception:  # noqa: BLE001 - 묶기에 실패해도 예전 목록은 그대로 보여 준다
+            return None
+
+    @staticmethod
+    def _group_by_moves(cands, mc, label_cat=None):
+        """후보를 동작 묶음 순서로 다시 세운다: 몽타주 사본·재생 불가 파일은 빼고, 같은 동작의 시작/반복/끝·번호를 붙여 놓고, 짝(플레이어 쪽)을 표시한다.
+        분류(label_cat)를 골랐으면 그 분류로 읽히는 동작을 먼저. 캐릭터 폴더 밖의 후보는 그 뒤에 원래 순서로."""
+        hidden = mc.hidden()
+        by = {c.path: c for c in cands}
+        order = [p for p in mc.order() if p in by]
+        if label_cat:
+            hit = [p for p in order if assetidx.category_scores(p).get(label_cat, 0.0) > 0]
+            order = hit + [p for p in order if p not in set(hit)]
+        out = []
+        for p in order:
+            c, clip = by[p], mc.clips[p]
+            why = "동작 〔%s〕" % clip.label()
+            pr = mc.partners.get(p)
+            if pr:
+                why += " · 짝: " + os.path.basename(pr[0]).split(".")[0]
+            out.append(assetidx.AnimCandidate(p, c.score, why))
+        inside = set(order) | hidden
+        out += [c for c in cands if c.path not in inside]
+        return out, len([c for c in cands if c.path in hidden])
+
     def _vocab(self, idx: assetidx.AssetIndex, limit: int, pat: str, style: str = "raw"):
         """AI에게 알려줄 이름 목록과 안내 문구.
         style: 'lines' = 캐릭터 카탈로그 줄('<ID> = <게임 속 이름> [종류]', 결과의 ids 가 True) / 'names' = 카탈로그의 대표 메시 이름 / 'raw' = 예전 방식(메시 이름 알파벳순).
@@ -1521,6 +1556,7 @@ class VidFindTab(QWidget):
         hidden_kind = 0
         n_drop = 0
         skel_state: Dict[str, int] = {}
+        move_notes: List[str] = []
         for p in (self._chosen_rigged() if self.char_mode else self._selected_mesh_paths()):
             m = idx.mesh(p)
             nm = m.name if m else assetidx.mesh_name(p)
@@ -1530,6 +1566,10 @@ class VidFindTab(QWidget):
             cands, st, dropped = self._refine(p, cands)
             n_drop += dropped
             skel_state[st] = skel_state.get(st, 0) + 1
+            mc = None if (force or assetidx.is_player_path(p)) else self._moves(idx, p)
+            if mc is not None and cands:
+                cands, _n_hidden = self._group_by_moves(cands, mc, assetidx.LABEL_CATEGORY.get((label or "").strip()) if label else None)
+                move_notes.append("%s: %s" % (nm, mc.summary()))
             if not cands:
                 empty.append(nm)
             for c in cands:
@@ -1542,6 +1582,8 @@ class VidFindTab(QWidget):
                 self.anim_list.addItem(it)
                 total += 1
         msg = "애니메이션 후보 %d개 (점수 높은 순)." % total
+        if move_notes:
+            msg = "애니메이션 후보 %d개 — 같은 캐릭터 폴더의 것을 동작별로 묶어 앞에 두었습니다 (%s). 짝이 있는 모션은 '짝:' 으로 표시됩니다." % (total, "; ".join(move_notes[:3]))
         if players:
             msg += " 플레이어블 캐릭터(%s)는 몸이 아니라 player/pc/hero 이름이 든 공용 애니메이션을 보여줍니다." % ", ".join(players[:3])
         if empty:
@@ -1627,6 +1669,23 @@ class VidFindTab(QWidget):
         base = sel[0].data(Qt.ItemDataRole.UserRole)
         want = assetidx.KIND_MONSTER if assetidx.path_kind(base) == assetidx.KIND_PLAYER else assetidx.KIND_PLAYER   # 반대편 캐릭터
         pool = sorted(idx.anims_of_kinds({want}))[: self.PLAYER_LIST_MAX]
+        # 1) 이름이 정확히 짝인 것 (X <-> X_Player / X_Enemy): 길이를 재지 않아도 확실하다. 보스 폴더 안에 플레이어 쪽 모션이 같이 들어 있는 게임이 많다
+        exact = movecatalog.exact_partners(base, idx.anims)
+
+        def add_exact():
+            for p in exact:
+                it = QListWidgetItem("100%%  %s    이름이 정확히 짝 (%s 와 역할 낱말만 다름)" % (os.path.basename(p).split(".")[0], os.path.basename(base).split(".")[0]))
+                it.setData(Qt.ItemDataRole.UserRole, p)
+                it.setToolTip(p)
+                self.anim_list.addItem(it)
+
+        if exact:
+            self.anim_list.clear()
+            add_exact()
+            self.anim_note.setText("기준 '%s' 의 짝을 이름으로 바로 찾았습니다: %d개 (맨 위). 길이가 비슷한 다른 후보도 이어서 찾는 중…" % (os.path.basename(base).split(".")[0], len(exact)))
+            pool = [p for p in pool if p not in set(exact)]
+        if not pool and exact:
+            return
         if not pool:
             QMessageBox.warning(self, "짝 찾기", "반대편 캐릭터의 애니메이션 이름이 목록에 없습니다.")
             return
@@ -1657,12 +1716,14 @@ class VidFindTab(QWidget):
         def done(out):
             hits, (fr, ln), n_known = out
             self.anim_list.clear()
+            add_exact()
             for h in hits:
                 it = QListWidgetItem("%3d%%  %s    %s" % (round(h.score * 100), os.path.basename(h.path).split(".")[0], h.why))
                 it.setData(Qt.ItemDataRole.UserRole, h.path)
                 it.setToolTip(h.path)
                 self.anim_list.addItem(it)
-            self.anim_note.setText("기준 '%s' (%d프레임, %.2f초) → %s 쪽 모션 %d개 중 길이 ±%d프레임 안 %d개 (길이를 읽은 것 %d개). "
+            self.anim_note.setText((("이름이 정확히 짝인 모션 %d개를 맨 위에 두었습니다. " % len(exact)) if exact else "") +
+                                   "기준 '%s' (%d프레임, %.2f초) → %s 쪽 모션 %d개 중 길이 ±%d프레임 안 %d개 (길이를 읽은 것 %d개). "
                                    "이제 [AI 회의로 찾기]로 영상과 맞는 것을 고르세요." % (os.path.basename(base).split(".")[0], fr, ln, "플레이어" if want == assetidx.KIND_PLAYER else "몬스터·보스",
                                                                            len(pool), tol, len(hits), n_known))
             self._apply_anim_filter()
