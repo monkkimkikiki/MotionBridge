@@ -39,14 +39,14 @@ Publish a Python package with this entry point:
 The factory returns an object with:
 - description: str (optional)
 - detect(root: str) -> bool
-- scan(root: str, on_event=None) -> list[dict]
-- export(root: str, out_dir: str, **options) -> list[str]
+- scan(root: str, aes=None, mapping=None, bundle_key=None, on_event=None) -> list[dict]
+- export(root: str, out_dir: str, **options) -> list[str] (options may include aes, mapping, bundle_key, path_ids, on_event)
 
 The universal CLI passes adapter-specific options through to the adapter. Adapters must only process local files the operator is authorized to inspect. They must not circumvent DRM, anti-cheat, online authorization, or access controls.
 
 ## Keys and mapping files
 
-AES keys and mapping files are format-specific inputs, not universal decryption instructions. The existing Unreal path accepts AES-256 and .usmap through CUE4Parse. UnityPy handles supported Unity serialized files and bundles directly; many Unity games do not use an external .usmap. A proprietary/custom engine adapter may define its own key and mapping options. Supplying a key alone cannot identify an unknown cipher, KDF, compression scheme, or object serialization.
+AES keys and mapping files are format-specific inputs, not universal decryption instructions. The existing Unreal path accepts AES-256 and .usmap through CUE4Parse. UnityPy handles supported Unity serialized files and bundles directly; many Unity games do not use an external .usmap. A proprietary/custom engine adapter may define its own key and mapping options. UnityPy also exposes a user-supplied Unity AssetBundle decryption key for supported Unity bundle encryption; this is not a generic AES-key interface. Supplying a key alone cannot identify an unknown cipher, KDF, compression scheme, or object serialization.
 
 ## Known limitations
 
