@@ -161,8 +161,21 @@ def _remap(w, to: str) -> None:
         return
     if not css:
         return
+    # 위젯마다 원래(어두운) 글자를 기억해 둔다: 서로 다른 어두운 색 둘이 같은 밝은 색이 되는 경우(그래프 축 체크박스의 연빨강/빨강)에도 정확히 되돌리게
+    try:
+        if to == "dark" and w.property("mbLightCss") == css and w.property("mbDarkCss"):
+            w.setStyleSheet(str(w.property("mbDarkCss")))
+            return
+    except Exception:  # noqa: BLE001
+        pass
     new = convert_css(css, to)
     if new != css:
+        try:
+            if to == "light":
+                w.setProperty("mbDarkCss", css)
+                w.setProperty("mbLightCss", new)
+        except Exception:  # noqa: BLE001
+            pass
         w.setStyleSheet(new)
 
 
