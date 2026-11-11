@@ -51,10 +51,20 @@ def _name(obj) -> str:
     except Exception:
         return ""
 
-def scan(root: str, on_event: Optional[Callable[[dict], None]] = None) -> list[dict]:
+def _load(root: str, bundle_key: Optional[str] = None):
+    UnityPy = _unitypy()
+    if bundle_key:
+        setter = getattr(UnityPy, "set_assetbundle_decrypt_key", None)
+        if not callable(setter):
+            raise UnityExtractError("설치된 UnityPy가 사용자 제공 AssetBundle 키 입력을 지원하지 않습니다.")
+        setter(bundle_key)
+    return UnityPy.load(root)
+
+def scan(root: str, on_event: Optional[Callable[[dict], None]] = None,
+         bundle_key: Optional[str] = None) -> list[dict]:
     if not os.path.isdir(root):
         raise UnityExtractError("게임 폴더가 없습니다: " + root)
-    env = _unitypy().load(root)
+    env = _load(root)
     result = []
     for obj in _objects(env):
         try:
@@ -72,12 +82,13 @@ def scan(root: str, on_event: Optional[Callable[[dict], None]] = None) -> list[d
     return result
 
 def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
-           on_event: Optional[Callable[[dict], None]] = None) -> list[str]:
+           on_event: Optional[Callable[[dict], None]] = None,
+           bundle_key: Optional[str] = None) -> list[str]:
     """Export common Unity objects. AnimationClip remains raw + metadata."""
     if not os.path.isdir(root):
         raise UnityExtractError("게임 폴더가 없습니다: " + root)
     os.makedirs(out_dir, exist_ok=True)
-    env = _unitypy().load(root)
+    env = _load(root, bundle_key)
     made: list[str] = []
     for obj in _objects(env):
         try:
@@ -89,7 +100,7 @@ def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
             target = os.path.join(out_dir, f"{name}_{pid}")
             files: list[str] = []
             if kind == "Mesh":
-                data = obj.read()
+                data = obj.parse_as_object()
                 path = target + ".obj"
                 with open(path, "w", encoding="utf-8", newline="") as stream:
                     stream.write(data.export())
@@ -137,10 +148,15 @@ def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
                         stream.write(raw_getter())
                     files.append(path)
                 metadata = {"name": name, "path_id": pid, "type": kind,
-                            "note": "Raw Unity AnimationClip data; curve decoding/FBX conversion is not provided by this adapter."}
+                            "note": "Unity AnimationClip typetree/raw payload; FBX/PSA conversion is not provided by this adapter."}
+                try:
+                    metadata["typetree"] = obj.parse_as_dict()
+                except Exception as parse_error:
+                    metadata["typetree_error"] = str(parse_error)
                 path = target + ".json"
                 with open(path, "w", encoding="utf-8") as stream:
-                    json.dump(metadata, stream, ensure_ascii=False, indent=2)
+                    json.dump(metadata, stream, ensure_ascii=False, indent=2,
+                              default=lambda value: value.hex() if isinstance(value, (bytes, bytearray)) else repr(value))
                 files.append(path)
             else:
                 continue
