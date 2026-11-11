@@ -85,9 +85,10 @@ def scan(root: str, on_event: Optional[Callable[[dict], None]] = None,
     result = []
     for obj in _objects(env):
         try:
-            item = {"path_id": int(obj.path_id), "type": obj.type.name,
-                    "name": _name(obj),
-                    "source": str(getattr(getattr(obj, "assets_file", None), "name", ""))}
+            source = str(getattr(getattr(obj, "assets_file", None), "name", ""))
+            path_id = int(obj.path_id)
+            item = {"path_id": path_id, "asset_key": f"{source}::{path_id}",
+                    "type": obj.type.name, "name": _name(obj), "source": source}
             result.append(item)
             if on_event:
                 on_event({"type": "asset", **item})
@@ -100,7 +101,8 @@ def scan(root: str, on_event: Optional[Callable[[dict], None]] = None,
 
 def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
            on_event: Optional[Callable[[dict], None]] = None,
-           bundle_key: Optional[str] = None) -> list[str]:
+           bundle_key: Optional[str] = None,
+           asset_keys: Optional[set[str]] = None) -> list[str]:
     """Export common Unity objects. AnimationClip remains raw + metadata."""
     if not os.path.isdir(root):
         raise UnityExtractError("게임 폴더가 없습니다: " + root)
@@ -110,11 +112,16 @@ def export(root: str, out_dir: str, path_ids: Optional[set[int]] = None,
     for obj in _objects(env):
         try:
             pid = int(obj.path_id)
-            if path_ids is not None and pid not in path_ids:
+            source = str(getattr(getattr(obj, "assets_file", None), "name", ""))
+            asset_key = f"{source}::{pid}"
+            if asset_keys is not None and asset_key not in asset_keys:
+                continue
+            if asset_keys is None and path_ids is not None and pid not in path_ids:
                 continue
             kind = obj.type.name
             name = _safe_name(_name(obj), f"{kind}_{pid}")
-            target = os.path.join(out_dir, f"{name}_{pid}")
+            source_name = _safe_name(os.path.splitext(os.path.basename(source))[0], "assets")
+            target = os.path.join(out_dir, f"{source_name}_{name}_{pid}")
             files: list[str] = []
             if kind == "Mesh":
                 data = obj.parse_as_object()
