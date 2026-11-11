@@ -18,6 +18,12 @@ def detect_engine(root: str) -> str:
             return "unreal"
     except Exception:
         pass
+    for name, adapter in adapters().items():
+        try:
+            if callable(getattr(adapter, "detect", None)) and adapter.detect(root):
+                return name
+        except Exception:
+            continue
     return "unknown"
 
 def adapters() -> dict:
