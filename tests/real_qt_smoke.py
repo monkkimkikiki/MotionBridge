@@ -181,6 +181,7 @@ with tempfile.TemporaryDirectory() as d:
 
     vp = mw.viewport
     vp.resize(800, 600)
+    vp.set_data(mw.pr, mw.vd, reframe=True)      # 시험 중 바뀐 모션 크기에 카메라를 다시 맞춘다 (실제 사용에서는 불러올 때 맞춰짐)
     app.processEvents()
     shift = _Qt.KeyboardModifier.ShiftModifier
     LB = _Qt.MouseButton.LeftButton

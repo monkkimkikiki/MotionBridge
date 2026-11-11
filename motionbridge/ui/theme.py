@@ -82,7 +82,7 @@ def convert_css(css: str, to: str) -> str:
         # 밝게 바꾼 적이 있는 글자만 되돌린다. 기억에 없는 것은 원래부터 어두운 테마용이므로 손대지 않는다
         # (#3a4560 처럼 '밝은 쪽 짝 색'이면서 '어두운 쪽 원래 색'이기도 한 값이 있어, 표로 거꾸로 바꾸면 멀쩡한 색이 망가진다)
         return _REV.get(css, css)
-    if css in _REV:            # 이미 밝게 바꾼 것 (두 번 적용 방지)
+    if css in _REV or css in WHOLE.get("dark", {}):            # 이미 밝게 바꾼 것 (두 번 적용 방지)
         return css
     lights = set(LIGHT_TO_DARK)
 
@@ -198,6 +198,7 @@ def apply_theme(app, new_mode: str) -> str:
     """app 전체를 'dark' / 'light' 로 바꾼다. 적용된 모드를 돌려준다."""
     global _mode, _follower
     new_mode = "light" if new_mode == "light" else "dark"
+    _mode = "dark"      # 팔레트/스타일을 바꾸는 동안 생기는 StyleChange 에서 색을 건드리지 않게 (아래에서 한꺼번에 바꾼다)
     try:
         app.setStyle("Fusion")
         app.setPalette(light_palette() if new_mode == "light" else dark_palette())

@@ -27,6 +27,9 @@ def test_convert_roundtrip():
     # 탭 줄은 통째로 바뀜
     assert theme.convert_css(chrometabs.STYLE, "light") == chrometabs.STYLE_LIGHT
     assert theme.convert_css(chrometabs.STYLE_LIGHT, "dark") == chrometabs.STYLE
+    assert theme.convert_css(chrometabs.STYLE_LIGHT, "light") == chrometabs.STYLE_LIGHT, "이미 밝은 탭 줄을 또 바꾸지 않음"
+    # 원래 어두운 테마용인 글자는 '어둡게'에서 손대지 않는다 (#3a4560 은 밝은 쪽 짝 색이기도 해서 표로 거꾸로 바꾸면 망가졌음)
+    assert theme.convert_css("border:1px solid #3a4560", "dark") == "border:1px solid #3a4560"
     assert len(set(theme.DARK_TO_LIGHT.values())) == len(theme.DARK_TO_LIGHT)
     print("theme convert OK")
 
