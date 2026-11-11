@@ -218,7 +218,7 @@ def cmd_universal(args) -> int:
     if args.action == "scan":
         _p("감지된 엔진:", engine)
         if hasattr(adapter, "scan"):
-            records = (adapter.scan(args.game, on_event=on_event) if engine == "unity"
+            records = (adapter.scan(args.game, on_event=on_event, bundle_key=args.bundle_key) if engine == "unity"
                        else adapter.scan(args.game, aes=args.aes, mapping=args.mapping, on_event=on_event))
             _p("에셋 %d개" % len(records))
         else:
@@ -228,7 +228,7 @@ def cmd_universal(args) -> int:
     if not hasattr(adapter, "scan"):
         _p("이 어댑터는 scan 기능을 제공하지 않습니다.")
         return 2
-    records = (adapter.scan(args.game) if engine == "unity"
+    records = (adapter.scan(args.game, bundle_key=args.bundle_key) if engine == "unity"
                else adapter.scan(args.game, aes=args.aes, mapping=args.mapping))
     import re
     rx = re.compile(args.filter, re.I)
@@ -243,7 +243,7 @@ def cmd_universal(args) -> int:
         return 2
     ids = set(args.ids) if args.ids else {int(r["path_id"]) for r in records[:args.limit] if "path_id" in r}
     if engine == "unity":
-        made = adapter.export(args.game, args.out, path_ids=ids, on_event=on_event)
+        made = adapter.export(args.game, args.out, path_ids=ids, on_event=on_event, bundle_key=args.bundle_key)
     else:
         made = adapter.export(args.game, args.out, path_ids=ids, aes=args.aes, mapping=args.mapping,
                               on_event=on_event)
@@ -342,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--aes", help="사용 권한이 있는 파일의 AES 키 (Unreal/어댑터별)")
     u.add_argument("--usmap", help="Unreal mappings 파일")
     u.add_argument("--mapping", help="커스텀 어댑터 전용 매핑 파일")
+    u.add_argument("--bundle-key", help="Unity가 지원하는 AssetBundle 사용자 제공 키 (게임별)")
     u.add_argument("--helper", help="Unreal mbextract 경로")
     u.add_argument("--kind", choices=["anim", "mesh"], default="anim")
     u.add_argument("--format", choices=["glb", "psk"], default="glb")
