@@ -69,7 +69,20 @@ try
     Emit(new { type = "log", message = "컨테이너 " + provider.UnloadedVfs.Count + "개 발견" });
     // 암호화 안 된 컨테이너는 Mount() 로, 키가 있으면 SubmitKey 로 연다.
     int mounted = provider.Mount();
-    if (!string.IsNullOrEmpty(aes)) mounted += provider.SubmitKey(new FGuid(), new FAesKey(aes));
+    // CUE4Parse exposes encryption GUIDs discovered from PAK/IoStore headers after Initialize().
+    // Register the supplied AES key against each GUID; FGuid() alone misses non-zero IoStore GUIDs.
+    var requiredKeys = provider.RequiredKeys.ToArray();
+    Emit(new { type = "log", message = "필요한 암호화 키 GUID: " +
+        (requiredKeys.Length == 0 ? "(없음 또는 기본 GUID)" : string.Join(", ", requiredKeys)) });
+    if (!string.IsNullOrEmpty(aes))
+    {
+        var aesKey = new FAesKey(aes);
+        if (requiredKeys.Length == 0)
+            mounted += provider.SubmitKey(new FGuid(), aesKey);
+        else
+            foreach (var guid in requiredKeys)
+                mounted += provider.SubmitKey(guid, aesKey);
+    }
     provider.PostMount();
     int pkgCount = provider.Files.Keys.Count(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase));
     Emit(new { type = "log", message = "마운트 " + mounted + "개, 전체 파일 " + provider.Files.Count + "개, 패키지(.uasset) " + pkgCount + "개" });
