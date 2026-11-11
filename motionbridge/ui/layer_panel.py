@@ -417,6 +417,8 @@ class LayerPanel(CollapsibleBox):
 
     def _need_targets(self):
         cur, js = self.layer(), self._targets()
+        if cur is None and js and self.app.pr.result is not None:     # 레이어가 없으면(원본 상태) 버튼이 아무 일도 안 하던 문제: 레이어를 만들어 찍는다
+            cur = self.stack().add("키 찍기")
         why = layeredit.editable(cur)
         if why or not js:
             self.app.statusBar().showMessage(why or "먼저 본을 고르세요 (뷰포트의 점 또는 본 목록)")
@@ -467,8 +469,33 @@ class LayerPanel(CollapsibleBox):
             return
         for j in js:
             cur.set_key(j, self._frame(), rot=np.array([1.0, 0.0, 0.0, 0.0]), pos=np.zeros(3))
-        self._msg = "아래 값(원본)으로 키 %d개를 찍었습니다 (프레임 %d)." % (len(js), self._frame() + 1)
+        had = sum(1 for j in js if len(cur.frames(j)) > 1)
+        self._msg = "아래 값(원본)으로 키 %d개를 찍었습니다 (프레임 %d, 레이어 '%s')." % (len(js), self._frame() + 1, cur.name)
+        if not had:
+            self._msg += " 이 레이어에는 이 본들을 고친 다른 키가 없어서 화면은 그대로입니다 — 원본 키는 '이 레이어에서 고친 것'만 되돌립니다 (오토키를 끄고 고친 '본별 보정'이나 다른 레이어의 수정은 그대로)."
+        self.app.statusBar().showMessage(self._msg)
         self._changed()
+
+    def delete_keys(self, a: Optional[int] = None, b: Optional[int] = None) -> int:
+        """대상 본의 키를 지운다: a..b(0부터, 끝 포함) 구간, 주지 않으면 지금 프레임. 지운 개수."""
+        cur, js = self.layer(), self._targets()
+        if cur is None or not js:
+            self.app.statusBar().showMessage("지울 키가 있는 레이어와 본을 먼저 고르세요")
+            return 0
+        why = layeredit.editable(cur)
+        if why:
+            self.app.statusBar().showMessage(why)
+            return 0
+        lo, hi = (self._frame(), self._frame()) if a is None or b is None else (min(a, b), max(a, b))
+        n = 0
+        for j in js:
+            for f in [f for f in cur.frames(j) if lo <= f <= hi]:
+                n += bool(cur.remove_key(j, f))
+        self._msg = ("프레임 %d~%d 의 키 %d개를 지웠습니다." % (lo + 1, hi + 1, n)) if n else "그 구간에는 지울 키가 없습니다."
+        self.app.statusBar().showMessage(self._msg)
+        if n:
+            self._changed()
+        return n
 
     def delete_key(self) -> None:
         cur, js = self.layer(), self._targets()

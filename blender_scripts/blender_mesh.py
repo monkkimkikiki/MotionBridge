@@ -40,8 +40,26 @@ def build_from_npz(path):
     me.from_pydata([tuple(map(float, v)) for v in verts], [], [tuple(map(int, t)) for t in pt_idx])
     me.update()
     mcols = d["material_colors"] if "material_colors" in d.files else None
+    mtex = [str(x) for x in d["material_textures"]] if "material_textures" in d.files else []
     for i, m in enumerate(mats):
         mat = bpy.data.materials.new(m)
+        tex_path = mtex[i] if i < len(mtex) else ""
+        if tex_path and os.path.isfile(tex_path):
+            # 원본 텍스처가 있으면 구분용 색 대신 '기본 색' 칸에 그림을 연결한다 (FBX 에는 그림이 함께 들어간다)
+            try:
+                mat.use_nodes = True
+                nt = mat.node_tree
+                bsdf = nt.nodes.get("Principled BSDF")
+                img = bpy.data.images.load(tex_path, check_existing=True)
+                node = nt.nodes.new("ShaderNodeTexImage")
+                node.image = img
+                if bsdf is not None:
+                    nt.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
+                mat.diffuse_color = (1.0, 1.0, 1.0, 1.0)
+                me.materials.append(mat)
+                continue
+            except Exception as e:  # noqa: BLE001 - 그림을 못 읽으면 색으로
+                print("texture link failed:", m, e)
         if mcols is not None and i < len(mcols):
             # 머티리얼마다 다른 색을 줘서, 텍스처가 없어도 FBX/GLB 에서 재질이 구분되게 한다
             r, g, b = (float(x) for x in mcols[i])

@@ -765,3 +765,10 @@ def install():
         setattr(root, sub, m)
         sys.modules["PySide6." + sub] = m
     sys.modules["PySide6"] = root
+    # 시험이 실제 사용자 폴더(~/.motionbridge)의 게임 설정 기록을 읽거나 쓰지 않게 임시 폴더로 돌린다
+    try:
+        import tempfile
+        from motionbridge.core import bridge as _bridge
+        _bridge.CONFIG_DIR = tempfile.mkdtemp(prefix="mb_test_cfg_")
+    except Exception:  # noqa: BLE001
+        pass

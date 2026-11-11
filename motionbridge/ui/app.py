@@ -45,7 +45,7 @@ from .chrometabs import ChromeTabs
 from ..core import posik
 from .clip_panel import ClipPanel
 from . import theme as _theme
-from .uikit import HelpIcon, Resizable, arrow_button, label_with_help, with_help
+from .uikit import HelpIcon, Resizable, ViewportOverlay, arrow_button, label_with_help, with_help
 from .help_text import EXTRACT_SEARCH_TIPS
 from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
 
@@ -581,10 +581,10 @@ class MainWindow(QMainWindow):
                                      "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.\n"
                                      "Ctrl 을 누른 채 다른 본(점)을 클릭하면 선택은 그대로 두고 그 본에 지금 프레임의 키만 찍습니다 (레이어가 없으면 새로 만들어요).")
         self.cb_bone_edit.setCheckable(True)
-        self.cb_bone_edit.setMinimumHeight(34)
+        self.cb_bone_edit.setMinimumHeight(28)
         self.cb_bone_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cb_bone_edit.setStyleSheet(
-            "QPushButton{font-size:14px;font-weight:700;padding:6px 16px;border:2px solid #4a5570;border-radius:8px;background:#222836;color:#aab3c8}"
+            "QPushButton{font-size:13px;font-weight:700;padding:3px 12px;border:2px solid #4a5570;border-radius:8px;background:#222836;color:#aab3c8}"
             "QPushButton:hover{border-color:#8fb0ff;color:#ffffff}"
             "QPushButton:checked{background:#2f7d4a;border-color:#7ff0a0;color:#ffffff}"
             "QPushButton:checked:hover{background:#38905a}")
@@ -597,14 +597,15 @@ class MainWindow(QMainWindow):
                                     "체크(포지션 분리) = 그 본만 위치를 옮깁니다 (팔다리는 그대로, 그 본이 몸에서 떨어지거나 늘어난 모양이 될 수 있어요).\n"
                                     "손·발 끝이 아닌 본(골반·몸통·팔꿈치 등)은 항상 그 본만 움직입니다.")
         self.cb_pos_only.toggled.connect(self._pos_only_toggled)
-        bl.addWidget(self.cb_pos_only)
+        bl2 = QHBoxLayout()          # 둘째 줄: 포지션 분리 · 오토키 · 고른 본 · 초기화 (뷰포트 안 도구 줄)
+        bl2.addWidget(self.cb_pos_only)
         self.cb_autokey = QCheckBox("🔑 오토키")
         self.cb_autokey.setChecked(bool(self.cfg.get("autokey", False)))
         self.cb_autokey.setToolTip("켜면 본을 돌리거나 옮길 때마다 지금 프레임에 자동으로 키가 찍힙니다 (보정 레이어가 없으면 '오토키' 레이어를 만들어요).\n"
                                    "끄면 편집이 전체 구간 '본별 보정'으로 들어갑니다 (레이어가 골라져 있고 🔴 기록이 켜져 있으면 그 레이어에 기록).\n"
                                    "오토키와 상관없이 K 키를 누르면 고른 본에 지금 프레임의 키를 찍습니다 (뷰포트 위에서).")
         self.cb_autokey.toggled.connect(self._autokey_toggled)
-        bl.addWidget(self.cb_autokey)
+        bl2.addWidget(self.cb_autokey)
         self.tool_buttons: Dict[str, QPushButton] = {}
         for tool, text, tip in (("select", "Q 선택", "점을 눌러 본을 고릅니다 (끌어도 아무것도 바뀌지 않음)"),
                                 ("move", "W 이동", "화살표(X 빨강/Y 초록/Z 파랑)를 끌면 그 축으로만, 중심 네모를 끌면 자유롭게 본(과 하위 본 전체)을 옮깁니다"),
@@ -630,22 +631,27 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.space_combo)
         self.bone_sel_label = QLabel("")
         self.bone_sel_label.setStyleSheet("color:#ffdc50")
-        bl.addWidget(self.bone_sel_label, 1)
+        bl.addStretch(1)
+        bl2.addWidget(self.bone_sel_label, 1)
         self.btn_bone_reset = QPushButton("이 본 초기화")
         self.btn_bone_reset.setToolTip("선택한 본의 수정을 처음 상태로 되돌립니다.\n레이어를 고른 상태면 그 레이어에서 이 본의 키를 모두 지우고, '원본' 상태(또는 그 레이어에 키가 없을 때)면 전체 구간 '본별 보정'(회전·위치·크기)을 지웁니다.\n"
                                         "손·발을 끌어 옮긴 경우 위/아래 팔다리에 기록된 값도 함께 되돌립니다.")
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
-        bl.addWidget(self.btn_bone_reset)
+        bl2.addWidget(self.btn_bone_reset)
         self.btn_place_reset = QPushButton("배치 초기화")
         self.btn_place_reset.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
         self.btn_place_reset.clicked.connect(self._place_reset)
-        bl.addWidget(self.btn_place_reset)
-        bl.addWidget(HelpIcon("배치 초기화 ≠ 본 초기화\n"
+        bl2.addWidget(self.btn_place_reset)
+        bl2.addWidget(HelpIcon("배치 초기화 ≠ 본 초기화\n"
                               "· 이 본 초기화: 고른 '본 하나'를 손본 것(회전·위치·크기, 레이어 키)을 되돌립니다.\n"
                               "· 배치 초기화: 모션 '전체'를 바닥에서 옮기거나 돌린 값(Shift+드래그 이동, Ctrl+드래그 회전, 루트 회전)을 0으로 되돌립니다.\n"
                               "본 수정은 그대로 두고 자리/방향만 처음으로 돌리고 싶을 때 씁니다."))
-        rl.addLayout(bl)
+        # 본 편집 도구(좌표계·포지션 분리·오토키·초기화)는 뷰포트 안 아래쪽에 겹쳐 둔다 — 뷰포트를 보면서 바로 누를 수 있게
+        self.vp_tools = ViewportOverlay(self.viewport)
+        self.vp_tools.add_row(bl)
+        self.vp_tools.add_row(bl2)
+        self.vp_tools.finish()
         self.bone_tree = QTreeWidget()
         self.bone_tree.setHeaderHidden(True)
         self.bone_tree.setMinimumHeight(60)
@@ -867,7 +873,13 @@ class MainWindow(QMainWindow):
         self.ex_aes = QLineEdit()
         self.ex_aes.setPlaceholderText("검사 후, 암호화된 게임일 때만 입력")
         self.ex_aes.setEnabled(False)
-        f.addRow("AES 키", self.ex_aes)
+        ah = QHBoxLayout()
+        ah.addWidget(self.ex_aes, 1)
+        self.btn_keys = QPushButton("키 후보 검증…")
+        self.btn_keys.setToolTip("인터넷에서 찾은 글(키가 여러 개 섞여 있어도 됨)을 통째로 붙여 넣으면, 키처럼 생긴 것을 모두 뽑아 이 게임에 하나씩 넣어 보고 실제로 열리는 키만 채워 줍니다.")
+        self.btn_keys.clicked.connect(lambda *_a: self._verify_key_candidates())
+        ah.addWidget(self.btn_keys)
+        f.addRow("AES 키", ah)
         self.ex_ue = QComboBox()
         for v_ in gamescan.merge_versions([]):
             self.ex_ue.addItem(v_, v_)
@@ -1272,6 +1284,37 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001 - 자동 채우기 실패가 검사를 막지 않게
             self.statusBar().showMessage("게임 설정 자동 채우기 실패: %s" % e)
         self._update_scan_gate()
+
+    def _verify_key_candidates(self, text: Optional[str] = None) -> None:
+        """붙여 넣은 글에서 AES 키 후보를 뽑아 실제로 열리는 키를 찾아 채운다."""
+        game = self.ex_game.text().strip()
+        helper = extractor.find_helper(self.cfg.get("helper"))
+        if not game or not helper:
+            QMessageBox.information(self, "키 후보 검증", "게임 폴더를 먼저 고르고 검사하세요." if helper else "추출 도우미(mbextract)를 찾지 못했습니다.")
+            return
+        if text is None:
+            text, ok = QInputDialog.getMultiLineText(self, "키 후보 검증", "AES 키가 들어 있는 글을 통째로 붙여 넣으세요 (여러 개여도 됩니다):", self.ex_aes.text())
+            if not ok:
+                return
+        cands = gamescan.extract_key_candidates(text)
+        if not cands:
+            QMessageBox.information(self, "키 후보 검증", "붙여 넣은 글에서 AES 키(64자리 16진수)를 찾지 못했습니다.")
+            return
+        ue = self.ex_ue.currentData() or "GAME_UE5_4"
+        usmap = self.ex_usmap.text().strip() or None
+
+        def done(res) -> None:
+            key, tried = res
+            if key:
+                self.ex_aes.setEnabled(True)
+                self.ex_aes.setText(key)
+                self.statusBar().showMessage("후보 %d개 중 맞는 키를 찾아 채웠습니다 (%d번째)" % (len(cands), len(tried)))
+            else:
+                why = (tried[-1].get("message") or "") if tried else ""
+                QMessageBox.warning(self, "키 후보 검증", "후보 %d개를 모두 넣어 봤지만 이 게임을 여는 키가 없습니다.\n"
+                                    "UE 버전(게임 전용 항목)이 틀려도 이렇게 나올 수 있습니다.\n\n마지막 결과: %s" % (len(cands), why))
+
+        self.run_async(lambda w: extractor.pick_working_key(helper, game, ue, usmap, cands), done, "키 후보 %d개 확인 중" % len(cands))
 
     def _sync_ue_list(self) -> list:
         """UE 버전 목록을 추출 도우미가 실제로 지원하는 전체 목록과 맞춘다 (고른 값은 유지)."""
@@ -1807,6 +1850,9 @@ class MainWindow(QMainWindow):
                                                                     "100% = 항상 그쪽을 유지 (기본) · 50% = 반쯤 · 0% = 막지 않음 (원본 자세에서 읽은 방향 그대로. 몬스터처럼 무릎이 옆으로 꺾이는 모델은 낮추세요)"))
         f.addRow("무릎·팔꿈치 과하게 접힘 방지", self._num("ik_knee_fold", 0, 100, 5, 0, " %", tip="발이 골반 바로 아래·안쪽으로 끌려올 때 무릎이 완전히 접혀 뒤집히는 것을 막는 정도입니다.\n"
                                                                     "100% = 안쪽 각도 20° 아래로는 못 접힘 (기본) · 0% = 제한 없음"))
+        f.addRow(self._chk("ik_no_reverse", "무릎·팔꿈치 역꺾임 방지 (사람형)", "무릎이 뒤로, 팔꿈치가 앞으로 꺾이는 것처럼 사람에게 나올 수 없는 방향으로 꺾인 프레임을 찾아, 이 클립에서 주로 꺾이는 쪽으로 다시 꺾어 줍니다.\n"
+                                                    "발/손 위치는 그대로 두고 무릎/팔꿈치만 반대편으로 넘깁니다. IK 가 적용되는 다리·팔에만 듣습니다 (발 IK 를 꺼 두면 다리에는 적용되지 않음).\n"
+                                                    "원래 반대로 꺾이는 다리를 가진 몬스터는 그 다리의 '주된 방향'을 기준으로 하므로 대개 문제없지만, 이상하면 끄세요."))
         self.knee_status = QLabel("")
         self.knee_status.setWordWrap(True)
         self.knee_status.setStyleSheet("color:#ffdc50")
@@ -3215,7 +3261,7 @@ class MainWindow(QMainWindow):
                 continue
             if not pl.applied:
                 continue
-            lines.append("%s: 방향 고정 %d프레임 · 접힘 방지 %d프레임" % (c.label, pl.knee_stable_frames, pl.knee_fold_frames))
+            lines.append("%s: 방향 고정 %d프레임 · 접힘 방지 %d프레임 · 역꺾임 고침 %d프레임" % (c.label, pl.knee_stable_frames, pl.knee_fold_frames, getattr(pl, "knee_reverse_frames", 0)))
         if not lines:
             lab.setText("지금 IK 가 적용된 다리/팔이 없어 무릎 보정도 쓰이지 않습니다 (IK 사용을 켜 보세요).")
         else:

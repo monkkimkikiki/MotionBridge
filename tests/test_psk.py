@@ -226,7 +226,7 @@ def test_convert_calls():
             assert script == "blender_mesh.py" and args[0].endswith(".npz") and args[2] == "SK_Hero"
             o = json.loads(args[3])
             assert o["axis_forward"] == "Y" and o["axis_up"] == "Z" and o["variants"] == ["rigged", "static"]
-            assert logs == ["경고"]
+            assert logs[-1] == "경고" and len(logs) == 2 and "텍스처" in logs[0], logs
             # 임시 npz 는 지워진다
             assert not os.path.exists(args[0])
             # 스켈레톤 없는 PSK: 리깅 포함 요청은 안내하고 static 만

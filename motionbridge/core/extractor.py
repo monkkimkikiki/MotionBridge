@@ -183,6 +183,25 @@ def probe(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[s
     return out
 
 
+KEY_WRONG_CODES = ("ERR_INVALID_AES", "ERR_NO_CONTAINERS", "ERR_NO_PACKAGES", "ERR_UNKNOWN", "")
+
+
+def pick_working_key(helper: str, game: str, ue: str, usmap: Optional[str], candidates: List[str], on_progress=None) -> Tuple[str, List[dict]]:
+    """키 후보를 하나씩 실제로 게임에 넣어 보고(컨테이너가 열리는지) 처음으로 맞는 키를 돌려준다. ("" = 맞는 키 없음, 시도 기록)
+
+    매핑(usmap)이 없어서 에셋 '내용'을 못 읽는 경우(ERR_MISSING_USMAP 등)도 컨테이너는 열린 것이므로 키는 맞는 것으로 본다."""
+    tried: List[dict] = []
+    for i, k in enumerate(candidates):
+        if on_progress:
+            on_progress(i, len(candidates), k)
+        r = probe(helper, game, ue, k, usmap, limit=2)
+        ok = r.get("code") not in KEY_WRONG_CODES
+        tried.append({"key": k, "ok": ok, "code": r.get("code"), "message": r.get("message")})
+        if ok:
+            return k, tried
+    return "", tried
+
+
 def list_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], pattern: str = "(?i)anim",
                 limit: int = 5000, on_event=None) -> List[str]:
     args = ["list"] + _base_args(game, ue, aes, usmap) + ["--filter", pattern, "--limit", str(limit)]

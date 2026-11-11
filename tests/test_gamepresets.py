@@ -110,3 +110,28 @@ if __name__ == "__main__":
     test_other_engines()
     test_presets()
     print("test_gamepresets ALL OK")
+
+
+def test_key_candidates():
+    from motionbridge.core import extractor, gamescan
+    a, b = "A" * 64, "0123456789abcdef" * 4
+    text = "Main key: 0x%s\n다른 버전 %s 그리고 중복 0x%s, 짧은것 0x1234, 너무 긴 %s" % (a, b, a.lower(), "F" * 70)
+    assert gamescan.extract_key_candidates(text) == ["0x" + a, "0x" + b.upper()]
+    assert gamescan.extract_key_candidates("") == []
+    calls = []
+    old = extractor.probe
+    try:
+        def fake(helper, game, ue, aes, usmap, limit=6):
+            calls.append(aes)
+            return {"code": "ERR_MISSING_USMAP" if aes.endswith("2") else "ERR_INVALID_AES", "message": "m"}
+        extractor.probe = fake
+        key, tried = extractor.pick_working_key("h", "g", "GAME_UE5_0", None, ["0x1", "0x2", "0x3"])
+        assert key == "0x2" and calls == ["0x1", "0x2"] and [t["ok"] for t in tried] == [False, True], "매핑만 없는 경우도 키는 맞는 것"
+        key, tried = extractor.pick_working_key("h", "g", "GAME_UE5_0", None, ["0x1", "0x3"])
+        assert key == "" and len(tried) == 2
+    finally:
+        extractor.probe = old
+    print("key candidates OK")
+
+
+test_key_candidates()

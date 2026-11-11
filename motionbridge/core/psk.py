@@ -218,7 +218,7 @@ _T = np.eye(3)
 SCALE = 0.01
 
 
-def to_blender(mesh: PskMesh, keep_bones: bool = True) -> Dict[str, np.ndarray]:
+def to_blender(mesh: PskMesh, keep_bones: bool = True, src_path: Optional[str] = None) -> Dict[str, np.ndarray]:
     """Blender 스크립트가 읽는 배열 묶음. 점/본은 미터, Z-up, 캐릭터는 -Y 를 본다."""
     verts = (mesh.points @ _T.T) * SCALE
     wf = mesh.faces
@@ -248,6 +248,8 @@ def to_blender(mesh: PskMesh, keep_bones: bool = True) -> Dict[str, np.ndarray]:
         "material_colors": np.array([material_color(m, i) for i, m in enumerate(mesh.materials)], dtype=np.float32).reshape(-1, 3),
         "name": np.array(mesh.name),
         "flipped": np.array(flipped),
+        # 재질마다 근처에서 찾은 기본 색 텍스처 파일 ('' = 못 찾음 -> 구분용 색만)
+        "material_textures": np.array(_mat_textures(src_path, mesh.materials), dtype=object),
     }
     if mesh.wedge_normal is not None:
         nn = mesh.wedge_normal @ _T.T
@@ -268,6 +270,16 @@ def to_blender(mesh: PskMesh, keep_bones: bool = True) -> Dict[str, np.ndarray]:
             "weights": mesh.weights.astype(np.float64),
         })
     return out
+
+
+def _mat_textures(src_path, materials) -> List[str]:
+    if not src_path:
+        return ["" for _ in materials]
+    try:
+        from .mattex import texture_list
+        return texture_list(src_path, materials)
+    except Exception:  # noqa: BLE001 - 텍스처 연결은 보조 기능
+        return ["" for _ in materials]
 
 
 def save_payload(path: str, payload: Dict[str, np.ndarray]) -> None:

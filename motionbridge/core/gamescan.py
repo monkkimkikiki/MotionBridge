@@ -390,3 +390,16 @@ def verdict(sc: "GameScan", has_key: bool, has_usmap: bool, preset: Optional[dic
     if need:
         return "yellow", "조건부 가능 — %s 필요" % " · ".join(need), "아래 칸에 넣으면 됩니다. 한 번 성공하면 다음부터는 게임 폴더만 고르면 자동으로 채워집니다."
     return "green", "추출 가능", "필요한 것이 모두 준비됐습니다. 검색/추출을 진행하세요."
+
+
+_KEY_IN_TEXT = re.compile(r"(?<![0-9a-fA-F])(?:0x)?([0-9a-fA-F]{64})(?![0-9a-fA-F])")
+
+
+def extract_key_candidates(text: str) -> List[str]:
+    """아무 글(웹 페이지·메모·채팅을 통째로 붙여 넣은 것)에서 AES-256 키처럼 생긴 것(64자리 16진수)을 모두 뽑는다. 겹치는 것은 한 번만, 나온 순서대로."""
+    out: List[str] = []
+    for m in _KEY_IN_TEXT.finditer(text or ""):
+        k = "0x" + m.group(1).upper()
+        if k not in out:
+            out.append(k)
+    return out

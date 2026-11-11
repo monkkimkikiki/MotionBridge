@@ -73,7 +73,25 @@ def test_help_icon():
     print("help OK")
 
 
+def test_paint_colors():
+    old = theme._mode
+    try:
+        theme._mode = "dark"
+        assert theme.paint_rgb(20, 22, 28) == (20, 22, 28), "어두운 테마에서는 그대로"
+        theme._mode = "light"
+        r, g, b = theme.paint_rgb(20, 22, 28)
+        assert min(r, g, b) > 200, "어두운 바탕색은 밝은 바탕색으로: %s" % ((r, g, b),)
+        r, g, b = theme.paint_rgb(235, 238, 245)
+        assert max(r, g, b) < 70, "밝은 글자색은 어두운 글자색으로: %s" % ((r, g, b),)
+        r, g, b = theme.paint_rgb(230, 60, 60)
+        assert r > 150 and g < 110, "강조색(빨강)은 색감을 유지: %s" % ((r, g, b),)
+    finally:
+        theme._mode = old
+    print("paint colors OK")
+
+
 if __name__ == "__main__":
+    test_paint_colors()
     test_convert_roundtrip()
     test_clamp()
     test_resizable_persist()

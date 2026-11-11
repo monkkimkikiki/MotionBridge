@@ -2,7 +2,7 @@
 
 팔레트(기본 색)는 QPalette 로 바꾸고, 글씨마다 직접 지정해 둔 색(setStyleSheet 의 #8aa 같은 것)은
 어두운 바탕용이라 밝은 바탕에서 안 보이므로 짝이 되는 색으로 바꿔 끼운다 (왕복해도 원래대로 돌아옴).
-3D 뷰포트·그래프 캔버스처럼 직접 그리는 화면은 두 테마 모두 어두운 바탕을 그대로 쓴다.
+3D 뷰포트만 두 테마 모두 어두운 바탕을 그대로 쓰고, 곡선 그래프·프레임 막대는 tc() 로 테마를 따른다.
 """
 from __future__ import annotations
 
@@ -138,10 +138,26 @@ def light_palette() -> QPalette:
     return p
 
 
+def _keep_dark(w) -> bool:
+    """뷰포트 위 도구 줄처럼 '항상 어둡게' 표시한 곳 안의 위젯인가."""
+    try:
+        for _ in range(8):
+            if w is None:
+                return False
+            if w.property("mbKeepDark"):
+                return True
+            w = w.parentWidget()
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _remap(w, to: str) -> None:
     try:
         css = w.styleSheet()
     except Exception:  # noqa: BLE001
+        return
+    if to == "light" and css and _keep_dark(w):
         return
     if not css:
         return
@@ -193,6 +209,10 @@ def apply_theme(app, new_mode: str) -> str:
             app.installEventFilter(_follower)
         for w in list(app.allWidgets()):
             _remap(w, new_mode)
+            try:
+                w.update()          # 직접 그리는 화면(그래프·프레임 막대)도 새 색으로 다시 그린다
+            except Exception:  # noqa: BLE001
+                pass
         for w in list(_OWN_PALETTE):       # 자기 팔레트를 따로 가진 화면(AnimRef)
             try:
                 w.setPalette(light_palette() if new_mode == "light" else _OWN_PALETTE[w])
@@ -201,3 +221,25 @@ def apply_theme(app, new_mode: str) -> str:
     except Exception:  # noqa: BLE001  (시험용 가짜 Qt)
         pass
     return new_mode
+
+
+def paint_rgb(r: int, g: int, b: int):
+    """직접 그리는 화면(곡선 그래프·프레임 막대)의 색: 밝은 테마면 어두운 바탕용 색을 밝은 바탕용 짝 색으로 바꾼 (r, g, b)."""
+    if _mode != "light":
+        return int(r), int(g), int(b)
+    tok = _flip("#%02x%02x%02x" % (int(r) & 255, int(g) & 255, int(b) & 255))
+    return int(tok[1:3], 16), int(tok[3:5], 16), int(tok[5:7], 16)
+
+
+def tc(*args):
+    """QColor(...) 대신 쓰는 테마 색. 인자는 QColor 와 같다 (r,g,b[,a]) 또는 ('#rrggbb'). 3D 뷰포트에서는 쓰지 않는다(항상 어둡게)."""
+    try:
+        if _mode == "light":
+            if len(args) >= 3 and all(isinstance(a, (int, float)) for a in args[:3]):
+                r, g, b = paint_rgb(args[0], args[1], args[2])
+                return QColor(r, g, b, *args[3:])
+            if len(args) == 1 and isinstance(args[0], str) and args[0].startswith("#") and len(args[0]) in (4, 7):
+                return QColor(_flip(args[0]))
+    except Exception:  # noqa: BLE001
+        pass
+    return QColor(*args)
