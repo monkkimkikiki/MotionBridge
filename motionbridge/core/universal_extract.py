@@ -46,7 +46,7 @@ def adapter_for(engine: str, root: str):
     if plugin is not None:
         return engine, plugin
     if engine == "unreal":
-        raise AdapterError("Unreal은 기존 CUE4Parse 기반 motionbridge extract 명령을 사용하세요.")
+        return engine, None
     if engine == "unknown":
         raise AdapterError("엔진을 자동 판별하지 못했습니다. 지원 어댑터를 설치하거나 motionbridge adapters 로 확인하세요.")
     raise AdapterError(f"'{engine}' 추출 어댑터를 찾지 못했습니다.")
