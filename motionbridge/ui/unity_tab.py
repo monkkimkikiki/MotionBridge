@@ -118,6 +118,9 @@ class UnityExtractTab(QWidget):
             self.out_path.setText(path)
 
     def scan_game(self) -> None:
+        if getattr(self.host, "_worker", None) is not None:
+            self.host.statusBar().showMessage("다른 작업이 끝난 뒤 Unity 검사를 시작하세요.")
+            return
         game = self.game_path.text().strip()
         if not game or not os.path.isdir(game):
             QMessageBox.warning(self, "Unity 검사", "Unity 게임 설치 폴더를 먼저 선택하세요.")
@@ -174,6 +177,9 @@ class UnityExtractTab(QWidget):
             self.summary.setText("전체 %d개 중 %d개 표시" % (len(self.records), self.asset_list.count()))
 
     def export_selected(self) -> None:
+        if getattr(self.host, "_worker", None) is not None:
+            self.host.statusBar().showMessage("다른 작업이 끝난 뒤 Unity 추출을 시작하세요.")
+            return
         selected = self.asset_list.selectedItems()
         if not selected:
             QMessageBox.information(self, "Unity 추출", "목록에서 추출할 에셋을 선택하세요.")
