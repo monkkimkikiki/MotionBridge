@@ -1058,11 +1058,30 @@ class VidFindTab(QWidget):
             lines.append("· %s (%.0f%%, %s, 애니 %d)" % (c["folder"], c["score"] * 100, c["why"], c["anims"]))
         if res.get("note"):
             lines.append("AI: " + res["note"])
-        lines.append("1위 후보의 메시를 아래 후보 목록에 바로 올리고 전부 선택해 두었습니다 — 애니메이션 후보도 같이 나옵니다. 아니면 다른 후보 이름으로 검색하세요.")
-        self.char_q.setText(top["folder"])
-        self.show_char_meshes()   # char_note 를 덮어쓰므로 요약은 그 뒤에 붙인다
-        self.mesh_list.selectAll()   # 리스트업 즉시 후보 자동 등록: 따로 클릭하지 않아도 메시·애니 후보가 채워진다
-        self.char_note.setText("\n".join(lines) + "\n" + self.char_note.text())
+        # 리스트업 즉시 후보 자동 등록: 찾은 '모든' 후보 캐릭터의 리깅 메시(뷰포트에서 열 수 있는 것)를
+        # 후보 목록에 바로 올리고 전부 선택한다 — 애니메이션 후보도 같이 나온다.
+        idx = self.index
+        self.char_mode = True
+        self.mesh_list.clear()
+        seen, n_items = set(), 0
+        for c in cands:
+            paths = c.get("meshes") or ([m.path for m in idx.meshes if ("/" + c["folder"].lower() + "/") in m.path.lower()] if idx else [])
+            for p in paths:
+                m = idx.mesh(p) if idx else None
+                if p in seen or m is None or not m.rigged:   # 인덱스에 있는 리깅 메시만 (뷰포트에서 열리는 것)
+                    continue
+                seen.add(p)
+                it = QListWidgetItem("[%d%% %s] %s    (%s)" % (round(c["score"] * 100), c["folder"], m.name, p))
+                it.setData(Qt.ItemDataRole.UserRole, p)
+                it.setToolTip("%s — %s\n%s" % (c["folder"], c["why"], p))
+                self.mesh_list.addItem(it)
+                n_items += 1
+        self.confirmed = sorted(seen)
+        self.mesh_list.selectAll()
+        lines.append("후보 %d종의 메시 %d개를 아래 후보 목록에 모두 올리고 선택해 두었습니다 — 애니메이션 후보도 같이 나옵니다. 아닌 것은 선택을 풀면 됩니다." % (len(cands), n_items))
+        self.char_q.setText(res.get("clue") or top["folder"])
+        self.char_note.setText("\n".join(lines))
+        self._refill_anims()
 
     def start_guess(self, force_index: bool = False) -> None:
         if self.rb_mode_char.isChecked():  # 캐릭터 메쉬 찾기: AI 추측 없이 이름 검색
