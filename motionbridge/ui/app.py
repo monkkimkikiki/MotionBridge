@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import quat as Q
-from ..core import animlink, animops, bridge, extractor, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
+from ..core import helperupdate, quat as Q
+from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core import guide as guide_mod
 from ..core.history import History
@@ -46,7 +46,7 @@ from ..core import posik
 from .clip_panel import ClipPanel
 from . import theme as _theme
 from .unity_tab import UnityExtractTab
-from .uikit import HelpIcon, Resizable, arrow_button, label_with_help, with_help
+from .uikit import HelpIcon, Resizable, ViewportOverlay, arrow_button, label_with_help, with_help
 from .help_text import EXTRACT_SEARCH_TIPS
 from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
 
@@ -584,10 +584,10 @@ class MainWindow(QMainWindow):
                                      "기즈모의 축 핸들을 끌면 한 축으로만, 점/중심을 끌면 자유롭게 바뀝니다. 빈 곳에서 끌면 카메라가 돕니다.\n"
                                      "Ctrl 을 누른 채 다른 본(점)을 클릭하면 선택은 그대로 두고 그 본에 지금 프레임의 키만 찍습니다 (레이어가 없으면 새로 만들어요).")
         self.cb_bone_edit.setCheckable(True)
-        self.cb_bone_edit.setMinimumHeight(34)
+        self.cb_bone_edit.setMinimumHeight(28)
         self.cb_bone_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cb_bone_edit.setStyleSheet(
-            "QPushButton{font-size:14px;font-weight:700;padding:6px 16px;border:2px solid #4a5570;border-radius:8px;background:#222836;color:#aab3c8}"
+            "QPushButton{font-size:13px;font-weight:700;padding:3px 12px;border:2px solid #4a5570;border-radius:8px;background:#222836;color:#aab3c8}"
             "QPushButton:hover{border-color:#8fb0ff;color:#ffffff}"
             "QPushButton:checked{background:#2f7d4a;border-color:#7ff0a0;color:#ffffff}"
             "QPushButton:checked:hover{background:#38905a}")
@@ -600,14 +600,16 @@ class MainWindow(QMainWindow):
                                     "체크(포지션 분리) = 그 본만 위치를 옮깁니다 (팔다리는 그대로, 그 본이 몸에서 떨어지거나 늘어난 모양이 될 수 있어요).\n"
                                     "손·발 끝이 아닌 본(골반·몸통·팔꿈치 등)은 항상 그 본만 움직입니다.")
         self.cb_pos_only.toggled.connect(self._pos_only_toggled)
-        bl.addWidget(self.cb_pos_only)
+        bl2 = QHBoxLayout()          # 둘째 줄: 포지션 분리 · 오토키 · 고른 본 · 초기화 (뷰포트 안 도구 줄)
+        bl2.addWidget(self.cb_pos_only)
         self.cb_autokey = QCheckBox("🔑 오토키")
         self.cb_autokey.setChecked(bool(self.cfg.get("autokey", False)))
         self.cb_autokey.setToolTip("켜면 본을 돌리거나 옮길 때마다 지금 프레임에 자동으로 키가 찍힙니다 (보정 레이어가 없으면 '오토키' 레이어를 만들어요).\n"
                                    "끄면 편집이 전체 구간 '본별 보정'으로 들어갑니다 (레이어가 골라져 있고 🔴 기록이 켜져 있으면 그 레이어에 기록).\n"
                                    "오토키와 상관없이 K 키를 누르면 고른 본에 지금 프레임의 키를 찍습니다 (뷰포트 위에서).")
         self.cb_autokey.toggled.connect(self._autokey_toggled)
-        bl.addWidget(self.cb_autokey)
+        self._sync_rec_autokey()
+        bl2.addWidget(self.cb_autokey)
         self.tool_buttons: Dict[str, QPushButton] = {}
         for tool, text, tip in (("select", "Q 선택", "점을 눌러 본을 고릅니다 (끌어도 아무것도 바뀌지 않음)"),
                                 ("move", "W 이동", "화살표(X 빨강/Y 초록/Z 파랑)를 끌면 그 축으로만, 중심 네모를 끌면 자유롭게 본(과 하위 본 전체)을 옮깁니다"),
@@ -633,22 +635,27 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.space_combo)
         self.bone_sel_label = QLabel("")
         self.bone_sel_label.setStyleSheet("color:#ffdc50")
-        bl.addWidget(self.bone_sel_label, 1)
+        bl.addStretch(1)
+        bl2.addWidget(self.bone_sel_label, 1)
         self.btn_bone_reset = QPushButton("이 본 초기화")
         self.btn_bone_reset.setToolTip("선택한 본의 수정을 처음 상태로 되돌립니다.\n레이어를 고른 상태면 그 레이어에서 이 본의 키를 모두 지우고, '원본' 상태(또는 그 레이어에 키가 없을 때)면 전체 구간 '본별 보정'(회전·위치·크기)을 지웁니다.\n"
                                         "손·발을 끌어 옮긴 경우 위/아래 팔다리에 기록된 값도 함께 되돌립니다.")
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
-        bl.addWidget(self.btn_bone_reset)
+        bl2.addWidget(self.btn_bone_reset)
         self.btn_place_reset = QPushButton("배치 초기화")
         self.btn_place_reset.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
         self.btn_place_reset.clicked.connect(self._place_reset)
-        bl.addWidget(self.btn_place_reset)
-        bl.addWidget(HelpIcon("배치 초기화 ≠ 본 초기화\n"
+        bl2.addWidget(self.btn_place_reset)
+        bl2.addWidget(HelpIcon("배치 초기화 ≠ 본 초기화\n"
                               "· 이 본 초기화: 고른 '본 하나'를 손본 것(회전·위치·크기, 레이어 키)을 되돌립니다.\n"
                               "· 배치 초기화: 모션 '전체'를 바닥에서 옮기거나 돌린 값(Shift+드래그 이동, Ctrl+드래그 회전, 루트 회전)을 0으로 되돌립니다.\n"
                               "본 수정은 그대로 두고 자리/방향만 처음으로 돌리고 싶을 때 씁니다."))
-        rl.addLayout(bl)
+        # 본 편집 도구(좌표계·포지션 분리·오토키·초기화)는 뷰포트 안 아래쪽에 겹쳐 둔다 — 뷰포트를 보면서 바로 누를 수 있게
+        self.vp_tools = ViewportOverlay(self.viewport)
+        self.vp_tools.add_row(bl)
+        self.vp_tools.add_row(bl2)
+        self.vp_tools.finish()
         self.bone_tree = QTreeWidget()
         self.bone_tree.setHeaderHidden(True)
         self.bone_tree.setMinimumHeight(60)
@@ -851,6 +858,17 @@ class MainWindow(QMainWindow):
         self.ex_summary = QLabel("① 게임 설치 폴더를 고르고 ② 주황색 [검사]를 먼저 누르세요. 암호화 여부를 확인하고, 그 뒤에 아래 설정이 켜집니다.")
         self.ex_summary.setWordWrap(True)
         v.addWidget(self.ex_summary)
+        # 추출 가능 여부 3단계 판정 (🟢 가능 / 🟡 조건부 / 🔴 불가) + 불가일 때 영상 쪽으로 가는 버튼
+        vh = QHBoxLayout()
+        self.ex_verdict = QLabel("")
+        self.ex_verdict.setWordWrap(True)
+        vh.addWidget(self.ex_verdict, 1)
+        self.btn_to_animref = QPushButton("AnimRef / AI 모캡으로 가기")
+        self.btn_to_animref.setToolTip("직접 추출이 안 되는 게임은 플레이 영상에서 모션을 얻습니다.")
+        self.btn_to_animref.clicked.connect(lambda *_a: self.set_mode("animref"))
+        self.btn_to_animref.setVisible(False)
+        vh.addWidget(self.btn_to_animref)
+        v.addLayout(vh)
         lay.addWidget(g)
 
         g = CollapsibleBox("2) 추출 설정")
@@ -859,13 +877,41 @@ class MainWindow(QMainWindow):
         self.ex_aes = QLineEdit()
         self.ex_aes.setPlaceholderText("검사 후, 암호화된 게임일 때만 입력")
         self.ex_aes.setEnabled(False)
-        f.addRow("AES 키", self.ex_aes)
+        ah = QHBoxLayout()
+        ah.addWidget(self.ex_aes, 1)
+        self.btn_keys = QPushButton("키 후보 검증…")
+        self.btn_keys.setToolTip("인터넷에서 찾은 글(키가 여러 개 섞여 있어도 됨)을 통째로 붙여 넣으면, 키처럼 생긴 것을 모두 뽑아 이 게임에 하나씩 넣어 보고 실제로 열리는 키만 채워 줍니다.")
+        self.btn_keys.clicked.connect(lambda *_a: self._verify_key_candidates())
+        ah.addWidget(self.btn_keys)
+        self.ex_keylist = QComboBox()
+        self.ex_keylist.setToolTip("한 번이라도 넣었던 AES 키를 게임 이름과 함께 기억해 둡니다. 고르면 AES 칸에 채워집니다.")
+        self.ex_keylist.setMinimumWidth(170)
+        self.ex_keylist.activated.connect(lambda i: self._key_picked(i))
+        ah.addWidget(self.ex_keylist)
+        self.ex_aes.editingFinished.connect(lambda: self._remember_key())
+        f.addRow("AES 키", ah)
+        self._refill_keylist()
         self.ex_ue = QComboBox()
-        for v_ in gamescan.UE_VERSIONS:
+        for v_ in gamescan.merge_versions([]):
             self.ex_ue.addItem(v_, v_)
         self.ex_ue.setCurrentIndex(max(self.ex_ue.findData(self.cfg.get("ue", "GAME_UE5_4")), 0))
         self.ex_ue.setToolTip("정확한 버전을 모르면 최신부터 시도하세요. 안 읽히면 다른 버전으로 바꿔 다시 검색합니다.")
-        f.addRow("UE 버전", self.ex_ue)
+        try:
+            self.ex_ue.setEditable(True)       # 목록이 길어서(게임 전용 항목 수백 개) 글자를 쳐서 찾을 수 있게
+            self.ex_ue.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        except Exception:  # noqa: BLE001
+            pass
+        f.addRow("UE 버전", with_help(self.ex_ue,
+                                    "게임이 만들어진 언리얼 버전입니다. 게임 폴더를 검사하면 실행 파일 버전을 읽어 자동으로 골라 줍니다.\n"
+                                    "목록 아래쪽에는 '게임 전용 항목'(GAME_BlackMythWukong 등)이 있습니다. 엔진을 고쳐 쓴 게임은 일반 버전으로는 안 열리고 전용 항목을 골라야 합니다 — "
+                                    "검사할 때 폴더 이름으로 전용 항목을 찾으면 자동으로 고릅니다. 칸에 글자를 쳐서 찾을 수도 있습니다 (예: wukong)."))
+        self.ex_links = QLineEdit()
+        self.ex_links.setPlaceholderText("이 게임의 키/매핑을 구한 곳 주소나 메모 (선택) — 게임과 함께 기억됩니다")
+        f.addRow("참고 링크·메모", self.ex_links)
+        self.ex_share = QLineEdit(self.cfg.get("preset_share_dir", ""))
+        self.ex_share.setPlaceholderText("(선택) 팀 공유 폴더 — 여기에 game_presets.json 을 같이 써서 팀원과 게임 설정을 공유")
+        self.ex_share.textChanged.connect(lambda *_a: (self.cfg.__setitem__("preset_share_dir", self.ex_share.text().strip()), bridge.save_config(self.cfg)))
+        f.addRow("공유 폴더", self.ex_share)
         h = QHBoxLayout()
         self.ex_usmap = QLineEdit(self.cfg.get("usmap", ""))
         self.ex_usmap.setPlaceholderText("언리얼 5 게임은 보통 필요 (.usmap)")
@@ -879,9 +925,35 @@ class MainWindow(QMainWindow):
         self.ex_helper_label = QLabel("")
         self.ex_helper_label.setWordWrap(True)
         f.addRow("추출 도우미", self.ex_helper_label)
+        hh = QHBoxLayout()
+        self.btn_helper_update = QPushButton("⬇ 추출기 업데이트")
+        self.btn_helper_update.setToolTip("추출기(mbextract)만 최신으로 받아 바꿉니다 — 앱을 다시 설치하지 않아도 새로 지원되는 게임이 추가됩니다.\n"
+                                          "받은 추출기가 실제로 동작하는지 확인한 뒤에만 바꾸고, 실패하면 지금 것을 그대로 둡니다.")
+        self.btn_helper_update.clicked.connect(lambda *_a: self.update_helper())
+        hh.addWidget(self.btn_helper_update)
         b = QPushButton("도우미 경로 지정…")
         b.clicked.connect(self._pick_helper)
-        f.addRow("", b)
+        hh.addWidget(b)
+        b = QPushButton("내장 추출기로")
+        b.setToolTip("업데이트로 받았거나 직접 지정한 추출기 대신, 앱에 들어 있는 추출기를 다시 씁니다.")
+        b.clicked.connect(lambda *_a: self._helper_builtin())
+        hh.addWidget(b)
+        hh.addWidget(HelpIcon("추출기가 어떤 게임을 읽을 수 있는지는 그 안의 오픈소스(CUE4Parse)가 정합니다.\n"
+                              "AES 키·매핑 파일·게임 설정은 직접 넣으면 되지만, 게임이 파일 형식 자체를 바꾼 경우(예: 검은 신화: 오공)는 추출기 코드가 그 게임을 알아야 합니다.\n"
+                              "매주 최신 CUE4Parse 로 추출기를 자동으로 다시 만들어 올려 두므로, 새 게임이 안 열리면 먼저 [추출기 업데이트]를 눌러 보세요."))
+        hh.addStretch(1)
+        f.addRow("", hh)
+        ph = QHBoxLayout()
+        b = QPushButton("게임 설정 내보내기…")
+        b.setToolTip("지금까지 기억한 게임별 설정(UE 버전·AES 키·링크·판정)을 파일 하나로 저장합니다. 다른 사람에게 건네 주면 그쪽에서 [불러오기]로 바로 씁니다.")
+        b.clicked.connect(lambda *_a: self.export_presets())
+        ph.addWidget(b)
+        b = QPushButton("게임 설정 불러오기…")
+        b.setToolTip("다른 사람이 건네 준 게임 설정 파일을 내 기록에 합칩니다. 그 뒤 해당 게임 폴더를 검사하면 자동으로 채워집니다.")
+        b.clicked.connect(lambda *_a: self.import_presets())
+        ph.addWidget(b)
+        ph.addStretch(1)
+        f.addRow("게임 설정", ph)
         self._update_helper_label()
         lay.addWidget(g)
 
@@ -1188,6 +1260,71 @@ class MainWindow(QMainWindow):
             bridge.save_config(self.cfg)
             self._update_helper_label()
 
+    def _helper_builtin(self) -> None:
+        self.cfg.pop("helper", None)
+        bridge.save_config(self.cfg)
+        extractor._GAMES_CACHE.clear()
+        self._update_helper_label()
+        self._sync_ue_list()
+
+    def update_helper(self) -> None:
+        """추출기만 최신으로 받아 바꾼다 (확인에 실패하면 쓰던 것을 그대로 둔다)."""
+        cur = extractor.find_helper(self.cfg.get("helper"))
+        old_games = extractor.list_games(cur) if cur else []
+        have = helperupdate.installed_info(cur).get("version", "")
+
+        def work(w):
+            info = helperupdate.latest_info()
+            if have and info.get("version") == have:
+                return {"same": True, "version": have}
+            return helperupdate.install(info)
+
+        def done(res) -> None:
+            if res.get("same"):
+                QMessageBox.information(self, "추출기 업데이트", "이미 최신 추출기입니다 (%s)." % res.get("version"))
+                return
+            self.cfg["helper"] = res["path"]
+            bridge.save_config(self.cfg)
+            extractor._GAMES_CACHE.clear()
+            self._update_helper_label()
+            self._sync_ue_list()
+            added = helperupdate.new_games(old_games, res.get("games") or [])
+            msg = "추출기를 %s 로 바꿨습니다.\n지원 항목 %d개" % (res.get("version"), len(res.get("games") or []))
+            if old_games and added:
+                msg += "\n\n새로 생긴 게임 전용 항목 %d개:\n%s" % (len(added), ", ".join(g.replace("GAME_", "") for g in added[:30]))
+            elif old_games:
+                msg += "\n\n새로 생긴 게임 전용 항목은 없습니다."
+            QMessageBox.information(self, "추출기 업데이트", msg)
+
+        self.run_async(work, done, "추출기 업데이트 확인 중")       # 실패(UpdateError)는 공통 오류 창이 이유를 보여 준다
+
+    def export_presets(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "게임 설정 내보내기", "game_presets.json", "게임 설정 (*.json)")
+        if not path:
+            return
+        keys = QMessageBox.question(self, "게임 설정 내보내기", "AES 키도 함께 내보낼까요?\n(아니요를 고르면 UE 버전·링크·판정만 들어갑니다)") == QMessageBox.StandardButton.Yes
+        try:
+            n = gamepresets.export_file(path, include_keys=keys)
+            self.statusBar().showMessage("게임 %d개의 설정을 내보냈습니다: %s" % (n, path))
+        except OSError as e:
+            QMessageBox.warning(self, "게임 설정 내보내기", str(e))
+
+    def import_presets(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "게임 설정 불러오기", "", "게임 설정 (*.json)")
+        if not path:
+            return
+        try:
+            n = gamepresets.import_file(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "게임 설정 불러오기", str(e))
+            return
+        self.statusBar().showMessage("게임 설정 %d개를 합쳤습니다. 해당 게임 폴더를 검사하면 자동으로 채워집니다." % n)
+        if getattr(self, "scan", None) is not None and n:
+            try:
+                self._apply_game_preset(self.scan)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _update_helper_label(self) -> None:
         p = extractor.find_helper(self.cfg.get("helper"))
         if p:
@@ -1247,11 +1384,180 @@ class MainWindow(QMainWindow):
         if sc.found:
             self.cfg["game_dir"] = sc.root
             auto = layout.detect_game_name(sc.root)
-            if not self.ex_gname.text().strip() or self.ex_gname.text().strip() == self.cfg.get("game_name_auto", ""):
-                self.ex_gname.setText(auto)  # 직접 고친 이름은 덮어쓰지 않는다
+            same_game = os.path.normcase(os.path.normpath(self.cfg.get("game_name_root", "") or "")) == os.path.normcase(os.path.normpath(sc.root))
+            if (not same_game) or not self.ex_gname.text().strip() or self.ex_gname.text().strip() == self.cfg.get("game_name_auto", ""):
+                # 다른 게임 폴더를 검사했으면 이름도 그 게임 것으로 바꾼다 (예전에 이 게임에 붙여 둔 이름이 있으면 그것을, 없으면 폴더에서 알아낸 이름).
+                # 같은 게임을 다시 검사할 때만 직접 고친 이름을 지킨다.
+                saved = ""
+                try:
+                    saved = str((gamepresets.lookup(sc, self.cfg.get("preset_share_dir", "") or None) or {}).get("name") or "")
+                except Exception:  # noqa: BLE001
+                    saved = ""
+                self.ex_gname.setText(saved or auto)
             self.cfg["game_name_auto"] = auto
+            self.cfg["game_name_root"] = sc.root
             bridge.save_config(self.cfg)
+        try:
+            self._apply_game_preset(sc)
+        except Exception as e:  # noqa: BLE001 - 자동 채우기 실패가 검사를 막지 않게
+            self.statusBar().showMessage("게임 설정 자동 채우기 실패: %s" % e)
         self._update_scan_gate()
+
+    def _refill_keylist(self) -> None:
+        cb = self.__dict__.get("ex_keylist")
+        if cb is None:
+            return
+        if not isinstance(self.cfg.get("aes_keys"), list):
+            self.cfg["aes_keys"] = []
+        keys = gamepresets.key_list(self.cfg["aes_keys"], self.cfg.get("preset_share_dir", "") or None)
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("보유 키 목록 (%d)" % len(keys), "")
+        for e in keys:
+            cb.addItem("%s — %s…%s" % (e["name"] or "(이름 없음)", e["key"][:8], e["key"][-4:]), e["key"])
+        cb.setCurrentIndex(0)
+        cb.blockSignals(False)
+
+    def _key_picked(self, i: int) -> None:
+        key = self.ex_keylist.itemData(i) if i > 0 else ""
+        if key:
+            self.ex_aes.setEnabled(True)
+            self.ex_aes.setText(str(key))
+        self.ex_keylist.setCurrentIndex(0)
+
+    def _remember_key(self) -> None:
+        """AES 칸에 올바른 키가 들어오면 게임 이름과 함께 보유 키 목록에 넣는다 (추출에 성공하지 않아도)."""
+        try:
+            key = gamescan.normalize_aes_key(self.ex_aes.text())
+        except Exception:  # noqa: BLE001 - 아직 덜 적었거나 형식이 틀림
+            return
+        if not isinstance(self.cfg.get("aes_keys"), list):
+            self.cfg["aes_keys"] = []
+        name = self.ex_gname.text().strip() or layout.detect_game_name(self.ex_game.text().strip())
+        if gamepresets.add_key(self.cfg["aes_keys"], name, key):
+            bridge.save_config(self.cfg)
+            self._refill_keylist()
+
+    def _verify_key_candidates(self, text: Optional[str] = None) -> None:
+        """붙여 넣은 글에서 AES 키 후보를 뽑아 실제로 열리는 키를 찾아 채운다."""
+        game = self.ex_game.text().strip()
+        helper = extractor.find_helper(self.cfg.get("helper"))
+        if not game or not helper:
+            QMessageBox.information(self, "키 후보 검증", "게임 폴더를 먼저 고르고 검사하세요." if helper else "추출 도우미(mbextract)를 찾지 못했습니다.")
+            return
+        if text is None:
+            text, ok = QInputDialog.getMultiLineText(self, "키 후보 검증", "AES 키가 들어 있는 글을 통째로 붙여 넣으세요 (여러 개여도 됩니다):", self.ex_aes.text())
+            if not ok:
+                return
+        cands = gamescan.extract_key_candidates(text)
+        if not cands:
+            QMessageBox.information(self, "키 후보 검증", "붙여 넣은 글에서 AES 키(64자리 16진수)를 찾지 못했습니다.")
+            return
+        ue = self.ex_ue.currentData() or "GAME_UE5_4"
+        usmap = self.ex_usmap.text().strip() or None
+
+        def done(res) -> None:
+            key, tried = res
+            if key:
+                self.ex_aes.setEnabled(True)
+                self.ex_aes.setText(key)
+                self._remember_key()
+                self.statusBar().showMessage("후보 %d개 중 맞는 키를 찾아 채웠습니다 (%d번째)" % (len(cands), len(tried)))
+            else:
+                why = (tried[-1].get("message") or "") if tried else ""
+                QMessageBox.warning(self, "키 후보 검증", "후보 %d개를 모두 넣어 봤지만 이 게임을 여는 키가 없습니다.\n"
+                                    "UE 버전(게임 전용 항목)이 틀려도 이렇게 나올 수 있습니다.\n\n마지막 결과: %s" % (len(cands), why))
+
+        self.run_async(lambda w: extractor.pick_working_key(helper, game, ue, usmap, cands), done, "키 후보 %d개 확인 중" % len(cands))
+
+    def _sync_ue_list(self) -> list:
+        """UE 버전 목록을 추출 도우미가 실제로 지원하는 전체 목록과 맞춘다 (고른 값은 유지)."""
+        games = extractor.list_games(extractor.find_helper(self.cfg.get("helper")))
+        want = gamescan.merge_versions(games)
+        have = [self.ex_ue.itemData(i) for i in range(self.ex_ue.count())]
+        if want != have:
+            cur = self.ex_ue.currentData() or self.cfg.get("ue", "GAME_UE5_4")
+            self.ex_ue.blockSignals(True)
+            self.ex_ue.clear()
+            for v_ in want:
+                self.ex_ue.addItem(v_, v_)
+            self.ex_ue.setCurrentIndex(max(self.ex_ue.findData(cur), 0))
+            self.ex_ue.blockSignals(False)
+        return games or want
+
+    def _set_ue(self, name: str) -> bool:
+        i = self.ex_ue.findData(name)
+        if i >= 0:
+            self.ex_ue.setCurrentIndex(i)
+        return i >= 0
+
+    def _apply_game_preset(self, sc) -> None:
+        """검사 직후: 예전에 쓴 설정(AES 키·UE 버전·usmap·링크)을 자동으로 채우고, 처음 보는 게임이면 UE 버전을 추천하고, 3단계 판정을 보여 준다."""
+        games = self._sync_ue_list()
+        share = self.cfg.get("preset_share_dir", "") or None
+        pre = gamepresets.lookup(sc, share) if sc.found or sc.engine else None
+        notes = []
+        if pre:
+            if pre.get("ue") and self._set_ue(pre["ue"]):
+                notes.append("UE 버전 " + pre["ue"])
+            if pre.get("aes") and sc.encrypted:
+                self.ex_aes.setText(pre["aes"])
+                notes.append("AES 키")
+            if pre.get("usmap") and os.path.isfile(pre["usmap"]):
+                self.ex_usmap.setText(pre["usmap"])
+                notes.append("매핑 파일")
+            if pre.get("links") or pre.get("note"):
+                self.ex_links.setText(" ".join(pre.get("links") or []) + ((" " + pre["note"]) if pre.get("note") else ""))
+        else:
+            self.ex_aes.setText("")
+            self.ex_links.setText("")
+            name, why = gamescan.suggest_ue(sc, games, self.ex_gname.text())
+            if name and self._set_ue(name):
+                notes.append("UE 버전 %s (%s)" % (name, why))
+        cur_um = self.ex_usmap.text().strip()
+        if sc.found and sc.is_unreal5 and (not cur_um or not os.path.isfile(cur_um) or (not pre and self.cfg.get("usmap_game") != sc.root)):
+            um = gamepresets.find_usmap_near(sc, [share] if share else None)     # 게임 폴더·공유 폴더에 놓아 둔 .usmap
+            if um:
+                self.ex_usmap.setText(um)
+                notes.append("매핑 파일(%s)" % os.path.basename(um))
+            elif not pre and self.cfg.get("usmap_game") not in (None, "", sc.root):
+                self.ex_usmap.setText("")          # 다른 게임의 매핑 파일이 남아 있으면 비운다 (맞지 않는 매핑은 오류의 원인)
+        self.cfg["usmap_game"] = sc.root
+        has_key = False
+        try:
+            has_key = bool(gamescan.normalize_aes_key(self.ex_aes.text()))
+        except ValueError:
+            pass
+        um = self.ex_usmap.text().strip()
+        state, title, desc = gamescan.verdict(sc, has_key, bool(um and os.path.isfile(um)), pre)
+        icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}[state]
+        color = {"green": "#5ab0ff", "yellow": "#e0a050", "red": "#e0a050"}[state]
+        head = ("예전 설정을 불러왔습니다: " if pre else "자동으로 맞춘 것: ") + ", ".join(notes) if notes else ""
+        eng = {"unreal": "언리얼", "unity": "유니티", "re": "RE 엔진", "godot": "고도"}.get(sc.engine, "알 수 없음")
+        facts = "엔진: %s%s%s" % (eng, (" · 실행 파일 버전 " + sc.exe_version) if sc.exe_version else "", (" · 스팀 AppID " + sc.appid) if sc.appid else "")
+        self.ex_verdict.setText("%s %s — %s\n%s%s" % (icon, title, desc, facts, ("\n" + head) if head else ""))
+        self.ex_verdict.setStyleSheet("color:%s;font-weight:700" % color)
+        self.btn_to_animref.setVisible(state == "red")
+        self._verdict_state = state
+
+    def _remember_game(self, status: str = "ok", reason: str = "") -> None:
+        """추출/검색이 실제로 성공한 설정을 게임과 함께 기억한다 (다음에 같은 게임 폴더를 고르면 자동으로 채움)."""
+        sc = self.__dict__.get("scan")
+        if sc is None or not sc.found:
+            return
+        try:
+            aes = gamescan.normalize_aes_key(self.ex_aes.text()) if sc.encrypted else ""
+        except ValueError:
+            aes = ""
+        txt = self.ex_links.text().strip()
+        links = [w for w in txt.split() if w.lower().startswith(("http://", "https://"))]
+        note = " ".join(w for w in txt.split() if w not in links)
+        try:
+            gamepresets.remember(sc, self.cfg.get("preset_share_dir", "") or None, name=self.ex_gname.text().strip(),
+                                 ue=self.ex_ue.currentData() or "", aes=aes, usmap=self.ex_usmap.text().strip(),
+                                 links=links, note=note, status=status, reason=reason)
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage("게임 설정 저장 실패: %s" % e)
 
     def _extract_args(self):
         """추출 호출에 필요한 값을 모은다. 조건이 안 맞으면 안내창을 띄우고 None."""
@@ -1339,6 +1645,8 @@ class MainWindow(QMainWindow):
 
     def _after_search(self, paths) -> None:
         self.ex_list.set_paths(paths)
+        if paths:
+            self._remember_game("ok")       # 실제로 열린 설정만 기억한다
         logs = getattr(self, "_ex_logs", [])
         self.ex_count.setText("%d개" % len(paths) + (" — 폴더 왼쪽 화살표로 열고 닫기, 폴더를 고르면 안의 파일 전부 추출" if paths else " — UE 버전, mappings(.usmap), 검색식을 확인해 보세요.\n도우미 로그: " + " / ".join(logs[-4:])))
 
@@ -1696,6 +2004,9 @@ class MainWindow(QMainWindow):
                                                                     "100% = 항상 그쪽을 유지 (기본) · 50% = 반쯤 · 0% = 막지 않음 (원본 자세에서 읽은 방향 그대로. 몬스터처럼 무릎이 옆으로 꺾이는 모델은 낮추세요)"))
         f.addRow("무릎·팔꿈치 과하게 접힘 방지", self._num("ik_knee_fold", 0, 100, 5, 0, " %", tip="발이 골반 바로 아래·안쪽으로 끌려올 때 무릎이 완전히 접혀 뒤집히는 것을 막는 정도입니다.\n"
                                                                     "100% = 안쪽 각도 20° 아래로는 못 접힘 (기본) · 0% = 제한 없음"))
+        f.addRow(self._chk("ik_no_reverse", "무릎·팔꿈치 역꺾임 방지 (사람형)", "무릎이 뒤로, 팔꿈치가 앞으로 꺾이는 것처럼 사람에게 나올 수 없는 방향으로 꺾인 프레임을 찾아, 이 클립에서 주로 꺾이는 쪽으로 다시 꺾어 줍니다.\n"
+                                                    "발/손 위치는 그대로 두고 무릎/팔꿈치만 반대편으로 넘깁니다. IK 가 적용되는 다리·팔에만 듣습니다 (발 IK 를 꺼 두면 다리에는 적용되지 않음).\n"
+                                                    "원래 반대로 꺾이는 다리를 가진 몬스터는 그 다리의 '주된 방향'을 기준으로 하므로 대개 문제없지만, 이상하면 끄세요."))
         self.knee_status = QLabel("")
         self.knee_status.setWordWrap(True)
         self.knee_status.setStyleSheet("color:#ffdc50")
@@ -1800,6 +2111,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(g)
 
         self.layer_panel = LayerPanel(self)
+        self._sync_rec_autokey()
         lay.addWidget(self.layer_panel)
 
         g = CollapsibleBox("모션 다듬기 (좌우 반전 · 떨림 줄이기 · 튀는 구간 제거 · 부위별 세기)")
@@ -2658,8 +2970,19 @@ class MainWindow(QMainWindow):
             self.pr.settings.rot_offsets.pop(j, None)
         self._after_bone_value_edit(j)
 
+    def _sync_rec_autokey(self) -> None:
+        """'🔴 기록' 체크와 '🔑 오토키'는 같은 스위치 — 둘 다 만들어진 뒤 시작 상태를 오토키 쪽에 맞춘다."""
+        lp, cb = self.__dict__.get("layer_panel"), self.__dict__.get("cb_autokey")
+        if lp is None or cb is None:
+            return
+        if lp.rec.isChecked() != cb.isChecked():
+            lp.rec.setChecked(bool(cb.isChecked()))
+
     def _autokey_toggled(self, on: bool) -> None:
         self.cfg["autokey"] = bool(on)
+        lp = self.__dict__.get("layer_panel")
+        if lp is not None and lp.rec.isChecked() != bool(on):
+            lp.rec.setChecked(bool(on))
         try:
             bridge.save_config(self.cfg)
         except Exception:  # noqa: BLE001
@@ -3104,7 +3427,7 @@ class MainWindow(QMainWindow):
                 continue
             if not pl.applied:
                 continue
-            lines.append("%s: 방향 고정 %d프레임 · 접힘 방지 %d프레임" % (c.label, pl.knee_stable_frames, pl.knee_fold_frames))
+            lines.append("%s: 방향 고정 %d프레임 · 접힘 방지 %d프레임 · 역꺾임 고침 %d프레임" % (c.label, pl.knee_stable_frames, pl.knee_fold_frames, getattr(pl, "knee_reverse_frames", 0)))
         if not lines:
             lab.setText("지금 IK 가 적용된 다리/팔이 없어 무릎 보정도 쓰이지 않습니다 (IK 사용을 켜 보세요).")
         else:

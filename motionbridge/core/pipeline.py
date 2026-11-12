@@ -574,6 +574,15 @@ class Project:
         if st is not None and st.has_effect():
             res.base_anim = res.anim
             res.anim = apply_layers(res.anim, st)
+            try:      # 직접 지정한 IK '켜기' 구간: 레이어로 무릎/허벅지를 돌려도 발·손은 그 자리에 다시 고정
+                from . import repin as _repin
+                if res.anim is res.base_anim:
+                    res.anim = dataclasses.replace(res.anim, rot=res.anim.rot.copy(), pos=res.anim.pos.copy())
+                n_pin = _repin.repin(self.tgt.skeleton, res.base_anim, res.anim, res.chains, self.settings.ik_ranges.get(self.clip))
+                if n_pin:
+                    res.warnings.append("ℹ IK 로 고정한 구간 %d프레임에서 본 편집 뒤에도 발/손을 제자리에 유지했습니다" % n_pin)
+            except Exception as e:  # noqa: BLE001 - 보조 기능이라 실패해도 결과는 낸다
+                res.warnings.append("IK 고정 유지 실패: %s" % e)
             res.warnings.append("ℹ 보정 레이어 %d개의 키 %d개가 적용됨" % (sum(1 for l in st.layers if not l.mute and l.weight > 0 and l.n_keys()), st.total_keys()))
         self.result = res
         self.issues = analyze(self.tgt.skeleton, res, self.settings) if analyze_quality else []

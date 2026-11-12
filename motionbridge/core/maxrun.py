@@ -65,7 +65,7 @@ def read_log(path: str) -> str:
     """MaxScript 의 format to:file 은 UTF-8 이 아니라 시스템 ANSI(한국어 Windows 는 cp949)로 쓰는 경우가 있다."""
     with open(path, "rb") as f:
         raw = f.read()
-    for enc in ("utf-8-sig", "mbcs" if os.name == "nt" else "cp949", "cp949"):
+    for enc in ("utf-8-sig", "cp949", "mbcs" if os.name == "nt" else "cp949"):
         try:
             return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):

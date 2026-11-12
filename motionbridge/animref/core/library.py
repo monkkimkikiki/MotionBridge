@@ -122,7 +122,13 @@ def rename_clip(s, meta, new_name):
     new = safe_name(str(new_name).strip())
     if not str(new_name).strip():
         raise ValueError("이름을 입력해 주세요.")
-    if new == old:
+    if len(new) > 80:
+        raise ValueError("이름이 너무 길어요. (80자 이하)")
+    if new == old:            # 파일 이름은 그대로여도, 붙인 이름은 화면에 바로 보이게 기억한다
+        if str(meta.get("custom_name") or "") != str(new_name).strip():
+            meta = dict(meta)
+            meta["custom_name"] = str(new_name).strip()
+            save_clip(meta)
         return meta, []
     if len(new) > 80:
         raise ValueError("이름이 너무 길어요. (80자 이하)")
@@ -175,6 +181,7 @@ def rename_clip(s, meta, new_name):
     old_h, new_h = gdir / "handoff" / old, gdir / "handoff" / new
     meta = dict(meta)
     meta["_json"] = str(new_json)
+    meta["custom_name"] = str(new_name).strip()      # 목록에 보이는 이름 (예전에는 파일 이름만 바뀌고 목록 글자는 '영상 제목+시간' 그대로라 안 바뀐 것처럼 보였다)
     rec = meta.get("motion")
     if isinstance(rec, dict) and (new_m.exists()) and Path(rec.get("dir", "")) == old_m:
         try:

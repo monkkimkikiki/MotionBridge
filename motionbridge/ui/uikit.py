@@ -1,7 +1,7 @@
 """화면 곳곳에서 같이 쓰는 작은 부품: ? 도움말 아이콘 / 끌어서 크기 조절 / 접기 화살표."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QToolButton, QToolTip, QVBoxLayout, QWidget
 
 BIG = 16777215
@@ -148,3 +148,53 @@ def arrow_button(text: str, tip: str, width: int = 14) -> QToolButton:
     except Exception:  # noqa: BLE001
         pass
     return b
+
+
+class ViewportOverlay(QWidget):
+    """뷰포트 아래쪽에 겹쳐 놓는 도구 줄 (본 편집 버튼·좌표계·초기화 등). 뷰포트 크기가 바뀌면 따라 붙는다.
+    뷰포트는 테마와 상관없이 어두운 바탕이므로 이 줄도 항상 어두운 모양을 유지한다 (mbKeepDark)."""
+
+    def __init__(self, host) -> None:
+        super().__init__(host)
+        self.host = host
+        self.setProperty("mbKeepDark", True)
+        try:
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setStyleSheet("ViewportOverlay{background:rgba(18,20,26,225);border-top:1px solid rgba(255,255,255,45)}")
+            from . import theme
+            self.setPalette(theme.dark_palette())
+            host.installEventFilter(self)
+        except Exception:  # noqa: BLE001
+            pass
+        self.box = QVBoxLayout(self)
+        self.box.setContentsMargins(6, 3, 6, 3)
+        self.box.setSpacing(2)
+
+    def add_row(self, layout) -> None:
+        self.box.addLayout(layout)
+
+    def finish(self) -> None:
+        """버튼/체크박스가 키보드 초점을 가져가지 않게 (뷰포트의 Q/W/E/R·K 단축키가 계속 듣도록) 하고 자리를 잡는다."""
+        try:
+            from PySide6.QtWidgets import QAbstractButton
+            for w in self.findChildren(QAbstractButton):
+                w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        except Exception:  # noqa: BLE001
+            pass
+        self.place()
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
+        try:
+            if obj is self.host and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                self.place()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    def place(self) -> None:
+        try:
+            h = int(self.sizeHint().height())
+            self.setGeometry(0, max(int(self.host.height()) - h, 0), int(self.host.width()), h)
+            self.raise_()
+        except Exception:  # noqa: BLE001
+            pass

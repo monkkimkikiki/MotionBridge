@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushBu
 
 from ..core import curves
 from ..core.layers import apply_layers
+from .theme import tc as _tc
 from . import graph_math as G
 from .widgets import CollapsibleBox
 
@@ -34,6 +35,7 @@ class CurveCanvas(QWidget):
     ik_deleted = Signal(int)          # 고른 IK 박스를 Delete 키로 지움
     ik_pending_moved = Signal(int)    # Ctrl+끌기로 옮긴 'IK 시작 표시선' 프레임
     chans_changed = Signal()          # 곡선을 눌러 고른 축(채널)이 바뀜
+    keys_delete = Signal(int, int)    # Delete 키: 고른 구간(없으면 지금 프레임)의 키를 지워 달라 (a, b) 0부터
 
     BOX_H = 10                   # IK 직접 지정 박스 높이(px) — 그래프 아래쪽 띠
     EDGE_PX = 6                  # 박스 가장자리를 이만큼(px) 안에서 잡으면 크기 조절
@@ -138,7 +140,27 @@ class CurveCanvas(QWidget):
             i, self.ik_sel = self.ik_sel, -1
             self.ik_deleted.emit(int(i))
             return
+        if ev.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.T > 0:
+            a, b = self.range if self.range is not None else (self.frame, self.frame)
+            self.keys_delete.emit(int(a), int(b))
+            return
+        if ev.key() == Qt.Key.Key_Escape and self.range is not None:
+            self.range = None
+            self.update()
+            return
         super().keyPressEvent(ev)
+
+    def contact_run_at(self, f: int):
+        """f 프레임이 속한 자동 접지(노란 띠) 구간 (a, b) 또는 None."""
+        c = self.contact
+        if c is None or not (0 <= f < len(c)) or not c[f]:
+            return None
+        a = b = int(f)
+        while a > 0 and c[a - 1]:
+            a -= 1
+        while b < len(c) - 1 and c[b + 1]:
+            b += 1
+        return a, b
 
     def set_frame(self, f: int) -> None:
         self.frame = int(f)
@@ -241,6 +263,12 @@ class CurveCanvas(QWidget):
                     if not why:
                         self._mode, self._pull = "pull", (ch, int(fh), float(y))
                     return
+        run = self.contact_run_at(f) if (not right and y <= (gm.top + (gm.h - gm.bottom)) / 2.0) else None
+        if run is not None:                                           # 노란 띠(접지 구간)를 누르면 그 구간이 통째로 선택된다 -> 바로 일직선/발 고정
+            self.range = run
+            self.range_picked.emit(int(run[0]), int(run[1]))
+            self.msg = "접지 구간 %d~%d 프레임을 골랐습니다 — 아래 📏 일직선 / 📌 발 고정 버튼이 이 구간에 바로 적용됩니다" % (run[0] + 1, run[1] + 1)
+            self.update()
         self._mode = "scrub"
         self.scrub.emit(f)
 
@@ -343,9 +371,9 @@ class CurveCanvas(QWidget):
     # ---- 그리기
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#15171c"))
+        p.fillRect(self.rect(), _tc("#15171c"))
         if self.T <= 0 or not self.chans or not self.final:
-            p.setPen(QColor("#8a93a6"))
+            p.setPen(_tc("#8a93a6"))
             p.drawText(12, 28, "본을 고르면 그 본의 곡선이 여기에 보입니다 (소스 모션과 타깃 모델이 있어야 해요).")
             p.end()
             return
@@ -361,29 +389,29 @@ class CurveCanvas(QWidget):
                 runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
                 for r in runs:
                     xa, xb = int(gm.x_of(r[0] - 0.5)), int(gm.x_of(r[-1] + 0.5))
-                    p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 1), (y1 - y0) // 2, QColor(255, 220, 80, 46))     # 자동 접지 띠는 위쪽 절반만
+                    p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 1), (y1 - y0) // 2, _tc(255, 220, 80, 46))     # 자동 접지 띠는 위쪽 절반만
         if self.range is not None:
             xa, xb = int(gm.x_of(self.range[0] - 0.5)), int(gm.x_of(self.range[1] + 0.5))
-            p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 2), y1 - y0, QColor(90, 150, 255, 55))
-        p.setPen(QPen(QColor("#2a2f3a"), 1))
+            p.fillRect(max(xa, x0), y0, max(min(xb, x1) - max(xa, x0), 2), y1 - y0, _tc(90, 150, 255, 55))
+        p.setPen(QPen(_tc("#2a2f3a"), 1))
         for v in G.nice_ticks(gm.v0, gm.v1, 5):
             y = int(gm.y_of(v))
             p.drawLine(x0, y, x1, y)
-            p.setPen(QColor("#7f8aa0"))
+            p.setPen(_tc("#7f8aa0"))
             p.drawText(2, y + 4, "%g" % round(v, 3))
-            p.setPen(QPen(QColor("#2a2f3a"), 1))
+            p.setPen(QPen(_tc("#2a2f3a"), 1))
         for fr in G.nice_ticks(gm.f0, gm.f1, 8):
             x = int(gm.x_of(fr))
             p.drawLine(x, y0, x, y1)
-            p.setPen(QColor("#7f8aa0"))
+            p.setPen(_tc("#7f8aa0"))
             p.drawText(x + 2, int(gm.h) - 5, "%d" % (int(fr) + 1))
-            p.setPen(QPen(QColor("#2a2f3a"), 1))
+            p.setPen(QPen(_tc("#2a2f3a"), 1))
         fr_idx = np.arange(self.T)
         xs = gm.x_of(fr_idx)
         for ch in self.chans:
-            col = QColor(COLORS[ch])
+            col = _tc(COLORS[ch])
             if ch in self.below:
-                dim = QColor(col)
+                dim = _tc(col)
                 dim.setAlpha(80)
                 p.setPen(QPen(dim, 1))
                 ys = gm.y_of(self.below[ch])
@@ -391,7 +419,7 @@ class CurveCanvas(QWidget):
                     p.drawLine(int(xs[i]), int(ys[i]), int(xs[i + 1]), int(ys[i + 1]))
             on = ch in self.picked()
             if not on:
-                col = QColor(col)
+                col = _tc(col)
                 col.setAlpha(110)
             p.setPen(QPen(col, 3 if (on and self.sel_chans) else 2))
             ys = gm.y_of(self.final[ch])
@@ -402,26 +430,26 @@ class CurveCanvas(QWidget):
             for i, (a, b, on) in enumerate(self.ik_boxes):
                 xa, xb = int(gm.x_of(a - 0.5)), int(gm.x_of(b + 0.5))
                 xa, xb = max(xa, x0), min(xb, x1)
-                col = QColor(70, 200, 120, 190) if on else QColor(230, 90, 90, 190)
+                col = _tc(70, 200, 120, 190) if on else _tc(230, 90, 90, 190)
                 p.fillRect(xa, ya, max(xb - xa, 3), self.BOX_H, col)
-                p.setPen(QPen(QColor("#ffffff") if i == self.ik_sel else QColor(0, 0, 0, 160), 2 if i == self.ik_sel else 1))
+                p.setPen(QPen(_tc("#ffffff") if i == self.ik_sel else _tc(0, 0, 0, 160), 2 if i == self.ik_sel else 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(xa, ya, max(xb - xa, 3), self.BOX_H)
             if self.ik_pending is not None:
                 xp = int(gm.x_of(self.ik_pending[0]))
-                p.setPen(QPen(QColor(70, 220, 130) if self.ik_pending[1] else QColor(240, 100, 100), 2, Qt.PenStyle.DashLine))
+                p.setPen(QPen(_tc(70, 220, 130) if self.ik_pending[1] else _tc(240, 100, 100), 2, Qt.PenStyle.DashLine))
                 p.drawLine(xp, y0, xp, y1)
         xc = int(gm.x_of(self.frame))
-        p.setPen(QPen(QColor("#ffffff"), 1))
+        p.setPen(QPen(_tc("#ffffff"), 1))
         p.drawLine(xc, y0, xc, y1)
         kp = self.key_points()
         for fq, v, (ch, _f) in kp:
             xx, yy = int(gm.x_of(fq)), int(gm.y_of(v))
-            p.setBrush(QColor("#ffdc50"))
-            p.setPen(QPen(QColor("#000000"), 1))
+            p.setBrush(_tc("#ffdc50"))
+            p.setPen(QPen(_tc("#000000"), 1))
             p.drawRect(xx - 4, yy - 4, 8, 8)
         if kp:                                                       # 키마다 프레임 번호와 값 (키가 많으면 번호만)
-            p.setPen(QColor("#ffe98a"))
+            p.setPen(_tc("#ffe98a"))
             few = len({int(f) for f, _v, _i in kp}) <= 14
             for fq, v, (ch, _f) in kp:
                 xx, yy = int(gm.x_of(fq)), int(gm.y_of(v))
@@ -429,15 +457,24 @@ class CurveCanvas(QWidget):
         frames = sorted({int(f) for f in self.key_frames})
         if self.layer is not None:
             head = ("키 %d개 (프레임 %s)" % (len(frames), ", ".join(str(f + 1) for f in frames[:16]) + (" …" if len(frames) > 16 else ""))) if frames else "이 본에는 키가 없습니다"
-            p.setPen(QColor("#c8cfdd"))
+            p.setPen(_tc("#c8cfdd"))
             p.drawText(x0 + 6, y0 + 28, head)
         if self.drag_info:
-            p.setPen(QColor("#ffdc50"))
+            p.setPen(_tc("#ffdc50"))
             p.drawText(x0 + 6, y0 + 42, "▶ 찍는 중: " + self.drag_info)
         if self.msg:
-            p.setPen(QColor("#ffdc50"))
+            p.setPen(_tc("#ffdc50"))
             p.drawText(x0 + 6, y0 + 14, self.msg[:90])
+        p.setPen(_tc("#ffffff"))                                   # 지금 프레임 / 전체 프레임
+        f2 = QFont(p.font())
+        f2.setPointSize(10)
+        f2.setBold(True)
+        p.setFont(f2)
+        p.drawText(x1 - 96, y0 + 16, self.frame_text())
         p.end()
+
+    def frame_text(self) -> str:
+        return "%d / %d" % (int(self.frame) + 1, int(self.T))
 
 
 class CurveEditor(CollapsibleBox):
@@ -485,6 +522,7 @@ class CurveEditor(CollapsibleBox):
         self.canvas.key_dragged.connect(self._dragged)
         self.canvas.key_changed.connect(self._changed)
         self.canvas.chans_changed.connect(self._canvas_picked)
+        self.canvas.keys_delete.connect(lambda a, b: self.delete_keys(a, b))
         self.canvas.ik_moved.connect(self._ik_moved)
         self.canvas.ik_deleted.connect(self._ik_deleted)
         self.canvas.ik_pending_moved.connect(self._ik_pending_moved)
@@ -502,6 +540,17 @@ class CurveEditor(CollapsibleBox):
             bt.clicked.connect(lambda _c=False, m=mode: self.range_do(m))
             rb.addWidget(bt)
             self.btns[mode] = bt
+        self.btn_pin = QPushButton("📌 발/손 고정")
+        self.btn_pin.setToolTip("고른 구간 동안 이 발(또는 손)을 한 자리에 못 박습니다 (IK 구간 직접 지정 '켜기'와 같음).\n"
+                                "'일직선으로'는 한 본의 각도만 평평하게 해서, 골반이 움직이면 발이 같이 밀립니다(슬립). 발을 바닥에 고정하려면 이 버튼을 쓰세요 — "
+                                "골반이 움직여도 무릎이 알아서 접히며 발은 그 자리에 있습니다.\n노란 띠(자동 접지 구간)를 누르면 그 구간이 바로 선택됩니다.")
+        self.btn_pin.clicked.connect(lambda _c=False: self.pin_range())
+        rb.addWidget(self.btn_pin)
+        self.btn_del = QPushButton("🗑 키 지우기")
+        self.btn_del.setToolTip("고른 구간의 키를 지웁니다 (구간을 안 골랐으면 지금 프레임의 키). 그래프를 누른 뒤 Delete 키와 같습니다.\n"
+                                "키가 아니라 '프레임 자체'를 잘라 내 모션을 줄이려면 뷰어 아래 '프레임 편집' 막대를 쓰세요.")
+        self.btn_del.clicked.connect(lambda _c=False: self.delete_keys(*(self.canvas.range if self.canvas.range is not None else (None, None))))
+        rb.addWidget(self.btn_del)
         rb.addWidget(QLabel("기준"))
         self.anchor = QComboBox()
         self.anchor.addItem("구간 시작 값", "start")
@@ -547,7 +596,9 @@ class CurveEditor(CollapsibleBox):
                 c = np.asarray(pl.contact, dtype=bool)
                 contact = c if contact is None else (contact | c)
         chans = self.chans()
-        self.lbl.setText("%s — %s" % (self.app._bone_label(j), ("레이어 '%s' 편집 중" % lay.name) if lay else "원본 상태 (레이어 없음)"))
+        flat_pos = chans == curves.POS and all(float(np.ptp(final[c])) < 1e-6 for c in chans)
+        self.lbl.setText("%s — %s%s" % (self.app._bone_label(j), ("레이어 '%s' 편집 중" % lay.name) if lay else "원본 상태 (레이어 없음)",
+                                        "  ·  위치가 일직선인 것은 정상입니다: 이 값은 '부모 본 기준 위치'(=뼈 길이)라 골반/루트 말고는 변하지 않아요" if flat_pos else ""))
         cv.set_data(chans, {c: final[c] for c in chans}, {c: below[c] for c in chans} if below else {}, lay.frames(j) if lay else [], contact,
                     lay, res.anim, j, res.anim.n_frames, (j, self.group.currentData(), res.anim.n_frames, id(pr.tgt)))
         ikp = self.app.__dict__.get("ik_panel")
@@ -595,6 +646,27 @@ class CurveEditor(CollapsibleBox):
         a, b = self.canvas.range if self.canvas.range is not None else (None, None)
         sel = self.canvas.picked()
         self.app.layer_panel.range_action(mode, a, b, chans=None if sel >= set(self.canvas.chans) else sorted(sel))
+
+    def delete_keys(self, a=None, b=None) -> None:
+        self.app.layer_panel.delete_keys(a, b)
+
+    def pin_range(self) -> None:
+        """고른 구간 동안 이 발/손을 그 자리에 고정 (IK 직접 지정 '켜기' 구간을 만든다)."""
+        app = self.app
+        ikp = app.__dict__.get("ik_panel")
+        j = app.viewport.selected_joint
+        rng = self.canvas.range
+        lab = ikp.chain_for_bone(int(j)) if (ikp is not None and j is not None) else None
+        if ikp is None or lab is None:
+            app.statusBar().showMessage("발·다리·손·팔 본을 고른 뒤 눌러 주세요 (IK 가 걸린 팔다리만 고정할 수 있어요)")
+            return
+        if rng is None:
+            app.statusBar().showMessage("고정할 구간을 먼저 고르세요: 그래프에서 Shift+끌기, 또는 노란 띠(접지 구간)를 클릭")
+            return
+        ikp.sync_from_bone(int(j))
+        ikp.add(True, int(rng[0]), int(rng[1]))
+        app.statusBar().showMessage("%s: %d~%d 프레임 동안 고정했습니다 (그래프 아래 초록 박스 — Delete 로 해제)" % (lab, rng[0] + 1, rng[1] + 1))
+        self.refresh()
 
     def _group_changed(self, *_a) -> None:
         self.canvas.sel_chans = set()

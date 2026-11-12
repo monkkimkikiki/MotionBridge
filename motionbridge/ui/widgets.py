@@ -54,6 +54,12 @@ class Worker(QThread):
             self.finished_ok.emit(self.fn(self))
         except Exception as e:  # noqa: BLE001 - UI 에 그대로 보여준다
             detail = "".join(traceback.format_exception_only(type(e), e)).strip()
+            if getattr(e, "code", ""):        # 추출 도우미가 원인 코드를 알려 준 오류: 원인과 할 일을 먼저 보여 준다
+                try:
+                    from ..core import extractor as _ex
+                    detail = _ex.explain(e)
+                except Exception:  # noqa: BLE001
+                    pass
             self.failed.emit(detail + "\n\n" + traceback.format_exc())
 
 

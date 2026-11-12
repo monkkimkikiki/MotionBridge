@@ -76,7 +76,7 @@ class LayerPanel(CollapsibleBox):
         self.fade.changed.connect(self._fade_changed)
         fd.addWidget(self.fade, 1)
         v.addLayout(fd)
-        self.rec = QCheckBox("🔴 레이어를 고른 동안 본 편집을 이 레이어의 키로 기록 (끄면 전체 구간 '본별 보정'으로 들어가며 레이어가 아닙니다)")
+        self.rec = QCheckBox("🔴 오토키 — 본 편집을 레이어의 키로 기록 (끄면 전체 구간 '본별 보정'으로 들어가며 레이어가 아닙니다)")
         self.rec.setChecked(True)
         self.rec.setToolTip("켜 두면, 레이어가 선택된 상태에서 뷰포트로 본을 돌리거나 옮길 때 현재 프레임에 키가 찍히고 앞뒤로 블렌드됩니다.\n"
                             "'원본' 줄이 선택돼 있거나 레이어가 없으면 전체 구간 '본별 보정'에 기록됩니다 (레이어를 꺼도 남는 값). 크기(R)는 레이어에 기록되지 않습니다.")
@@ -184,9 +184,10 @@ class LayerPanel(CollapsibleBox):
 
     def recording(self) -> bool:
         """본 편집을 레이어 키로 기록할지: 레이어가 골라져 있고 기록이 켜져 있을 때."""
-        if not self.rec.isChecked():
-            return False
-        return self.stack().current() is not None or self.autokey_on()
+        cb = self.app.__dict__.get("cb_autokey")
+        if cb is not None:          # 오토키가 꺼져 있으면 어떤 경우에도 키를 찍지 않는다
+            return bool(cb.isChecked())
+        return bool(self.rec.isChecked() and self.stack().current() is not None)
 
     def autokey_on(self) -> bool:
         """뷰포트의 '오토키' 체크박스. 켜져 있으면 본을 고칠 때 (레이어가 없거나 '원본'을 보고 있어도) 알아서 레이어를 만들어 키를 찍는다."""
@@ -222,7 +223,7 @@ class LayerPanel(CollapsibleBox):
             it = QListWidgetItem("원본 (리타겟 결과 · 레이어 없음)")
             self.lst.addItem(it)
             for i, l in enumerate(st.layers):
-                it = QListWidgetItem("%d. %s  (키 %d · 세기 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight))
+                it = QListWidgetItem(self._item_text(i, l))
                 try:
                     it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 except TypeError:       # 가짜 Qt(시험용)에서는 플래그 연산이 안 된다
@@ -252,7 +253,7 @@ class LayerPanel(CollapsibleBox):
                 " · 내보내기도 이 상태로 나갑니다.")
         if st.top < len(st.layers):
             head += " (위쪽 %d개는 잠시 숨김)" % (len(st.layers) - st.top)
-        head += "\n본 편집 기록 위치: " + ("레이어 '%s' 의 키 (프레임별, 앞뒤로 블렌드)" % cur.name if self.recording() else
+        head += "\n본 편집 기록 위치: " + (("레이어 '%s' 의 키 (프레임별, 앞뒤로 블렌드)" % cur.name if cur is not None else "새 '오토키' 레이어의 키 (본을 고치면 만들어짐)") if self.recording() else
                                             "전체 구간 '본별 보정' — 레이어가 아니라서 레이어를 꺼도 남습니다")
         if self._msg:
             head += "\n" + self._msg
@@ -358,6 +359,10 @@ class LayerPanel(CollapsibleBox):
             self.app.schedule()
 
     def _rec_toggled(self, on: bool) -> None:
+        # '🔴 기록'과 뷰포트의 '🔑 오토키'는 같은 스위치다 (둘이 따로 놀아, 오토키를 꺼도 기록이 켜져 있으면 키가 찍혔다)
+        cb = self.app.__dict__.get("cb_autokey")
+        if cb is not None and cb.isChecked() != bool(on):
+            cb.setChecked(bool(on))
         if on:
             if not self.app.cb_bone_edit.isChecked():
                 self.app.cb_bone_edit.setChecked(True)
@@ -417,6 +422,8 @@ class LayerPanel(CollapsibleBox):
 
     def _need_targets(self):
         cur, js = self.layer(), self._targets()
+        if cur is None and js and self.app.pr.result is not None:     # 레이어가 없으면(원본 상태) 버튼이 아무 일도 안 하던 문제: 레이어를 만들어 찍는다
+            cur = self.stack().add("키 찍기")
         why = layeredit.editable(cur)
         if why or not js:
             self.app.statusBar().showMessage(why or "먼저 본을 고르세요 (뷰포트의 점 또는 본 목록)")
@@ -467,8 +474,33 @@ class LayerPanel(CollapsibleBox):
             return
         for j in js:
             cur.set_key(j, self._frame(), rot=np.array([1.0, 0.0, 0.0, 0.0]), pos=np.zeros(3))
-        self._msg = "아래 값(원본)으로 키 %d개를 찍었습니다 (프레임 %d)." % (len(js), self._frame() + 1)
+        had = sum(1 for j in js if len(cur.frames(j)) > 1)
+        self._msg = "아래 값(원본)으로 키 %d개를 찍었습니다 (프레임 %d, 레이어 '%s')." % (len(js), self._frame() + 1, cur.name)
+        if not had:
+            self._msg += " 이 레이어에는 이 본들을 고친 다른 키가 없어서 화면은 그대로입니다 — 원본 키는 '이 레이어에서 고친 것'만 되돌립니다 (오토키를 끄고 고친 '본별 보정'이나 다른 레이어의 수정은 그대로)."
+        self.app.statusBar().showMessage(self._msg)
         self._changed()
+
+    def delete_keys(self, a: Optional[int] = None, b: Optional[int] = None) -> int:
+        """대상 본의 키를 지운다: a..b(0부터, 끝 포함) 구간, 주지 않으면 지금 프레임. 지운 개수."""
+        cur, js = self.layer(), self._targets()
+        if cur is None or not js:
+            self.app.statusBar().showMessage("지울 키가 있는 레이어와 본을 먼저 고르세요")
+            return 0
+        why = layeredit.editable(cur)
+        if why:
+            self.app.statusBar().showMessage(why)
+            return 0
+        lo, hi = (self._frame(), self._frame()) if a is None or b is None else (min(a, b), max(a, b))
+        n = 0
+        for j in js:
+            for f in [f for f in cur.frames(j) if lo <= f <= hi]:
+                n += bool(cur.remove_key(j, f))
+        self._msg = ("프레임 %d~%d 의 키 %d개를 지웠습니다." % (lo + 1, hi + 1, n)) if n else "그 구간에는 지울 키가 없습니다."
+        self.app.statusBar().showMessage(self._msg)
+        if n:
+            self._changed()
+        return n
 
     def delete_key(self) -> None:
         cur, js = self.layer(), self._targets()
@@ -573,8 +605,30 @@ class LayerPanel(CollapsibleBox):
             return True
         return False
 
+    @staticmethod
+    def _item_text(i: int, l) -> str:
+        return "%d. %s  (키 %d · 세기 %.2f)" % (i + 1, l.name, l.n_keys(), l.weight)
+
+    def _retitle_items(self) -> None:
+        """목록을 다시 만들지 않고 글자(키 개수)만 고친다 — 끄는 동안 오토키로 키가 늘어도 목록의 숫자가 따라오게."""
+        was = self._busy
+        self._busy = True
+        try:
+            st = self.stack()
+            for i, l in enumerate(st.layers):
+                it = self.lst.item(i + 1)
+                if it is not None:
+                    t = self._item_text(i, l)
+                    if it.text() != t:
+                        it.setText(t)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._busy = was
+
     def _after_drag(self) -> None:
         self._warned = ""
+        self._retitle_items()
         self.app.viewport.edited_joints = self.app._edited_set()
         self._update_info()
         self.app.schedule_live()

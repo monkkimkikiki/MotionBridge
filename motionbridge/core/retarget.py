@@ -85,6 +85,7 @@ class RetargetSettings:
     fx_spike_deg: float = 0.0
     fx_spike_len: int = 6        # 튀는 구간으로 볼 최대 프레임 수
     ik_knee_stable: float = 100.0   # % — 무릎/팔꿈치 방향 안정화 (0 = 현재 자세에서 읽은 방향 그대로, 100 = 꺾임이 충분한 앞뒤 프레임의 방향을 이어 씀)
+    ik_no_reverse: bool = True      # 무릎/팔꿈치 역꺾임 방지: 이 클립에서 주로 꺾이는 쪽의 반대로 꺾인 프레임은 주된 쪽으로 돌려 놓는다
     ik_knee_fold: float = 100.0     # % — 무릎/팔꿈치 과접힘 방지 (0 = 제한 없음, 100 = 안쪽 각도 20° 미만으로 접히지 않음)
     fx_smooth: float = 0.0
     fx_mirror: bool = False
@@ -101,6 +102,7 @@ class ChainPlan:
     auto_contact: Optional[np.ndarray] = None  # 직접 지정한 구간을 반영하기 전, 자동으로 판정한 접지 (T,) bool
     applied: bool = False  # 이 체인에 IK 가 실제로 적용됐는가 (꺼져 있거나 손이 바닥에 안 닿으면 False — 뷰포트 IK 표시도 이때는 그리지 않는다)
     knee_stable_frames: int = 0   # 무릎 방향 고정이 실제로 방향을 바꾼 프레임 수 (화면 표시용)
+    knee_reverse_frames: int = 0  # 역꺾임 방지가 꺾임 방향을 돌려 놓은 프레임 수
     knee_fold_frames: int = 0     # 접힘 방지가 발 위치를 한계 지점으로 당긴 프레임 수
 
 
@@ -158,7 +160,7 @@ def clean_mask(mask: np.ndarray, min_len: int = 3, max_gap: int = 2) -> np.ndarr
     return m
 
 
-def stable_pole(A, B, C, Rref, pole_fallback=(0.0, 0.0, 1.0), lo=0.015, hi=0.05):
+def stable_pole(A, B, C, Rref, pole_fallback=(0.0, 0.0, 1.0), lo=0.015, hi=0.05, no_reverse=False, info=None):
     """무릎/팔꿈치가 향할 방향을 프레임마다 안정적으로 정한다. (pole (N,3), 신뢰도 (N,) 0..1)
 
     다리가 거의 펴진 프레임은 '꺾인 방향'을 현재 자세에서 읽을 수 없다 (펴진 다리의 옆 성분은 거의 0 이라 발 목표가 조금만 옆으로 가도 무릎이 옆·뒤로 돌아간다).
@@ -175,6 +177,22 @@ def stable_pole(A, B, C, Rref, pole_fallback=(0.0, 0.0, 1.0), lo=0.015, hi=0.05)
     cur_dir = off / np.maximum(np.linalg.norm(off, axis=1), 1e-9)[:, None]
     local = Q.rotate(Q.conj(Rref), cur_dir)
     good = np.flatnonzero(rel > 0.5)
+    rev = np.zeros(N, dtype=bool)
+    if no_reverse and len(good):
+        # 역꺾임: 이 클립에서 주로 꺾이는 방향(꺾임이 클수록 크게 반영한 평균)과 반대쪽으로 꺾인 프레임.
+        # 그런 프레임은 '믿을 수 없는 방향'으로 보고, 앞뒤의 정상 프레임 방향을 이어 쓴다 -> IK 가 무릎/팔꿈치를 주된 쪽으로 다시 꺾는다.
+        dom = (local[good] * mag[good][:, None]).sum(axis=0)
+        dn = float(np.linalg.norm(dom))
+        if dn > 1e-9:
+            dom = dom / dn
+            rev = (local @ dom < -0.25) & (mag > lo * 0.5)
+            if rev.any() and (~rev[good]).any():
+                rel = np.where(rev, 0.0, rel)
+                good = np.flatnonzero(rel > 0.5)
+            else:
+                rev[:] = False
+    if info is not None:
+        info["reversed"] = rev
     fb = Q.rotate(Q.conj(Rref[0]), np.asarray(pole_fallback, dtype=float))
     if len(good) == 0:
         filled = np.tile(fb, (N, 1))
@@ -674,9 +692,14 @@ def retarget(
             Cc = Q.rotate(Ft, Wp[:, ch.foot])
             pu0 = tgt.parents[ch.upper]
             Rref = Q.mul(Ft, Wr[:, pu0]) if pu0 >= 0 else np.tile(np.asarray(Ft, dtype=float), (T, 1))
-            pole, prel = stable_pole(A, B, Cc, Rref)
+            pinfo: dict = {}
+            pole, prel = stable_pole(A, B, Cc, Rref, no_reverse=bool(getattr(st, "ik_no_reverse", False)), info=pinfo)
             stab = float(np.clip(st.ik_knee_stable, 0.0, 100.0)) / 100.0
             prel = 1.0 - stab * (1.0 - prel)             # 0% 면 신뢰도 1 = 예전처럼 현재 자세의 방향만 쓴다
+            revm = pinfo.get("reversed")
+            if revm is not None and revm.any():
+                prel = np.where(revm, 0.0, prel)         # 역꺾임 프레임은 방향 고정 %와 상관없이 주된 방향으로
+                pl.knee_reverse_frames = int(revm.sum())
             mfd = 20.0 * float(np.clip(st.ik_knee_fold, 0.0, 100.0)) / 100.0
             Bn, Cn, fail = two_bone_ik(A, B, Cc, pl.target, l1, l2, pole=pole, pole_rel=prel, min_fold_deg=mfd)
             # 이 보정이 몇 프레임에 실제로 걸렸는지 (검수자가 '쓰이고 있나' 바로 볼 수 있게)

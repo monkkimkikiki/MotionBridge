@@ -118,7 +118,8 @@ def build_prompt(vocab: Sequence[str], game_hint: str = "", known: Sequence[str]
         "(playable) character when its body is visible (ignore first-person hands/weapon, UI, and scenery). Several can be on screen at once. "
         "For the playable character use a name from the list that contains words like player, hero or protagonist if one exists, otherwise answer \"player\".\n"
         "%s" + ("Characters in this game, one per line as '<ID> = <in-game name> [kind]' (kind: boss, miniboss, enemy, npc, shell = playable armor set; "
-                "internal IDs are descriptive English words that hint at the creature's look):\n%s\n\n" if ids else "Known character names in this game's files:\n[%s]\n\n") +
+                "internal IDs are descriptive English words that hint at the creature's look):\n%s\n\n" if ids else "Known character names in this game's files (internal asset names; they may be romanized Chinese/pinyin, Japanese or Korean, or abbreviations — "
+                "decode them before matching; a decoded meaning may follow a name in parentheses, answer with the name part BEFORE the parenthesis):\n[%s]\n\n") +
         "For each visible character answer with:\n"
         '  "name": ' + ("the ID (the part before ' =') of the matching line, exactly as written" if ids else "the matching name from the list above exactly as written") +
         '. Do NOT force a match: if the character is not clearly one of them '

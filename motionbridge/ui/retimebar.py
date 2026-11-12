@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout, QWidget
 
 from ..core import frameedit
+from .theme import tc as _tc
 
 PRESETS = [0.25, 0.5, 1.0, 2.0, 4.0]
 GAP, MINW = 3, 26.0
@@ -146,7 +147,7 @@ class FrameStrip(QWidget):
     def paintEvent(self, _ev) -> None:
         e = self._get()
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#15171c"))
+        p.fillRect(self.rect(), _tc("#15171c"))
         if e is None:
             p.end()
             return
@@ -158,22 +159,22 @@ class FrameStrip(QWidget):
         lay = e.layout()
         for i, ((x0, w), pc) in enumerate(zip(self.blocks(), e.pieces)):
             r, g, b = piece_rgb(pc)
-            p.setBrush(QColor(r, g, b))
-            p.setPen(QPen(QColor("#ffffff"), 2) if i == sel else QPen(QColor(0, 0, 0, 90), 1))
+            p.setBrush(_tc(r, g, b))
+            p.setPen(QPen(_tc("#ffffff"), 2) if i == sel else QPen(_tc(0, 0, 0, 90), 1))
             p.drawRoundedRect(int(x0), top, int(w), h, 5, 5)
-            p.setPen(QColor("#ffffff"))
+            p.setPen(_tc("#ffffff"))
             txt = ("⏸ %d" % pc.n) if pc.hold else fmt_speed(pc.speed)
             p.drawText(int(x0), top, int(w), h, int(Qt.AlignmentFlag.AlignCenter), txt)
-            p.setPen(QColor("#9aa3b5"))
+            p.setPen(_tc("#9aa3b5"))
             p.drawText(int(x0), top + h + 1, int(max(w, 44)), 14, int(Qt.AlignmentFlag.AlignLeft), "%d" % (lay[i][1] - lay[i][0]))
         sel = self.selection()
         if sel is not None:
             both = self.m_in is not None and self.m_out is not None
             xa, xb = self.x_left(sel[0]), self.x_right(sel[1])
-            p.fillRect(int(xa), top - 3, max(int(xb - xa), 2), h + 6, QColor(255, 255, 255, 60 if both else 30))
+            p.fillRect(int(xa), top - 3, max(int(xb - xa), 2), h + 6, _tc(255, 255, 255, 60 if both else 30))
             for m, xe, col in ((self.m_in, xa, "#46c37b"), (self.m_out, xb, "#ff6b6b")):
                 if m is not None:
-                    p.setPen(QPen(QColor(col), 3))
+                    p.setPen(QPen(_tc(col), 3))
                     x = int(xe)
                     p.drawLine(x, top - 5, x, top + h + 5)
                     d = 5 if col == "#46c37b" else -5  # [ ] 모양 머리
@@ -181,14 +182,14 @@ class FrameStrip(QWidget):
                     p.drawLine(x, top + h + 5, x + d, top + h + 5)
         # 블록 오른쪽 끝 잡는 곳 (끌어서 길이 조절)
         for (x0, w) in self.blocks():
-            p.fillRect(int(x0 + w) - 2, top + 4, 3, h - 8, QColor(255, 255, 255, 110))
+            p.fillRect(int(x0 + w) - 2, top + 4, 3, h - 8, _tc(255, 255, 255, 110))
         if self.edge_preview is not None:
             i, n_new = self.edge_preview
             xe = int(self._edge[2] + (n_new - self._edge[1]) * self._edge[3])
-            p.setPen(QPen(QColor("#ffe27a"), 2))
+            p.setPen(QPen(_tc("#ffe27a"), 2))
             p.drawLine(xe, 0, xe, self.H - 14)
             p.drawText(max(xe - 60, 2), top + h + 1, 120, 14, int(Qt.AlignmentFlag.AlignCenter), "%d프레임" % n_new)
-        p.setPen(QPen(QColor("#ffffff"), 2))
+        p.setPen(QPen(_tc("#ffffff"), 2))
         x = int(self.x_of(self.frame))
         p.drawLine(x, 0, x, self.H - 14)
         p.end()

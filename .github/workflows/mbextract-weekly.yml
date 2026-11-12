@@ -1,0 +1,55 @@
+name: mbextract-weekly
+# 추출기(mbextract)만 최신 CUE4Parse 로 다시 빌드해 'mbextract-latest' 릴리스에 올린다.
+# 앱의 [추출기 업데이트] 버튼이 이 파일을 받아 간다 — 앱을 다시 설치하지 않아도 새 게임 지원이 따라온다.
+# 빌드나 확인이 실패하면 올리지 않으므로, 지난번에 올라간 정상 파일이 그대로 남는다.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 19 * * 0"   # 매주 월요일 04:17 (한국 시간)
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build
+        shell: bash
+        run: |
+          git clone --depth 1 --recursive https://github.com/FabianFG/CUE4Parse third_party/CUE4Parse
+          echo "CUE_SHA=$(git -C third_party/CUE4Parse rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "CUE_DATE=$(git -C third_party/CUE4Parse log -1 --format=%cs)" >> "$GITHUB_ENV"
+          dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o tools/mbextract/out
+      - name: Verify (지원 게임 목록이 나오는지)
+        shell: bash
+        run: |
+          tools/mbextract/out/mbextract.exe list-games > games.json
+          python - <<'PY'
+          import json, os, datetime
+          line = next(l for l in open("games.json", encoding="utf-8-sig").read().splitlines() if l.strip().startswith("["))
+          games = [g for g in json.loads(line) if isinstance(g, str) and g.startswith("GAME_")]
+          assert len(games) > 50, "지원 게임 목록이 너무 짧다: %d" % len(games)
+          ver = datetime.datetime.utcnow().strftime("%Y%m%d") + "-" + os.environ["CUE_SHA"]
+          json.dump({"version": ver, "cue4parse": os.environ["CUE_SHA"], "cue4parse_date": os.environ["CUE_DATE"],
+                     "built": datetime.datetime.utcnow().isoformat() + "Z", "games": len(games)},
+                    open("mbextract.json", "w", encoding="utf-8"), indent=1)
+          print(ver, len(games))
+          PY
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path tools/mbextract/out/* -DestinationPath mbextract-win-x64.zip -Force
+      - name: Publish (mbextract-latest)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(python -c "import json;print(json.load(open('mbextract.json'))['version'])")
+          if gh release view mbextract-latest >/dev/null 2>&1; then
+            gh release upload mbextract-latest mbextract-win-x64.zip mbextract.json --clobber
+            gh release edit mbextract-latest --title "mbextract $VER" --notes "추출기 자동 빌드 $VER (CUE4Parse $CUE_SHA, $CUE_DATE). 앱의 [추출기 업데이트] 버튼이 받아 갑니다." --prerelease
+          else
+            gh release create mbextract-latest mbextract-win-x64.zip mbextract.json --title "mbextract $VER" --notes "추출기 자동 빌드 $VER (CUE4Parse $CUE_SHA, $CUE_DATE). 앱의 [추출기 업데이트] 버튼이 받아 갑니다." --prerelease
+          fi

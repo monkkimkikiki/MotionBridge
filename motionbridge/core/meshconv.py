@@ -83,7 +83,12 @@ def convert_mesh(src: str, out_dir: str, formats: Sequence[str] = ("fbx",), vari
         inp = src
         if mesh is not None:
             inp = os.path.join(tmp, base + ".npz")
-            psk.save_payload(inp, psk.to_blender(mesh, keep_bones="rigged" in variants))
+            payload = psk.to_blender(mesh, keep_bones="rigged" in variants, src_path=src)
+            n_tex = sum(1 for t in payload.get("material_textures", []) if str(t))
+            if len(mesh.materials):
+                log("%s: 재질 %d개 중 %d개에 텍스처를 연결했습니다%s" % (os.path.basename(src), len(mesh.materials), n_tex,
+                    "" if n_tex else " (근처에 .mat/텍스처 파일이 없어 구분용 색만 넣었습니다 — '텍스처 포함'으로 추출하면 연결됩니다)"))
+            psk.save_payload(inp, payload)
         import json
         opts = {"formats": formats, "variants": variants, "axis_forward": p.fbx_forward, "axis_up": p.fbx_up}
         r = bridge.run_script("blender_mesh.py", [os.path.abspath(inp), os.path.abspath(out_dir), base, json.dumps(opts)], blender)

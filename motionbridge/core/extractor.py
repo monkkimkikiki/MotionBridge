@@ -27,7 +27,30 @@ HELPER_NAMES = ["mbextract.exe", "mbextract"]
 
 
 class ExtractError(Exception):
-    pass
+    """code: 도우미가 알려 준 원인 코드 (ERR_INVALID_AES 등, 없으면 빈 글자)."""
+
+    def __init__(self, message: str = "", code: str = "") -> None:
+        super().__init__(message)
+        self.code = code or ""
+
+
+# 원인 코드 → 검수자에게 보여 줄 '무엇을 하면 되는지'
+ERROR_HELP = {
+    "ERR_OODLE_MISSING": "Oodle 압축 라이브러리가 없습니다. 게임 폴더(Binaries/Win64 등)에 oo2core_*.dll 이 있는지 확인하세요. 없으면 인터넷이 될 때 다시 시도하면 자동으로 받습니다.",
+    "ERR_INVALID_AES": "AES 키가 없거나 이 게임과 맞지 않습니다. 키를 다시 확인하세요. 커스텀 엔진 게임(검은 신화: 오공 등)은 'UE 버전'을 그 게임 전용 항목으로 골라야 키가 맞아도 열립니다.",
+    "ERR_MISSING_USMAP": "언리얼 5(IoStore) 게임은 매핑(.usmap) 파일이 있어야 에셋 내용을 읽습니다. 그 게임·그 버전용 .usmap 을 지정하세요.",
+    "ERR_PATH_MISMATCH": "매핑(.usmap) 파일이 이 게임(또는 지금 버전)과 맞지 않습니다. 게임이 패치됐으면 새로 만든 매핑 파일이 필요합니다.",
+    "ERR_NO_CONTAINERS": "이 폴더에 .pak / .utoc 가 없습니다. 게임 설치 폴더(…\\common\\<게임>)를 골랐는지 확인하세요.",
+    "ERR_NO_PACKAGES": "컨테이너는 열렸지만 에셋이 보이지 않습니다. 'UE 버전'이 맞지 않을 가능성이 큽니다 (게임 전용 항목이 있으면 그것을 고르세요).",
+    "ERR_READ_FAILED": "에셋을 읽지 못했습니다. 'UE 버전'(게임 전용 항목)과 매핑 파일을 확인하세요.",
+}
+
+
+def explain(e: Exception) -> str:
+    """오류를 '원인 + 할 일'로 풀어 쓴 글."""
+    code = getattr(e, "code", "") or ""
+    tip = ERROR_HELP.get(code, "")
+    return "%s%s%s" % (str(e), ("\n\n→ " + tip) if tip else "", ("\n(코드: %s)" % code) if code else "")
 
 
 def find_helper(explicit: Optional[str] = None) -> Optional[str]:
@@ -81,6 +104,7 @@ def run_helper(helper: str, args: List[str], on_event: Optional[Callable[[dict],
         raise ExtractError("추출 도우미를 실행하지 못했습니다: %s" % e)
     events: List[dict] = []
     error: Optional[str] = None
+    code = ""
     try:
         assert p.stdout is not None
         for line in p.stdout:
@@ -94,6 +118,7 @@ def run_helper(helper: str, args: List[str], on_event: Optional[Callable[[dict],
             events.append(ev)
             if ev.get("type") == "error":
                 error = ev.get("message", "알 수 없는 오류")
+                code = str(ev.get("code") or "")
             if on_event:
                 on_event(ev)
         err_text = p.stderr.read() if p.stderr else ""
@@ -102,8 +127,79 @@ def run_helper(helper: str, args: List[str], on_event: Optional[Callable[[dict],
         p.kill()
         raise ExtractError("추출 도우미가 시간 안에 끝나지 않았습니다.")
     if error or rc != 0:
-        raise ExtractError(error or ("도우미가 종료 코드 %d 로 끝났습니다.\n%s" % (rc, err_text.strip()[-600:])))
+        raise ExtractError(error or ("도우미가 종료 코드 %d 로 끝났습니다.\n%s" % (rc, err_text.strip()[-600:])), code)
     return events
+
+
+def warnings_of(events: List[dict]) -> List[dict]:
+    """도우미가 '열리긴 했지만 문제가 있다'고 알린 것들 [{code, message}]."""
+    return [e for e in events if e.get("type") == "warn"]
+
+
+_GAMES_CACHE: Dict[str, List[str]] = {}
+
+
+def list_games(helper: Optional[str]) -> List[str]:
+    """도우미(CUE4Parse)가 지원하는 'UE 버전/게임 프리셋' 이름 전체. 도우미가 없거나 옛 버전이면 빈 목록."""
+    if not helper:
+        return []
+    if helper in _GAMES_CACHE:
+        return _GAMES_CACHE[helper]
+    names: List[str] = []
+    try:
+        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+        r = subprocess.run([helper, "list-games"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, **kw)
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                names = [str(x) for x in json.loads(line) if isinstance(x, str) and x.startswith("GAME_")]
+                break
+    except (OSError, ValueError, subprocess.SubprocessError):
+        names = []
+    _GAMES_CACHE[helper] = names
+    return names
+
+
+def probe(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], limit: int = 6) -> dict:
+    """게임을 실제로 열어 보고 결과를 돌려준다 (예외를 던지지 않음).
+
+    {"ok": bool, "code": "OK"|"ERR_…", "message": str, "containers": {...}, "warnings": [{code,message}], "probe": {...}}"""
+    out = {"ok": False, "code": "", "message": "", "containers": {}, "warnings": [], "probe": {}}
+    try:
+        evs = run_helper(helper, ["probe"] + _base_args(game, ue, aes, usmap) + ["--limit", str(limit)], timeout=600.0)
+    except ExtractError as e:
+        out.update(code=e.code or "ERR_UNKNOWN", message=str(e))
+        return out
+    for e in evs:
+        if e.get("type") == "containers":
+            out["containers"] = e
+        elif e.get("type") == "probe":
+            out["probe"] = e
+    out["warnings"] = warnings_of(evs)
+    pr = out["probe"]
+    out["code"] = str(pr.get("code") or "ERR_UNKNOWN")
+    out["message"] = str(pr.get("message") or "")
+    out["ok"] = out["code"] == "OK" and int(pr.get("ok") or 0) > 0
+    return out
+
+
+KEY_WRONG_CODES = ("ERR_INVALID_AES", "ERR_NO_CONTAINERS", "ERR_NO_PACKAGES", "ERR_UNKNOWN", "")
+
+
+def pick_working_key(helper: str, game: str, ue: str, usmap: Optional[str], candidates: List[str], on_progress=None) -> Tuple[str, List[dict]]:
+    """키 후보를 하나씩 실제로 게임에 넣어 보고(컨테이너가 열리는지) 처음으로 맞는 키를 돌려준다. ("" = 맞는 키 없음, 시도 기록)
+
+    매핑(usmap)이 없어서 에셋 '내용'을 못 읽는 경우(ERR_MISSING_USMAP 등)도 컨테이너는 열린 것이므로 키는 맞는 것으로 본다."""
+    tried: List[dict] = []
+    for i, k in enumerate(candidates):
+        if on_progress:
+            on_progress(i, len(candidates), k)
+        r = probe(helper, game, ue, k, usmap, limit=2)
+        ok = r.get("code") not in KEY_WRONG_CODES
+        tried.append({"key": k, "ok": ok, "code": r.get("code"), "message": r.get("message")})
+        if ok:
+            return k, tried
+    return "", tried
 
 
 def list_assets(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], pattern: str = "(?i)anim",

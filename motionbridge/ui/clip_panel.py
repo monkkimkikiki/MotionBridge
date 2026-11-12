@@ -27,6 +27,10 @@ class ClipPanel(QWidget):
         self.lst.setToolTip("뷰포트에 연 모션이 자동으로 여기에 올라옵니다. 눌러서 그 모션으로 넘어갑니다. 앞의 체크박스를 켠 모션은 내보내기 때 한꺼번에 내보내집니다.\n"
                             "눌러서 그 모션으로 넘어갑니다. 설정·본 보정·레이어·IK 구간은 모션마다 따로 저장돼서, 다른 모션을 보고 돌아와도 하던 작업이 그대로예요.\n"
                             "✎ = 손댄 모션 (본 보정·레이어·IK 구간·프레임 편집이 있음)")
+        # 글자색을 직접 정한다: 고른 줄은 흰 글자+파란 바탕(창이 뒤로 가도 같은 색), 나머지는 밝은 회색
+        self.lst.setStyleSheet("QListWidget{color:#d7dce6}"
+                               "QListWidget::item:selected{background:#2f6fb5;color:#ffffff}"
+                               "QListWidget::item:selected:!active{background:#2f6fb5;color:#ffffff}")
         self.lst.currentRowChanged.connect(self._row)
         self.lst.itemChanged.connect(self._item_changed)
         v.addWidget(self.lst, 1)
@@ -46,6 +50,16 @@ class ClipPanel(QWidget):
         self.b_rm.clicked.connect(lambda _c=False: self.remove_current())
         r0.addWidget(self.b_rm, 1)
         v.addLayout(r0)
+        r2 = QHBoxLayout()
+        self.b_rm_checked = QPushButton("－ 체크한 모션 지우기")
+        self.b_rm_checked.setToolTip("체크박스를 켠 모션을 한꺼번에 목록에서 지웁니다 (파일은 지워지지 않습니다)")
+        self.b_rm_checked.clicked.connect(lambda _c=False: self.remove_checked())
+        self.b_rm_all = QPushButton("－ 전체 모션 지우기")
+        self.b_rm_all.setToolTip("목록의 모션을 모두 지웁니다 (소스 모션을 닫는 것과 같습니다. 파일은 지워지지 않습니다)")
+        self.b_rm_all.clicked.connect(lambda _c=False: self.remove_all())
+        r2.addWidget(self.b_rm_checked, 1)
+        r2.addWidget(self.b_rm_all, 1)
+        v.addLayout(r2)
         self.count = QLabel("")
         self.count.setStyleSheet("color:#8aa")
         v.addWidget(self.count)
@@ -247,6 +261,56 @@ class ClipPanel(QWidget):
             msg += " · 건너뜀 %d개: %s" % (len(skipped), "; ".join(skipped[:2]))
         a._last_status = msg
         a.statusBar().showMessage(msg)
+
+    def remove_many(self, idxs, ask: bool = True) -> int:
+        """여러 모션을 한꺼번에 지운다. 지운 개수를 돌려준다."""
+        a = self.app
+        pr = a.pr
+        if pr.src is None:
+            return 0
+        n_all = len(pr.src.animations)
+        idxs = sorted({int(i) for i in idxs if 0 <= int(i) < n_all})
+        if not idxs:
+            a.statusBar().showMessage("지울 모션이 없습니다 (체크한 모션이 없어요)")
+            return 0
+        if ask:
+            touched = sum(1 for i in idxs if pr.clip_touched(i))
+            msg = "모션 %d개를 목록에서 지울까요?" % len(idxs)
+            if touched:
+                msg += "\n그중 %d개에는 손댄 작업(본 보정·레이어·IK 구간·프레임 편집)이 있고, 함께 사라집니다." % touched
+            msg += "\n(파일은 지워지지 않습니다)"
+            if QMessageBox.question(a, "모션 지우기", msg) != QMessageBox.StandardButton.Yes:
+                return 0
+        if len(idxs) >= n_all:                 # 전부 지우면 소스 모션을 빼는 것과 같다
+            a.unload_source()
+            self._checked = set()
+            self.refresh()
+            a.statusBar().showMessage("모션 %d개를 모두 지웠습니다" % n_all)
+            return n_all
+        done = 0
+        for i in reversed(idxs):               # 뒤에서부터 지워야 번호가 밀리지 않는다
+            try:
+                pr.remove_clip(i)
+                done += 1
+            except ValueError as e:
+                a.statusBar().showMessage(str(e))
+                break
+        a._refill_clip_combo()
+        a._syncing = True
+        a._sync_settings_ui()
+        a._syncing = False
+        a.recompute(reframe=True)
+        a.history.reset(a._edit_state())
+        self.refresh()
+        a.statusBar().showMessage("모션 %d개를 목록에서 지웠습니다" % done)
+        return done
+
+    def remove_checked(self, ask: bool = True) -> int:
+        return self.remove_many(self.checked_clips(), ask)
+
+    def remove_all(self, ask: bool = True) -> int:
+        pr = self.app.pr
+        return self.remove_many(range(len(pr.src.animations)) if pr.src is not None else [], ask)
 
     def remove_current(self) -> None:
         a = self.app
