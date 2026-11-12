@@ -29,6 +29,7 @@ from ..core import nameglossary
 from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from ..core.identify import apply as identify_apply
 from ..core.identify import entity_store as entstore
+from ..core.identify import namefind as identify_namefind
 from ..core.identify import verify as identify_verify
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
@@ -346,6 +347,13 @@ class VidFindTab(QWidget):
         ch.addWidget(self.ck_char_player)
         b = QPushButton("검색")
         b.clicked.connect(lambda *_a: self.show_char_meshes())
+        ch.addWidget(b)
+        b = QPushButton("🌐 AI 확장 검색")
+        b.setToolTip("입력한 이름(예: 금지장로)이 리소스 이름과 전혀 달라도 찾습니다.\n"
+                     "AI 가 원어 정식명·병음 음차·등장 지역(이니셜 코드: 旧观音禅院→GYCY)·원전 모티프 코드명으로 단서를 확장하고,\n"
+                     "에셋 폴더들을 지역 코드와 보스 신호(애니 수·전용 연출·무기 메시)로 점수 매겨 후보를 추립니다.\n"
+                     "글 전용 AI(GPT-OSS 등)로도 동작합니다.")
+        b.clicked.connect(self.start_namefind)
         ch.addWidget(b)
         cp.addLayout(ch)
         self.char_note = QLabel("")
@@ -1048,6 +1056,47 @@ class VidFindTab(QWidget):
             self.show_char_meshes()
 
         self.win.run_async(job, done, "에셋 이름 목록 읽는 중")
+
+    def start_namefind(self) -> None:
+        """AI 확장 검색: 유저가 아는 이름(금지장로)을 원어·음차·지역 코드·모티프 코드명으로 확장해 후보 폴더를 추린다."""
+        clue = self.char_q.text().strip()
+        if not clue:
+            QMessageBox.information(self, "AI 확장 검색", "찾을 캐릭터 이름을 검색 칸에 적어 주세요 (예: 금지장로).")
+            return
+        a = self.win._extract_args()
+        if a is None:
+            return
+        prov = self.provider()
+        hint = self.hint.text().strip() or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")
+
+        def job(w):
+            idx = self._ensure_index(a, w, False)
+            w.progress.emit(0, 2, "단서 확장 중 (%s)" % clue)
+            store = self._entities(idx, hint)
+            res = identify_namefind.find(prov.ask_text, clue, hint, [m.path for m in idx.meshes], idx.anims, store)
+            res["idx"], res["clue"] = idx, clue
+            return res
+
+        self.win.run_async(job, self._after_namefind, "AI 확장 검색 중", cancellable=True)
+
+    def _after_namefind(self, res) -> None:
+        self.index = res.get("idx") or self.index
+        cands = res.get("candidates") or []
+        exp = res.get("expansion") or {}
+        if not cands:
+            self.char_note.setText("'%s' 후보를 못 찾았습니다. %s\n확장 결과: %s" % (
+                res.get("clue"), res.get("note") or "", ", ".join(exp.get("romanized", []) + exp.get("codenames", []))[:200]))
+            return
+        top = cands[0]
+        lines = ["🌐 '%s' 후보 %d개 — 가장 유력: %s (%.0f%%, %s)" % (res.get("clue"), len(cands), top["folder"], top["score"] * 100, top["why"])]
+        for c in cands[1:5]:
+            lines.append("· %s (%.0f%%, %s, 애니 %d)" % (c["folder"], c["score"] * 100, c["why"], c["anims"]))
+        if res.get("note"):
+            lines.append("AI: " + res["note"])
+        lines.append("아래 목록은 1위 후보의 메시입니다. 아니면 다른 후보 이름으로 검색하세요. (생김새 확인: 메시를 골라 추출해 보세요)")
+        self.char_q.setText(top["folder"])
+        self.show_char_meshes()   # char_note 를 덮어쓰므로 요약은 그 뒤에 붙인다
+        self.char_note.setText("\n".join(lines) + "\n" + self.char_note.text())
 
     def start_guess(self, force_index: bool = False) -> None:
         if self.rb_mode_char.isChecked():  # 캐릭터 메쉬 찾기: AI 추측 없이 이름 검색
