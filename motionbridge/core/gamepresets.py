@@ -153,3 +153,41 @@ def find_usmap_near(sc, extra_dirs: Optional[List[str]] = None) -> str:
                     if t > best_t:
                         best, best_t = p, t
     return best
+
+
+def export_file(path: str, include_keys: bool = True) -> int:
+    """내 컴퓨터에 기억해 둔 게임 설정을 파일 하나로 내보낸다 (다른 사람에게 건네 줄 용도). 내보낸 게임 수를 돌려준다.
+    usmap 은 내 컴퓨터의 경로라 빼고, include_keys=False 면 AES 키도 뺀다."""
+    games = {}
+    for k, e in _read(local_path()).items():
+        e = {f: v for f, v in e.items() if f != "usmap" and (include_keys or f != "aes")}
+        games[k] = e
+    if not _write(path, games):
+        raise OSError("파일을 쓸 수 없습니다: %s" % path)
+    return len({json.dumps(v, sort_keys=True, ensure_ascii=False) for v in games.values()})
+
+
+def import_file(path: str) -> int:
+    """남이 건네 준 게임 설정 파일을 내 기록에 합친다. 같은 게임이 이미 있으면 더 최근 것이 이기고, 내 쪽에만 있는 값(usmap 경로 등)은 남는다.
+    새로 들어오거나 바뀐 게임 수를 돌려준다."""
+    incoming = _read(path)
+    if not incoming:
+        raise ValueError("게임 설정 파일이 아니거나 비어 있습니다.")
+    mine = _read(local_path())
+    changed = set()
+    for k, e in incoming.items():
+        e = {f: v for f, v in e.items() if f in FIELDS and v not in (None, "", [])}
+        old = mine.get(k)
+        if old is None:
+            mine[k] = e
+        else:
+            newer, older = (e, old) if float(e.get("updated") or 0) >= float(old.get("updated") or 0) else (old, e)
+            merged = dict(older)
+            merged.update(newer)
+            if merged == old:
+                continue
+            mine[k] = merged
+        changed.add(json.dumps({f: v for f, v in mine[k].items() if f in ("appid", "exe", "folder", "name")}, sort_keys=True, ensure_ascii=False))
+    if changed:
+        _write(local_path(), mine)
+    return len(changed)

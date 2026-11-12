@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import quat as Q
+from ..core import helperupdate, quat as Q
 from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core import guide as guide_mod
@@ -914,9 +914,35 @@ class MainWindow(QMainWindow):
         self.ex_helper_label = QLabel("")
         self.ex_helper_label.setWordWrap(True)
         f.addRow("추출 도우미", self.ex_helper_label)
+        hh = QHBoxLayout()
+        self.btn_helper_update = QPushButton("⬇ 추출기 업데이트")
+        self.btn_helper_update.setToolTip("추출기(mbextract)만 최신으로 받아 바꿉니다 — 앱을 다시 설치하지 않아도 새로 지원되는 게임이 추가됩니다.\n"
+                                          "받은 추출기가 실제로 동작하는지 확인한 뒤에만 바꾸고, 실패하면 지금 것을 그대로 둡니다.")
+        self.btn_helper_update.clicked.connect(lambda *_a: self.update_helper())
+        hh.addWidget(self.btn_helper_update)
         b = QPushButton("도우미 경로 지정…")
         b.clicked.connect(self._pick_helper)
-        f.addRow("", b)
+        hh.addWidget(b)
+        b = QPushButton("내장 추출기로")
+        b.setToolTip("업데이트로 받았거나 직접 지정한 추출기 대신, 앱에 들어 있는 추출기를 다시 씁니다.")
+        b.clicked.connect(lambda *_a: self._helper_builtin())
+        hh.addWidget(b)
+        hh.addWidget(HelpIcon("추출기가 어떤 게임을 읽을 수 있는지는 그 안의 오픈소스(CUE4Parse)가 정합니다.\n"
+                              "AES 키·매핑 파일·게임 설정은 직접 넣으면 되지만, 게임이 파일 형식 자체를 바꾼 경우(예: 검은 신화: 오공)는 추출기 코드가 그 게임을 알아야 합니다.\n"
+                              "매주 최신 CUE4Parse 로 추출기를 자동으로 다시 만들어 올려 두므로, 새 게임이 안 열리면 먼저 [추출기 업데이트]를 눌러 보세요."))
+        hh.addStretch(1)
+        f.addRow("", hh)
+        ph = QHBoxLayout()
+        b = QPushButton("게임 설정 내보내기…")
+        b.setToolTip("지금까지 기억한 게임별 설정(UE 버전·AES 키·링크·판정)을 파일 하나로 저장합니다. 다른 사람에게 건네 주면 그쪽에서 [불러오기]로 바로 씁니다.")
+        b.clicked.connect(lambda *_a: self.export_presets())
+        ph.addWidget(b)
+        b = QPushButton("게임 설정 불러오기…")
+        b.setToolTip("다른 사람이 건네 준 게임 설정 파일을 내 기록에 합칩니다. 그 뒤 해당 게임 폴더를 검사하면 자동으로 채워집니다.")
+        b.clicked.connect(lambda *_a: self.import_presets())
+        ph.addWidget(b)
+        ph.addStretch(1)
+        f.addRow("게임 설정", ph)
         self._update_helper_label()
         lay.addWidget(g)
 
@@ -1223,6 +1249,71 @@ class MainWindow(QMainWindow):
             bridge.save_config(self.cfg)
             self._update_helper_label()
 
+    def _helper_builtin(self) -> None:
+        self.cfg.pop("helper", None)
+        bridge.save_config(self.cfg)
+        extractor._GAMES_CACHE.clear()
+        self._update_helper_label()
+        self._sync_ue_list()
+
+    def update_helper(self) -> None:
+        """추출기만 최신으로 받아 바꾼다 (확인에 실패하면 쓰던 것을 그대로 둔다)."""
+        cur = extractor.find_helper(self.cfg.get("helper"))
+        old_games = extractor.list_games(cur) if cur else []
+        have = helperupdate.installed_info(cur).get("version", "")
+
+        def work(w):
+            info = helperupdate.latest_info()
+            if have and info.get("version") == have:
+                return {"same": True, "version": have}
+            return helperupdate.install(info)
+
+        def done(res) -> None:
+            if res.get("same"):
+                QMessageBox.information(self, "추출기 업데이트", "이미 최신 추출기입니다 (%s)." % res.get("version"))
+                return
+            self.cfg["helper"] = res["path"]
+            bridge.save_config(self.cfg)
+            extractor._GAMES_CACHE.clear()
+            self._update_helper_label()
+            self._sync_ue_list()
+            added = helperupdate.new_games(old_games, res.get("games") or [])
+            msg = "추출기를 %s 로 바꿨습니다.\n지원 항목 %d개" % (res.get("version"), len(res.get("games") or []))
+            if old_games and added:
+                msg += "\n\n새로 생긴 게임 전용 항목 %d개:\n%s" % (len(added), ", ".join(g.replace("GAME_", "") for g in added[:30]))
+            elif old_games:
+                msg += "\n\n새로 생긴 게임 전용 항목은 없습니다."
+            QMessageBox.information(self, "추출기 업데이트", msg)
+
+        self.run_async(work, done, "추출기 업데이트 확인 중")       # 실패(UpdateError)는 공통 오류 창이 이유를 보여 준다
+
+    def export_presets(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "게임 설정 내보내기", "game_presets.json", "게임 설정 (*.json)")
+        if not path:
+            return
+        keys = QMessageBox.question(self, "게임 설정 내보내기", "AES 키도 함께 내보낼까요?\n(아니요를 고르면 UE 버전·링크·판정만 들어갑니다)") == QMessageBox.StandardButton.Yes
+        try:
+            n = gamepresets.export_file(path, include_keys=keys)
+            self.statusBar().showMessage("게임 %d개의 설정을 내보냈습니다: %s" % (n, path))
+        except OSError as e:
+            QMessageBox.warning(self, "게임 설정 내보내기", str(e))
+
+    def import_presets(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "게임 설정 불러오기", "", "게임 설정 (*.json)")
+        if not path:
+            return
+        try:
+            n = gamepresets.import_file(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "게임 설정 불러오기", str(e))
+            return
+        self.statusBar().showMessage("게임 설정 %d개를 합쳤습니다. 해당 게임 폴더를 검사하면 자동으로 채워집니다." % n)
+        if getattr(self, "scan", None) is not None and n:
+            try:
+                self._apply_game_preset(self.scan)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _update_helper_label(self) -> None:
         p = extractor.find_helper(self.cfg.get("helper"))
         if p:
@@ -1275,9 +1366,18 @@ class MainWindow(QMainWindow):
         if sc.found:
             self.cfg["game_dir"] = sc.root
             auto = layout.detect_game_name(sc.root)
-            if not self.ex_gname.text().strip() or self.ex_gname.text().strip() == self.cfg.get("game_name_auto", ""):
-                self.ex_gname.setText(auto)  # 직접 고친 이름은 덮어쓰지 않는다
+            same_game = os.path.normcase(os.path.normpath(self.cfg.get("game_name_root", "") or "")) == os.path.normcase(os.path.normpath(sc.root))
+            if (not same_game) or not self.ex_gname.text().strip() or self.ex_gname.text().strip() == self.cfg.get("game_name_auto", ""):
+                # 다른 게임 폴더를 검사했으면 이름도 그 게임 것으로 바꾼다 (예전에 이 게임에 붙여 둔 이름이 있으면 그것을, 없으면 폴더에서 알아낸 이름).
+                # 같은 게임을 다시 검사할 때만 직접 고친 이름을 지킨다.
+                saved = ""
+                try:
+                    saved = str((gamepresets.lookup(sc, self.cfg.get("preset_share_dir", "") or None) or {}).get("name") or "")
+                except Exception:  # noqa: BLE001
+                    saved = ""
+                self.ex_gname.setText(saved or auto)
             self.cfg["game_name_auto"] = auto
+            self.cfg["game_name_root"] = sc.root
             bridge.save_config(self.cfg)
         try:
             self._apply_game_preset(sc)

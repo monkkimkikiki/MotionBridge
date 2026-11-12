@@ -105,6 +105,15 @@ def register_whole(dark_css: str, light_css: str) -> None:
     WHOLE.setdefault("dark", {})[light_css] = dark_css
 
 
+def _gray_roles(p, placeholder, disabled) -> None:
+    try:
+        p.setColor(QPalette.ColorRole.PlaceholderText, placeholder)
+        for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
+            p.setColor(QPalette.ColorGroup.Disabled, role, disabled)
+    except Exception:  # noqa: BLE001 (시험용 가짜 Qt)
+        pass
+
+
 def dark_palette() -> QPalette:
     p = QPalette()
     p.setColor(QPalette.ColorRole.Window, QColor(38, 41, 48))
@@ -118,6 +127,8 @@ def dark_palette() -> QPalette:
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     p.setColor(QPalette.ColorRole.ToolTipBase, QColor(52, 56, 66))
     p.setColor(QPalette.ColorRole.ToolTipText, QColor(225, 228, 235))
+    # 입력 칸 안의 안내 글(placeholder)과 잠긴(비활성) 글자: 지정하지 않으면 검정에 가까워 어두운 바탕에서 안 보였다 -> 회색
+    _gray_roles(p, QColor(150, 158, 175), QColor(120, 127, 142))
     return p
 
 
@@ -134,7 +145,7 @@ def light_palette() -> QPalette:
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     p.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 225))
     p.setColor(QPalette.ColorRole.ToolTipText, QColor(28, 32, 42))
-    p.setColor(QPalette.ColorRole.PlaceholderText, QColor(120, 128, 145))
+    _gray_roles(p, QColor(120, 128, 145), QColor(150, 156, 170))
     return p
 
 

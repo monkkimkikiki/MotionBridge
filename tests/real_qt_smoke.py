@@ -674,6 +674,12 @@ try:
     for _a, _b in _diff[:5]:
         print("DIAG theme roundtrip:", _a[:110], "=>", (_b or "")[:110])
     check(not _diff, "왕복하면 스타일이 원래대로 (다른 것 %d개)" % len(_diff))
+    from PySide6.QtGui import QPalette as _QP
+    _ph = mw.ex_gname.palette().color(_QP.ColorRole.PlaceholderText)
+    check(110 <= _ph.red() <= 190 and 110 <= _ph.green() <= 190, "입력 칸 안내 글은 회색: %s" % _ph.name())
+    _dis = mw.ex_gname.palette().color(_QP.ColorGroup.Disabled, _QP.ColorRole.Text)
+    check(100 <= _dis.red() <= 190, "잠긴 글자도 회색: %s" % _dis.name())
+    check(hasattr(mw, "btn_helper_update"), "추출기 업데이트 버튼")
     mw.toggle_clip_panel()
     check(mw.clip_panel.isHidden() and mw.cfg.get("clip_panel_hidden"), "모션 목록 접기")
     mw.toggle_clip_panel()
