@@ -436,7 +436,8 @@ class LibraryTab(QWidget):
             QMessageBox.information(self, "이름 바꾸기", "다른 작업이 진행 중이에요. 끝난 뒤에 바꿔 주세요.")
             return
         old = Path(meta["_json"]).stem
-        text, ok = QInputDialog.getText(self, "이름 바꾸기", "클립 이름 (파일 이름으로 쓰여요. 특수문자는 _ 로 바뀌어요):", text=old)
+        text, ok = QInputDialog.getText(self, "이름 바꾸기", "클립 이름 (목록에 이 이름으로 보이고, 파일 이름으로도 쓰여요. 파일 이름에서는 특수문자가 _ 로 바뀌어요):",
+                                        text=str(meta.get("custom_name") or old))
         if not ok or not text.strip():
             return
         try:

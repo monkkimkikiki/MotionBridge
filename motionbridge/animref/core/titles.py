@@ -60,7 +60,10 @@ def hms(sec) -> str:
 
 
 def clip_title(meta) -> str:
-    """클립 표시 이름: '<영상 제목> 00:00:00~00:00:10' (원본에서의 시작~끝)."""
+    """클립 표시 이름: 직접 붙인 이름, 없으면 '<영상 제목> 00:00:00~00:00:10' (원본에서의 시작~끝)."""
+    custom = str(meta.get("custom_name") or "").strip()
+    if custom:                # 사용자가 [이름 바꾸기]로 붙인 이름이 있으면 그것을 그대로 보여 준다
+        return custom
     src = meta.get("source_video") or meta.get("source_name") or ""
     base = display(src) if src else "클립"
     a = float(meta.get("start_in_source", 0.0) or 0.0)
