@@ -641,6 +641,12 @@ class MainWindow(QMainWindow):
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
         bl2.addWidget(self.btn_bone_reset)
+        self.btn_virtual_end = QPushButton("가상 끝점")
+        self.btn_virtual_end.setToolTip("발끝(Toe) 본이 없는 모델용: 고른 본(보통 발) 아래에 '보이지 않는 끝점'을 정합니다.\n"
+                                        "소스의 발끝 애니메이션이 이 끝점을 움직이는 것처럼, 고른 본이 그 방향을 바라보며 따라 돕니다(룩앳을 계산에 구움).\n"
+                                        "씬에 더미 본을 만들지 않으므로 내보내기(FBX/바이페드)에는 아무것도 추가되지 않습니다.")
+        self.btn_virtual_end.clicked.connect(self._virtual_end_selected)
+        bl2.addWidget(self.btn_virtual_end)
         self.btn_place_reset = QPushButton("배치 초기화")
         self.btn_place_reset.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
         self.btn_place_reset.clicked.connect(self._place_reset)
@@ -3424,6 +3430,30 @@ class MainWindow(QMainWindow):
         if enable and not self.cb_bone_edit.isChecked():
             self.cb_bone_edit.setChecked(True)
         self.viewport.update()
+
+    _VE_PRESETS = [("전방 (+Z) — 보통 발끝", (0.0, 0.0, 1.0)), ("전방+아래 45°", (0.0, -0.7071, 0.7071)),
+                   ("아래 (-Y)", (0.0, -1.0, 0.0)), ("뒤 (-Z) — 뒤꿈치", (0.0, 0.0, -1.0)), ("가상 끝점 해제", None)]
+
+    def _virtual_end_selected(self) -> None:
+        """고른 본에 가상 끝점(보이지 않는 발끝) 방향을 정한다 — 더미+룩앳과 같은 결과를 내보내기 오염 없이."""
+        j = self.viewport.selected_joint
+        if j is None or self.pr.tgt is None:
+            QMessageBox.information(self, "가상 끝점", "뷰포트에서 본(보통 발)을 먼저 고르세요.")
+            return
+        names = [t for t, _v in self._VE_PRESETS]
+        cur = self.pr.settings.virtual_ends.get(int(j))
+        pick, ok = QInputDialog.getItem(self, "가상 끝점", "'%s' 의 끝점이 바인드 포즈에서 가리키는 방향:" % self.pr.tgt.skeleton.names[int(j)],
+                                        names, 0 if cur is None else min(range(len(self._VE_PRESETS)), key=lambda i: 0 if self._VE_PRESETS[i][1] == tuple(cur) else 1), False)
+        if not ok:
+            return
+        v = dict(self._VE_PRESETS)[pick]
+        if v is None:
+            self.pr.settings.virtual_ends.pop(int(j), None)
+            self.statusBar().showMessage("가상 끝점을 해제했습니다.")
+        else:
+            self.pr.settings.virtual_ends[int(j)] = v
+            self.statusBar().showMessage("가상 끝점: %s → %s (소스 발끝이 자동으로 이 끝점에 매핑됩니다)" % (self.pr.tgt.skeleton.names[int(j)], pick))
+        self.schedule()
 
     def _bone_reset_selected(self) -> None:
         j = self.viewport.selected_joint

@@ -43,6 +43,10 @@ class RetargetSettings:
     root_yaw_deg: float = 0.0  # 모션 전체를 시작 위치 기준으로 돌린다
     place_offset: Tuple[float, float] = (0.0, 0.0)  # 모션 전체의 바닥면 이동 (좌우 X, 앞뒤 Z; 타깃 단위). 몸 전체(골반+발 IK)가 같이 움직인다
     place_y: float = 0.0                # 모션 전체의 높이 이동 (타깃 단위): 골반·발 목표·바닥·고스트가 통째로 오르내린다 ('바닥을 0으로' 기능이 쓴다)
+    virtual_ends: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
+    # 가상 끝점(더미의 계산용 대체): 타깃 본 번호 -> 그 본에서 끝점까지의 바인드 방향(타깃 단위, 표준 프레임).
+    # 발끝 본이 없는 Foot 등에 '보이지 않는 자식 끝점'을 정해 두면, 소스의 끝 본(Toe)이 이 끝점을 움직이는 것처럼
+    # 부모 본이 방향을 따라 돈다(룩앳을 계산 단계에 베이크). 스켈레톤을 바꾸지 않으므로 내보내기에는 아무것도 추가되지 않는다.
     transfer_root_motion: bool = True  # False 면 제자리(수평 이동 제거)
     # 게임 모션은 월드 좌표(원점에서 수 m 떨어진 곳)에서 시작하는 일이 많다. True 면 첫 프레임의 수평 위치를 타깃 바인드 위치에 맞추고
     # 그 뒤의 이동량만 옮긴다(골반이 모델에서 멀리 떨어져 어긋나 보이는 것을 막는다). 높이는 바인드 기준 그대로.
@@ -565,8 +569,9 @@ def retarget(
                 spine_dirs[t_] = sample(float(tcum[bi + 2])) - sample(float(tcum[bi + 1]))
                 spine_dbind[t_] = dbind
 
-    # 발끝 본이 없는 타깃: 소스 발->발끝 방향을 그대로 복사해 발 방향을 맞춘다
-    # (없으면 발이 종아리 보정을 물려받아 바인드가 굽은 게임에서 발이 꺾인다)
+    # 발끝 본이 없는 타깃: '가상 끝점(보이지 않는 발끝)'을 기준으로 소스 발->발끝 방향을 복사해 발 방향을 맞춘다 (룩앳의 베이크판).
+    # 기준 끝점은 ① 사용자가 본 편집에서 만든 가상 끝점(st.virtual_ends) ② 없으면 '바인드 발 = 표준 전방(+Z)' 기본값.
+    # (예전처럼 '소스 바인드 발 방향'을 기준으로 쓰면, 바인드가 웅크린 게임의 발 기울기가 타깃에 통째로 박힌다)
     foot_follow: Dict[int, np.ndarray] = {}
     if rig is None and src_slots and tgt_slots:
         for side in ("L", "R"):
@@ -574,12 +579,13 @@ def retarget(
             if tf in mapped_set and (side + "_Toe") in src_slots and (side + "_Toe") not in tgt_slots:
                 sf, stoe = src_slots[side + "_Foot"], src_slots[side + "_Toe"]
                 dcur = ps[:, stoe] - ps[:, sf]
-                dbind = bps[stoe] - bps[sf]
-                if np.linalg.norm(dbind) > 1e-9 and float(np.linalg.norm(dcur, axis=-1).min()) > 1e-9:
-                    # 타깃 발의 바인드 방향은 알 수 없으므로(발끝 없음) 소스 바인드 발 방향을 기준으로 삼는다
-                    foot_follow[tf] = Q.mul(_frame_seq(dcur, _UP), Q.mul(Q.conj(_bone_frame(dbind)), brt[tf]))
+                if float(np.linalg.norm(dcur, axis=-1).min()) <= 1e-9:
+                    continue
+                ve = st.virtual_ends.get(tf)
+                dbind_t = np.asarray(ve, dtype=float) if ve is not None and np.linalg.norm(ve) > 1e-9 else _FWD
+                foot_follow[tf] = Q.mul(_frame_seq(dcur, _UP), Q.mul(Q.conj(_bone_frame(dbind_t)), brt[tf]))
         if foot_follow:
-            warnings.append("ℹ 타깃에 발끝 본이 없어 소스의 발 방향(발->발끝)을 그대로 복사했습니다.")
+            warnings.append("ℹ 타깃에 발끝 본이 없어 가상 끝점을 기준으로 소스의 발 방향(발->발끝)을 따라가게 했습니다 (내보내기에 더미는 포함되지 않습니다).")
 
     yaw_q = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
     rot_des: Dict[int, np.ndarray] = {}
@@ -722,7 +728,15 @@ def retarget(
             # 발이 몸을 따라 제자리에 서 있다 (예전에는 변위만 돌려서, 돌린 만큼 발이 몸과 어긋난 자리에 고정됐다).
             pivot = bpt[com] if com >= 0 else bpt[ch.foot]
             Rb = Q.mul(yaw_q, pelvis_off)
-            Dc = pivot + Q.rotate(Rb, bpt[ch.foot] - pivot) + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)
+            if com >= 0 and com in pair_of:
+                # 수평: '골반 기준 상대 위치'로 — 소스 애니에서 발이 골반에서 얼마나 떨어져 있는지를 그대로 스케일해 따라간다.
+                # (예전의 '바인드 대비 이동량' 방식은 바인드가 웅크린 게임에서 바인드 발 위치 차이가 상수로 더해져
+                #  발 목표가 다리가 닿을 수 없는 바깥에 생기고, IK 가 못 닿으니 발이 골반을 따라 떠다녔다)
+                s_com = pair_of[com]
+                pel_base = bpt[com] + Q.rotate(yaw_q, k * (ps[:, s_com] - bps[s_com] - rootoff)) + place
+                Dc = pel_base + Q.rotate(Rb, k * (sc - ps[:, s_com]))
+            else:
+                Dc = pivot + Q.rotate(Rb, bpt[ch.foot] - pivot) + place + k * Q.rotate(yaw_q, sc - bps[ch.src_foot] - rootoff)
             # 높이는 골반·고스트와 같은 '바닥 기준'으로 (바인드가 웅크린 게임에서 발 목표가 몸과 어긋나지 않게)
             Dc[:, 1] = ground_tgt + st.ground_offset + k * (sc[:, 1] - ground_src) + st.place_y
             def ramp_weights(mask: np.ndarray):
