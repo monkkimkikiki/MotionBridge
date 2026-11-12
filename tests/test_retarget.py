@@ -66,6 +66,9 @@ def test_fk_invariants():
         com = res.com
         assert tsk.names[com] == tsk.names[tm["Hips"]]
         exp = bpt[com] + res.k * (ps[:, pair_of[com]] - bps[pair_of[com]])
+        mapped_s = [s for s, _t in res.pairs]
+        mapped_tt = [t for _s, t in res.pairs]
+        exp[:, 1] = min(bpt[t, 1] for t in mapped_tt) + res.k * (ps[:, pair_of[com], 1] - min(bps[s, 1] for s in mapped_s))   # 높이는 바닥 기준
         assert np.allclose(pc[:, com], exp, atol=1e-6), "COM 위치 %g" % np.abs(pc[:, com] - exp).max()
         # 진행 방향: 표준 프레임 +Z
         travel = pc[-1, com] - pc[0, com]

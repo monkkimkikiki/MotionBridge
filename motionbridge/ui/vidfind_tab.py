@@ -314,11 +314,12 @@ class VidFindTab(QWidget):
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮은 줄에는 검수 표에 '⚠ 확신 낮음' 표시를 붙여 한 번 더 보게 합니다 (메시는 가장 유력한 후보가 그래도 골라져 있습니다).")
         r = QHBoxLayout()
-        self.rb_mode_monster = QRadioButton("몬스터 찾기 (영상으로 AI 추측)")
-        self.rb_mode_char = QRadioButton("캐릭터 메쉬 찾기 (캐릭터 모델링 전체 검색)")
-        self.rb_mode_monster.setToolTip("영상 속 몬스터를 AI가 게임의 메시 이름 안에서 추측합니다 (아래 4) 검수 표).")
-        self.rb_mode_char.setToolTip("플레이어블·NPC 등 캐릭터 모델링을 AI 없이 이름으로 전체 검색합니다. 리깅된 것(SK_)과 리깅 없는 것(SM_)을 나눠 볼 수 있고, "
-                                     "고른 캐릭터에 해당하는 애니메이션 클립만 보여 줍니다.")
+        self.rb_mode_monster = QRadioButton("영상으로 찾기 — AI 가 장면을 보고 추측")
+        self.rb_mode_char = QRadioButton("이름으로 찾기 — 검색·AI 확장 (영상 없이)")
+        self.rb_mode_monster.setToolTip("영상/이미지를 분석해 몬스터를 추측합니다. 결과는 4) 검수 표로 — '아는 정보'에 보스 이름을 적으면 정확도가 올라갑니다.\n"
+                                        "입구만 다를 뿐 두 모드 모두 같은 후보(메시·애니메이션) 목록으로 이어집니다.")
+        self.rb_mode_char.setToolTip("영상 없이 이름으로 찾습니다: 파일 이름 검색 + [🌐 AI 확장 검색](금지장로 같은 한국어 보스 이름·동작 설명도 원어/음차/지역 코드로 확장).\n"
+                                     "찾은 캐릭터의 메시가 후보 목록에 바로 올라가고, 해당 애니메이션 클립도 같이 나옵니다.")
         on_char = bool(self.cfg.get("vf_mode_char", False))
         self.rb_mode_char.setChecked(on_char)
         self.rb_mode_monster.setChecked(not on_char)
@@ -406,28 +407,8 @@ class VidFindTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setStretchLastSection(False)
         v.addWidget(Resizable(self.table, "vf_table", 180))
-        # 특징·패턴으로 찾기: 이름이 다 틀려도 "7연속 스핀 공격" 같은 동작으로 애니메이션 이름을 뒤져 캐릭터를 거꾸로 찾는다
-        # (게임 속 이름/글자 사전은 따로 두지 않는다: 글자 사전(.locres)은 추측 때 자동으로 만들고,
-        #  이름으로 찾기는 '아는 정보' 칸과 AI 확장 검색이 대신한다)
-        h = QHBoxLayout()
-        h.addWidget(QLabel("특징·패턴"))
-        self.motion_text = QLineEdit()
-        self.motion_text.setPlaceholderText("예: 7연속 스핀 공격 / 땅 내려찍기 / 점프 후 돌진 — 위 표에서 줄을 고른 뒤")
-        self.motion_text.setToolTip("이름으로 못 찾을 때: 그 캐릭터의 특징적인 동작을 적으면 spin·slam·charge 같은 낱말로 애니메이션 이름을 검색하고,\n"
-                                    "그 애니메이션이 속한 캐릭터를 후보로 올립니다.")
-        self.motion_text.returnPressed.connect(self.find_by_motion)
-        h.addWidget(self.motion_text, 1)
-        self.motion_ai = QCheckBox("AI도 사용")
-        self.motion_ai.setToolTip("동작 설명을 영어 낱말로 바꾸는 데만 씁니다(에셋 이름은 만들지 않음). 끄면 내장 낱말표만 씁니다.")
-        self.motion_ai.setChecked(True)
-        h.addWidget(self.motion_ai)
-        b = QPushButton("특징으로 캐릭터 찾기")
-        b.clicked.connect(lambda *_a: self.find_by_motion())
-        h.addWidget(b)
-        v.addLayout(h)
-        self.motion_note = QLabel("")
-        self.motion_note.setWordWrap(True)
-        v.addWidget(self.motion_note)
+        # (예전의 '게임 속 이름'·'특징·패턴' 칸은 전부 흡수됐다: 글자 사전은 추측 때 자동 생성,
+        #  이름·동작 설명으로 찾기는 '아는 정보' 칸과 '이름으로 찾기' 모드의 AI 확장 검색이 대신한다)
         h = QHBoxLayout()
         b = QPushButton("캐릭터 줄 직접 추가")
         b.setToolTip("AI가 놓친 캐릭터를 직접 넣습니다. 줄의 검색 칸에서 메시를 찾으세요.")
@@ -1077,9 +1058,10 @@ class VidFindTab(QWidget):
             lines.append("· %s (%.0f%%, %s, 애니 %d)" % (c["folder"], c["score"] * 100, c["why"], c["anims"]))
         if res.get("note"):
             lines.append("AI: " + res["note"])
-        lines.append("아래 목록은 1위 후보의 메시입니다. 아니면 다른 후보 이름으로 검색하세요. (생김새 확인: 메시를 골라 추출해 보세요)")
+        lines.append("1위 후보의 메시를 아래 후보 목록에 바로 올리고 전부 선택해 두었습니다 — 애니메이션 후보도 같이 나옵니다. 아니면 다른 후보 이름으로 검색하세요.")
         self.char_q.setText(top["folder"])
         self.show_char_meshes()   # char_note 를 덮어쓰므로 요약은 그 뒤에 붙인다
+        self.mesh_list.selectAll()   # 리스트업 즉시 후보 자동 등록: 따로 클릭하지 않아도 메시·애니 후보가 채워진다
         self.char_note.setText("\n".join(lines) + "\n" + self.char_note.text())
 
     def start_guess(self, force_index: bool = False) -> None:
@@ -1538,48 +1520,6 @@ class VidFindTab(QWidget):
         except Exception as e:  # 네트워크/모델 오류는 검색을 막지 않는다
             return [], "AI 낱말 변환 실패(내장 낱말표만 사용): %s" % str(e)[:120]
 
-    def find_by_motion(self) -> None:
-        text = self.motion_text.text().strip()
-        if not text:
-            QMessageBox.warning(self, "특징·패턴", "캐릭터의 특징적인 동작을 적으세요 (예: 7연속 스핀 공격).")
-            return
-        idx = self._motion_index()
-        if idx is None:
-            QMessageBox.warning(self, "특징·패턴", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
-            return
-        if not self.rows:
-            self.add_blank_row()
-        cur = self.table.currentRow()
-        row = self.rows[cur] if 0 <= cur < len(self.rows) else self.rows[-1]
-        use_ai = bool(self.motion_ai.isChecked())
-        kinds = self._kinds()
-
-        def job(w):
-            w.progress.emit(0, 1, "동작으로 찾는 중")
-            extra, warn = self._motion_extra(text, use_ai)
-            res = motionsearch.find_meshes_by_motion(idx, text, extra, kinds=kinds)
-            return res, extra, warn
-
-        def done(out):
-            (cands, mons, hits, q), extra, warn = out
-            if cands:
-                row.base = cands
-                row.sure = True
-                self._fill_combo(row.combo, cands, pick_first=True)
-                if row.search.text():
-                    row.search.setText("")
-            ri = self.rows.index(row)
-            self.table.setItem(ri, 1, QTableWidgetItem("특징: %s\n%s" % (text, ("캐릭터 후보 %d종 — 맨 위가 가장 유력" % len(mons)) if mons else "후보 없음")))
-            if mons:
-                top = ", ".join("%s(%d%%)" % (m.name, round(m.score * 100)) for m in mons[:4])
-                ex = ", ".join(os.path.basename(h.path).split(".")[0] for h in mons[0].anims[:3])
-                note = "알아들은 동작: %s%s. 유력: %s. %s 의 맞는 애니메이션 예: %s" % (q.describe(), (" + AI: " + ", ".join(extra)) if extra else "", top, mons[0].name, ex)
-            else:
-                note = "알아들은 동작: %s — 애니메이션 이름에서 맞는 것을 못 찾았습니다. 다른 낱말(영어 포함)로 적어 보세요." % q.describe()
-            self.motion_note.setText((note + " " + warn).strip())
-
-        self.win.run_async(job, done, "특징·패턴으로 찾는 중", cancellable=True, on_cancel=lambda: self.status.setText("특징·패턴 검색을 취소했습니다."))
-
     def search_anims_by_text(self) -> None:
         text = self.anim_q.text().strip()
         if not text:
@@ -1593,7 +1533,7 @@ class VidFindTab(QWidget):
         chosen = self._chosen_rigged() if self.char_mode else self._selected_mesh_paths()
         if not self.anim_all.isChecked() and chosen:
             restrict = [layout.character_of(p) for p in chosen]
-        use_ai = bool(self.motion_ai.isChecked())
+        use_ai = True   # 동작 설명 -> 영어 낱말 변환 (실패해도 내장 낱말표로 계속)
         kinds = self._kinds()
 
         def job(w):

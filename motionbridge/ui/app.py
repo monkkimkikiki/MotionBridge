@@ -1988,12 +1988,25 @@ class MainWindow(QMainWindow):
             self.hip_fields.append(nf)
             f.addRow(lab, nf)
         self.place_fields = []
-        for i, lab in enumerate(("모션 놓을 자리 좌우(X)", "모션 놓을 자리 앞뒤(Z)")):
+        for i, lab in enumerate(("모션 놓을 자리 좌우(X)", "모션 놓을 자리 앞뒤(Z)", "모션 놓을 자리 높이(Y)")):
             nf = NumField(-100, 100, 0.1, 0.0, 2, slider=True)
-            nf.setToolTip("모션 전체(골반과 발)를 바닥 위에서 옮깁니다. 뷰포트에서 Shift+드래그로도 조절됩니다")
+            nf.setToolTip("모션 전체(골반과 발)를 바닥 위에서 옮깁니다. 뷰포트에서 Shift+드래그로도 조절됩니다" if i < 2 else
+                          "모션 전체(골반·발 목표·바닥선)를 통째로 올리거나 내립니다 — 루트/바닥 높이 지정용")
             nf.changed.connect(lambda v, ax=i: self._place_changed(ax, v))
             self.place_fields.append(nf)
-            f.addRow(lab, nf)
+            if i == 2:
+                hz = QHBoxLayout()
+                hz.addWidget(nf, 1)
+                bz = QPushButton("루트를 0으로 (발 안 뚫게)")
+                bz.setToolTip("지금 결과에서 발이 가장 낮게 닿는 지점을 재서 정확히 월드 0 에 오게 모션 전체를 맞춥니다.\n"
+                              "3ds Max 등으로 내보냈을 때 발이 그리드를 뚫지 않고 그 위에 서게 됩니다.")
+                bz.clicked.connect(self._place_floor_zero)
+                hz.addWidget(bz)
+                wz = QWidget()
+                wz.setLayout(hz)
+                f.addRow(lab, wz)
+            else:
+                f.addRow(lab, nf)
         f.addRow("모션 전체 회전 (루트 Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
         f.addRow(self._chk("transfer_root_motion", "제자리(인플레이스) — 수평 이동 제거", "체크하면 캐릭터가 앞으로 나아가지 않고 제자리에서 움직입니다", invert=True))
         f.addRow(self._chk("same_rig", "같은 스켈레톤이면 본 이름대로 그대로 적용 (사람 모양이 아닌 캐릭터)", "몬스터처럼 사람 본(골반·팔·다리)이 아닌 캐릭터는 사람 기준 매핑·좌표축 추정이 엉뚱하게 돌아갑니다. 소스 모션과 타깃 메시가 같은 스켈레톤(본 이름·계층·모양이 같음)이면 그 추정을 건너뛰고 본 이름대로 1:1 로 적용합니다. 꺼 두면 항상 사람 기준 리타겟을 씁니다."))
@@ -2788,11 +2801,34 @@ class MainWindow(QMainWindow):
     def _place_changed(self, axis: int, value: float) -> None:
         if self._syncing:
             return
-        p = list(self.pr.settings.place_offset)
-        p[axis] = value
-        self.pr.settings.place_offset = (p[0], p[1])
+        if axis == 2:            # 높이(Y): 모션 전체를 통째로 올리고 내린다
+            self.pr.settings.place_y = float(value)
+        else:
+            p = list(self.pr.settings.place_offset)
+            p[axis] = value
+            self.pr.settings.place_offset = (p[0], p[1])
         self._update_place_label()
         self.schedule()
+
+    def _place_floor_zero(self) -> None:
+        """루트를 높이 0으로: 지금 결과 애니메이션에서 발(없으면 가장 낮은 관절)의 '전체 프레임 최저 높이'를 재서,
+        그 지점이 정확히 월드 0 에 닿도록 모션 전체를 올리거나 내린다 — 발이 바닥을 뚫지 않는 위치."""
+        res = self.pr.result
+        if res is None or self.pr.tgt is None:
+            self.statusBar().showMessage("먼저 소스/타깃을 열어 리타겟 결과가 보여야 합니다.")
+            return
+        from ..core.model import fk as _fk
+        _, wp = _fk(self.pr.tgt.skeleton, res.anim.rot, res.anim.pos)
+        p = Q.rotate(res.frame_tgt[0], wp)                     # (T,J,3) 타깃 표준 프레임
+        slots = self.pr.tgt_slots or {}
+        feet = [slots[k] for k in ("L_Foot", "R_Foot", "L_Toe", "R_Toe") if k in slots]
+        joints = feet or [t for _s, t in res.pairs] or list(range(p.shape[1]))
+        low = float(p[:, joints, 1].min())
+        st = self.pr.settings
+        st.place_y = float(st.place_y - low)                   # 현재 결과 기준 상대 보정: 최저 발 높이 -> 정확히 0
+        self._sync_settings_ui()
+        self.schedule()
+        self.statusBar().showMessage("발 최저 높이(%.4g)를 바닥 0 에 맞췄습니다 (모션 높이 %.4g)." % (low, st.place_y))
 
     def _placement_dragged(self, dx: float, dz: float, dyaw: float) -> None:
         """뷰포트에서 끌어 바꾼 애니메이션 배치를 설정에 더한다."""
@@ -2806,14 +2842,15 @@ class MainWindow(QMainWindow):
     def _place_reset(self) -> None:
         st = self.pr.settings
         st.place_offset = (0.0, 0.0)
+        st.place_y = 0.0
         st.root_yaw_deg = 0.0
         self._sync_settings_ui()
         self.schedule()
 
     def _update_place_label(self) -> None:
         st = self.pr.settings
-        moved = abs(st.place_offset[0]) > 1e-9 or abs(st.place_offset[1]) > 1e-9 or abs(st.root_yaw_deg) > 1e-9
-        self.place_label.setText(("배치: 좌우 %.3g · 앞뒤 %.3g · 회전 %.1f°" % (st.place_offset[0], st.place_offset[1], st.root_yaw_deg)) if moved else "")
+        moved = abs(st.place_offset[0]) > 1e-9 or abs(st.place_offset[1]) > 1e-9 or abs(st.root_yaw_deg) > 1e-9 or abs(st.place_y) > 1e-9
+        self.place_label.setText(("배치: 좌우 %.3g · 앞뒤 %.3g · 높이 %.3g · 회전 %.1f°" % (st.place_offset[0], st.place_offset[1], st.place_y, st.root_yaw_deg)) if moved else "")
 
     def _update_hip_ranges(self) -> None:
         if self.pr.tgt is None:
@@ -2848,7 +2885,7 @@ class MainWindow(QMainWindow):
         for i, nf in enumerate(self.hip_fields):
             nf.set_value(st.hip_offset[i])
         for i, nf in enumerate(self.place_fields):
-            nf.set_value(st.place_offset[i])
+            nf.set_value(st.place_offset[i] if i < 2 else st.place_y)
         self._update_place_label()
         self._fill_joint_combos()
         self._syncing = prev

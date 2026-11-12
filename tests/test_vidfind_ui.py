@@ -205,30 +205,10 @@ def main():
         vt.cfg["game_dir"] = "G:/game"
         V.NAMES_CACHE = os.path.join(d, "names.json")
         # ('게임 속 이름으로 찾기' 칸은 '아는 정보' + AI 확장 검색으로 흡수되어 UI 에서 빠졌다)
-        # ---------------- 특징·패턴으로 캐릭터 찾기: 이름이 다 틀려도 '스핀 공격' 애니메이션이 있는 캐릭터를 거꾸로 찾는다
+        # ('특징·패턴으로 찾기' 줄은 AI 확장 검색(이름+동작 통합)으로 흡수되어 UI 에서 빠졌다 — 엔진은 test_motionsearch 가 검증)
         spin = "Sparta/Content/Characters/Bosses/Swordman/Animation/Attacks/AS_Swordman_SpinAttack_01"
         sword = "Sparta/Content/Characters/Bosses/Swordman/Art/Mesh/SK_Swordman"
         vt.index = assetidx.AssetIndex(MESHES + [pris, sword], ANIMS + [spin, "Sparta/Content/Characters/Bosses/Swordman/Animation/AS_Swordman_Idle"])
-        vt.rows = []
-        vt.table.setRowCount(0)
-        vt.add_blank_row()
-        vt.table.selectRow(0)
-        vt.motion_text.setText("7연속 스핀 공격")
-        vt.motion_ai.setChecked(False)
-        vt.find_by_motion()
-        check(vt.rows[0].chosen() == sword, "스핀 애니메이션이 있는 Swordman 이 1순위: %s" % vt.rows[0].chosen())
-        check("spin" in vt.motion_note.text() and "Swordman" in vt.motion_note.text(), "안내: %s" % vt.motion_note.text())
-        kw = TL.FakeAI('{"keywords":["whirlwind","spin"]}')
-        vt.provider = lambda: kw
-        vt.motion_text.setText("빙글빙글 도는 공격")
-        vt.motion_ai.setChecked(True)
-        vt.find_by_motion()
-        check(kw.prompts and vt.rows[0].chosen() == sword and "AI" in vt.motion_note.text(), "AI 영어 낱말 보조: %s" % vt.motion_note.text())
-        del vt.provider
-        QMessageBox.calls.clear()
-        vt.motion_text.setText("")
-        vt.find_by_motion()
-        check(QMessageBox.calls, "빈 설명 안내")
         # 애니메이션 설명 검색: 고른 캐릭터 안 / 모든 캐릭터
         vt.confirmed = [sword]
         vt.mesh_list.clear()
