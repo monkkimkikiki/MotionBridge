@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -30,7 +29,6 @@ from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, 
 from ..core.identify import apply as identify_apply
 from ..core.identify import entity_store as entstore
 from ..core.identify import namefind as identify_namefind
-from ..core.identify import verify as identify_verify
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
@@ -283,7 +281,7 @@ class VidFindTab(QWidget):
                              "· 쉼표(,)로 나누면 모두 들어간 것만 남깁니다 (예: boss,skeleton)\n"
                              "· 정규식도 됩니다 — 예: (?i)(monster|boss) 는 대소문자 무시하고 monster 또는 boss 가 든 경로\n"
                              "· 한글로 적어도 오류는 없지만, 게임 파일 경로는 대부분 영어라 한글 글자는 경로에 한글이 있을 때만 맞습니다.\n"
-                             "  한글 이름으로 캐릭터를 찾고 싶으면 아래 4) 검수의 '게임 속 이름' 칸(글자 사전을 써서 한글 이름을 내부 이름으로 바꿔 찾음)을 쓰세요."))
+                             "  한글 이름으로 캐릭터를 찾고 싶으면 '아는 정보' 칸에 보스 이름을 적으세요 (글자 사전 + AI 확장 검색으로 내부 이름을 찾아 줍니다)."))
         v.addLayout(h)
         kl = QHBoxLayout()
         kl.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모"), 1)
@@ -297,7 +295,7 @@ class VidFindTab(QWidget):
         v.addLayout(kl)
         self.known = QPlainTextEdit()
         self.known.setPlainText(self.cfg.get("vf_known", ""))
-        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\nDwarf Warrior — 도끼를 든 작은 인간형\n(비워도 됩니다. 적으면 이름이 달라도 리소스를 먼저 찾아 AI에게 알려 주고, AI가 놓친 캐릭터도 표에 넣어 줍니다)")
+        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\n금지장로 — 보스, 불탄 노승, 석장\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\n(비워도 됩니다. 보스 이름을 적으면 정확도가 크게 올라갑니다 — 한국어 이름이어도 AI 확장 검색(원어·음차·지역·모티프 코드명)으로 리소스를 먼저 찾아 AI에게 알려 줍니다)")
         self.known.setMinimumHeight(50)
         v.addWidget(Resizable(self.known, "vf_known_h", 50))
         self.engine_note = QLabel("")
@@ -349,10 +347,11 @@ class VidFindTab(QWidget):
         b.clicked.connect(lambda *_a: self.show_char_meshes())
         ch.addWidget(b)
         b = QPushButton("🌐 AI 확장 검색")
-        b.setToolTip("입력한 이름(예: 금지장로)이 리소스 이름과 전혀 달라도 찾습니다.\n"
-                     "AI 가 원어 정식명·병음 음차·등장 지역(이니셜 코드: 旧观音禅院→GYCY)·원전 모티프 코드명으로 단서를 확장하고,\n"
-                     "에셋 폴더들을 지역 코드와 보스 신호(애니 수·전용 연출·무기 메시)로 점수 매겨 후보를 추립니다.\n"
-                     "글 전용 AI(GPT-OSS 등)로도 동작합니다.")
+        b.setToolTip("이름이든 동작 설명이든, 리소스 이름과 전혀 달라도 캐릭터를 찾는 통합 검색입니다.\n"
+                     "· 이름(예: 금지장로): AI 가 원어 정식명·병음 음차·등장 지역 이니셜(旧观音禅院→GYCY)·원전 모티프 코드명으로 확장하고,\n"
+                     "  폴더들을 지역 코드와 보스 신호(애니 수·전용 연출·무기 메시)로 점수 매깁니다.\n"
+                     "· 동작(예: 7연속 스핀 공격): 애니메이션 이름 낱말로 캐릭터를 거꾸로 찾습니다.\n"
+                     "두 방법이 같은 캐릭터를 지목하면 가산점. 글 전용 AI(GPT-OSS 등)로도 동작합니다.")
         b.clicked.connect(self.start_namefind)
         ch.addWidget(b)
         cp.addLayout(ch)
@@ -367,19 +366,12 @@ class VidFindTab(QWidget):
         self.ck_fast.setToolTip("켜면 시간을 크게 줄입니다: ① 영상마다 장면 시트 한 장으로 AI 에게 한 번만 묻고(장면마다 묻지 않음), ② AI 에게 알리는 이름 목록을 %d개로 줄이고, "
                                 "③ 하나로 못 박지 않고 AI 가 꼽은 후보를 합쳐 검수 칸에 후보 5개를 보여 줍니다. 끄면 장면마다 정밀하게 묻습니다(느림)." % vision.FAST_VOCAB)
         self.ck_fast.toggled.connect(lambda v: (self.cfg.__setitem__("vf_fast", bool(v)), bridge.save_config(self.cfg)))
-        self.ck_verify = QCheckBox("생김새 검증")
-        self.ck_verify.setChecked(bool(self.cfg.get("vf_verify", True)))
-        self.ck_verify.setToolTip("추측한 뒤 후보 메시를 게임에서 뽑아(GLB) Blender 로 렌더해 장면과 나란히 비교하고, 생김새가 같은 후보를 고릅니다.\n"
-                                  "AI 가 이름을 엉뚱하게 골라도 모습으로 바로잡습니다. Blender 와 비전 AI 필요.\n"
-                                  "게임마다 처음 한 번은 후보 추출·렌더로 오래 걸립니다 (이후에는 캐시로 빠름).")
-        self.ck_verify.toggled.connect(lambda v: (self.cfg.__setitem__("vf_verify", bool(v)), bridge.save_config(self.cfg)))
         self.btn_guess = QPushButton("캐릭터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
         if self.rb_mode_char.isChecked():
             self.btn_guess.setText("캐릭터 메쉬 목록 열기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.ck_fast)
-        h.addWidget(self.ck_verify)
         h.addWidget(self.btn_guess, 1)
         self.btn_guess_panel = QPushButton("🧑‍⚖ AI 회의로 추측")
         self.btn_guess_panel.setMinimumHeight(32)
@@ -414,29 +406,9 @@ class VidFindTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setStretchLastSection(False)
         v.addWidget(Resizable(self.table, "vf_table", 180))
-        # 게임 속 이름으로 찾기: 리소스 이름이 화면에 보이는 이름과 다를 때
-        h = QHBoxLayout()
-        h.addWidget(QLabel("게임 속 이름"))
-        self.ingame = QLineEdit()
-        self.ingame.setPlaceholderText("예: The Nameless Captive / 이름 없는 포로 — 위 표에서 줄을 고른 뒤")
-        self.ingame.setToolTip("화면에 보이는 이름과 파일 이름이 다를 때, 게임 글자 사전·비슷한 말·AI 로 메시를 찾아 선택한 줄에 채웁니다")
-        self.ingame.returnPressed.connect(self.find_by_ingame_name)
-        h.addWidget(self.ingame, 1)
-        self.ingame_ai = QCheckBox("AI도 사용")
-        self.ingame_ai.setChecked(True)
-        h.addWidget(self.ingame_ai)
-        b = QPushButton("이 이름으로 찾기")
-        b.clicked.connect(lambda *_a: self.find_by_ingame_name())
-        h.addWidget(b)
-        b = QPushButton("글자 사전 만들기")
-        b.setToolTip("게임 파일의 .locres(번역 글자)를 읽어 '표시 이름 → 내부 이름표'를 만듭니다. 한 번만 하면 됩니다.")
-        b.clicked.connect(lambda *_a: self.build_name_book())
-        h.addWidget(b)
-        v.addLayout(h)
-        self.ingame_note = QLabel("")
-        self.ingame_note.setWordWrap(True)
-        v.addWidget(self.ingame_note)
         # 특징·패턴으로 찾기: 이름이 다 틀려도 "7연속 스핀 공격" 같은 동작으로 애니메이션 이름을 뒤져 캐릭터를 거꾸로 찾는다
+        # (게임 속 이름/글자 사전은 따로 두지 않는다: 글자 사전(.locres)은 추측 때 자동으로 만들고,
+        #  이름으로 찾기는 '아는 정보' 칸과 AI 확장 검색이 대신한다)
         h = QHBoxLayout()
         h.addWidget(QLabel("특징·패턴"))
         self.motion_text = QLineEdit()
@@ -469,12 +441,6 @@ class VidFindTab(QWidget):
         b.clicked.connect(lambda *_a: self.clear_rows())
         h.addWidget(b)
         h.addStretch(1)
-        self.btn_verify = QPushButton("🔍 생김새로 검증")
-        self.btn_verify.setToolTip("각 줄의 후보 메시를 게임에서 뽑아(GLB) Blender 로 렌더한 뒤, 장면과 나란히 놓고 AI 에게 '어느 렌더가 같은 캐릭터인지' 비교시켜 후보를 고릅니다.\n"
-                                   "이름이 아니라 생김새로 고르므로, 이름이 엉뚱할 때 특히 유용합니다.\n"
-                                   "처음에는 후보 추출·렌더로 오래 걸리지만 게임별로 캐시되어 다음부터 빠릅니다. Blender 와 비전 AI 가 필요합니다.")
-        self.btn_verify.clicked.connect(self.start_verify)
-        h.addWidget(self.btn_verify)
         self.btn_confirm = QPushButton("검수 확정 → 애니메이션 후보 보기")
         self.btn_confirm.setMinimumHeight(30)
         self.btn_confirm.clicked.connect(self.confirm)
@@ -875,6 +841,7 @@ class VidFindTab(QWidget):
     # ================================================================== 추측
     def _ensure_index(self, a, w, force: bool) -> assetidx.AssetIndex:
         helper, game, ue, aes, usmap = a
+        self._ensure_names(a, w)   # 글자 사전(.locres)이 없으면 자동으로 만든다 (캐릭터 이름 연결에 필요)
         if not force:
             idx = self.index or assetidx.load_index(INDEX_CACHE, game)
             if idx:
@@ -1074,6 +1041,23 @@ class VidFindTab(QWidget):
             w.progress.emit(0, 2, "단서 확장 중 (%s)" % clue)
             store = self._entities(idx, hint)
             res = identify_namefind.find(prov.ask_text, clue, hint, [m.path for m in idx.meshes], idx.anims, store)
+            try:
+                # 같은 입구에서 '동작 설명'(7연속 스핀 공격 …)으로도 찾는다 — 두 엔진이 같은 캐릭터를 지목하면 가산
+                _c, mons, _h, mq = motionsearch.find_meshes_by_motion(idx, clue)
+                for m_ in mons:
+                    hit = next((c for c in res["candidates"] if c["folder"].lower() == m_.name.lower()), None)
+                    if hit is not None:
+                        hit["score"] = round(min(hit["score"] + 0.15, 1.0), 3)
+                        hit["why"] += " + 동작 이름(%s)" % m_.why
+                    else:
+                        res["candidates"].append({"folder": m_.name, "score": round(min(m_.score * 0.6, 0.9), 3),
+                                                  "why": "동작 이름 — " + m_.why, "meshes": [], "anims": len(m_.hits)})
+                if mons and mq.describe():
+                    res["note"] = ((res.get("note") or "") + " · 동작으로 알아들음: %s" % mq.describe()).strip(" ·")
+                res["candidates"].sort(key=lambda d: -d["score"])
+                res["candidates"] = res["candidates"][:10]
+            except Exception:  # noqa: BLE001 - 동작 검색은 보조
+                pass
             res["idx"], res["clue"] = idx, clue
             return res
 
@@ -1185,6 +1169,27 @@ class VidFindTab(QWidget):
             if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
                 gamenames.resolve_known(known, idx, book)
                 for k in known:
+                    if k.top is not None:
+                        continue
+                    # 표시 이름으로 못 이은 보스 이름(금지장로 등): AI 확장 검색(원어·음차·지역·모티프 코드명)으로 잇고,
+                    # 유력 후보 보스들을 전부 검수 후보에 넣어 검수자가 고르게 한다
+                    try:
+                        stop_check(w)
+                        nf_ = identify_namefind.find(prov.ask_text, k.name, hint, [m.path for m in idx.meshes], idx.anims, self._entities(idx, hint))
+                        added_ = []
+                        for ci_, cand_ in enumerate((nf_.get("candidates") or [])[:4]):
+                            if cand_["score"] < 0.35 or not cand_["meshes"]:
+                                continue
+                            p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
+                            k.cands.insert(len(added_), assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
+                            added_.append("%s(%d%%)" % (cand_["folder"], round(cand_["score"] * 100)))
+                        if added_:
+                            notes.append("아는 정보 '%s' → 후보 %s (AI 확장 — 검수 칸에서 고르세요)" % (k.name, ", ".join(added_)))
+                    except _Stopped:
+                        raise
+                    except Exception as e:  # noqa: BLE001 - 확장은 보조
+                        notes.append("아는 정보 '%s' 확장 검색 실패: %s" % (k.name, str(e)[:80]))
+                for k in known:
                     if k.top and not any(v == k.top.name or v.startswith(k.top.name + " ") for v in vocab):
                         vocab = [k.top.name] + list(vocab)
                     notes.append("아는 정보: %s → %s" % (k.name, (k.top.name + " (%d%%)" % round(k.top.score * 100)) if k.top else "리소스를 못 찾음"))
@@ -1236,13 +1241,6 @@ class VidFindTab(QWidget):
                         notes.append("엔티티 사전으로 %d개 이름을 교정했습니다" % n_fix)
                 except Exception as e:  # noqa: BLE001 - 사전 교정은 보조 기능
                     errors.append("엔티티 사전: %s" % str(e)[:120])
-                try:
-                    # 생김새 검증: 이름이 아니라 렌더된 모습으로 후보를 확정한다 (추측의 일부)
-                    self._auto_verify(w, prov, idx, a, hint or "game", groups_, notes, errors)
-                except _Stopped:
-                    raise
-                except Exception as e:  # noqa: BLE001 - 검증 실패가 추측을 막지 않게
-                    errors.append("생김새 검증: %s" % str(e)[:120])
                 return groups_
 
             if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
@@ -1364,9 +1362,6 @@ class VidFindTab(QWidget):
             base = self._merge_cands(idx, base, g.alts, 5)
         if not base:      # 이름 글자로는 못 찾음 -> 뜻 풀이 사전(한국어/영어/한자 뜻)으로 후보를 낸다
             base = self._gloss_cands(" ".join(x for x in (g.name, g.description) if x))
-        vp = getattr(g, "verified_path", None)
-        if vp:            # 생김새 검증이 고른 메시는 맨 앞 후보로 (이름 점수와 무관하게)
-            base = [assetidx.MeshCandidate(vp, assetidx.mesh_name(vp), min(max(g.confidence, 0.8), 0.95), "생김새 일치")] + [c for c in base if c.path != vp]
         remembered = bool(base) and base[0].why.startswith("이전에 확정")
         sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
@@ -1514,81 +1509,22 @@ class VidFindTab(QWidget):
     def name_book(self) -> Optional[gamenames.NameBook]:
         return gamenames.NameBook.load(NAMES_CACHE, self.cfg.get("game_dir", ""))
 
-    def build_name_book(self) -> None:
-        a = self.win._extract_args()
-        if a is None:
-            return
+    def _ensure_names(self, a, w) -> None:
+        """글자 사전(.locres → names.json)이 없거나 다른 게임 것이면 자동으로 만든다 (예전의 '글자 사전 만들기' 버튼을 흡수).
 
-        def job(w):
-            w.progress.emit(0, 1, "게임 파일에서 글자 사전(.locres) 꺼내는 중")
+        실패해도 조용히 계속한다 — 사전이 없으면 카탈로그는 이름 연결 없이 묶기만 한다."""
+        try:
+            if self.name_book() is not None:
+                return
+            w.progress.emit(0, 1, "게임 글자 사전(.locres) 만드는 중 (게임마다 처음 한 번)")
             shutil.rmtree(LOCRES_DIR, ignore_errors=True)
             files = extractor.export_locres(*a, LOCRES_DIR)
             book = gamenames.build_book(files)
             if len(book):
                 book.save(NAMES_CACHE, self.cfg.get("game_dir", "") or a[1])
-            return len(files), len(book)
-
-        def done(res):
-            nfiles, n = res
-            if n:
-                msg = "글자 사전 완성: 글자 %d개 (파일 %d개)" % (n, nfiles)
-            elif nfiles:
-                msg = "글자 사전 파일은 있지만 읽을 수 있는 글자가 없었습니다 (%d개 파일)." % nfiles
-            else:
-                msg = "이 게임에서 .locres 를 찾지 못했습니다. 비슷한 말 사전과 AI 로만 찾습니다."
-            self.ingame_note.setText(msg)
-            self.win.statusBar().showMessage(msg)
-
-        self.win.run_async(job, done, "글자 사전 만드는 중")
-
-    def find_by_ingame_name(self) -> None:
-        name = self.ingame.text().strip()
-        if not name:
-            QMessageBox.warning(self, "게임 속 이름", "게임 속 이름을 입력하세요 (예: The Nameless Captive).")
-            return
-        idx = self._load_index_cached()
-        if idx is None:
-            QMessageBox.warning(self, "게임 속 이름", "에셋 이름 목록이 아직 없습니다. 한 번 '캐릭터 추측 시작'을 실행하세요.")
-            return
-        if not self.rows:
-            self.add_blank_row()
-        cur = self.table.currentRow()
-        row = self.rows[cur] if 0 <= cur < len(self.rows) else self.rows[-1]
-        book = self.name_book()
-        use_ai = bool(self.ingame_ai.isChecked())
-        prov = self.provider() if use_ai else None
-        desc = row.group.description or ""
-
-        def job(w):
-            w.progress.emit(0, 1, "이름으로 찾는 중")
-            try:                                   # 1) 캐릭터 카탈로그: 게임 속 이름(영/한)이 정확히 맞으면 그 캐릭터 폴더의 메시를 바로 (AI·비슷한 이름 후보 없이)
-                cat = self._catalog(idx)
-                hit = cat.find(name, 1) if len(cat.all()) >= charcatalog.MIN_CHARS else []
-            except Exception:  # noqa: BLE001
-                hit = []
-            if hit and hit[0].score >= 0.85 and hit[0].char.meshes:
-                ch = hit[0].char
-                body = ch.body_mesh()
-                order = ([body] if body else []) + [m for m in sorted(ch.meshes) if m != body]
-                cands = [assetidx.MeshCandidate(m, assetidx.mesh_name(m), 1.0 if m == body else 0.9, "게임 속 이름 → %s (캐릭터 폴더)" % ch.display()) for m in order]
-                return cands, ["캐릭터 '%s': 메시 %d개 · 애니메이션 %d개 (같은 폴더)" % (ch.display(), len(ch.meshes), len(ch.anims))]
-            return gamenames.find_meshes(name, idx, book, prov, desc)   # 2) 카탈로그에 없으면 예전 방식(글자 사전 + 비슷한 이름 + AI)
-
-        def done(res):
-            cands, notes = res
-            if cands:
-                row.base = cands
-                row.sure = True
-                self._fill_combo(row.combo, cands, pick_first=True)
-                if row.search.text():
-                    row.search.setText("")
-                if not row.group.name or row.group.name.lower() in assetidx.UNKNOWN_WORDS:
-                    row.group.name = name  # 확정하면 '이 이름 → 이 메시'로 기억된다
-            ri = self.rows.index(row)
-            self.table.setItem(ri, 1, QTableWidgetItem("게임 속 이름: %s\n%s" % (name, ("후보 %d개 — 맨 위가 가장 유력" % len(cands)) if cands else "후보 없음")))
-            self.ingame_note.setText(" ".join(notes) if notes else "후보 %d개를 선택한 줄에 채웠습니다. 맞는지 확인하세요." % len(cands))
-
-        self.win.run_async(job, done, "게임 속 이름으로 찾는 중", cancellable=True, on_cancel=lambda: self.status.setText("검색을 취소했습니다."))
+                self._charcat_memo = None   # 새 사전으로 카탈로그를 다시 만들게
+        except Exception:  # noqa: BLE001 - 사전은 보조 입력
+            pass
 
     def _motion_index(self):
         return self.index or self._load_index_cached()
@@ -1769,148 +1705,6 @@ class VidFindTab(QWidget):
         return True
 
     CHAR_LIST_MAX = 3000
-
-    def _glb_getter(self, game: str, a):
-        """메시 경로 -> GLB 파일 (게임별 캐시, 없으면 추출 도우미로 뽑는다)."""
-        helper, groot, ue, aes, usmap = a
-        glb_root = identify_verify.cache_dir(game, "refglb")
-
-        def glb_of(mesh_path: str):
-            d = os.path.join(glb_root, hashlib.sha1(mesh_path.replace("\\", "/").lower().encode("utf-8")).hexdigest()[:16])
-            if os.path.isdir(d):
-                got = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
-                if got:
-                    return got[0]
-            os.makedirs(d, exist_ok=True)
-            files = extractor.export_assets(helper, groot, ue, aes, usmap, [mesh_path], d, kind="mesh", mesh_format="glb", textures=True)
-            got = [f for f in files if f.lower().endswith(".glb")] or [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
-            return got[0] if got else None
-        return glb_of
-
-    def _auto_verify(self, w, prov, idx, a, game: str, groups, notes, errors) -> None:
-        """추측 결과를 생김새로 한 번 더 거른다: 각 줄의 후보 메시를 렌더해 장면과 비교, 일치하면 그 메시로 확정.
-
-        Blender/추출/비전 AI 가 안 되는 환경이면 조용히 건너뛴다 (추측 자체는 그대로 진행)."""
-        if not bool(self.cfg.get("vf_verify", True)) or not prov.supports_images:
-            return
-        if not bridge.find_blender(self.cfg.get("blender") or None):
-            notes.append("생김새 검증 건너뜀: Blender 를 찾지 못했습니다")
-            return
-        targets = [g for g in groups if getattr(g, "frame", "") and os.path.isfile(g.frame)][:8]
-        if not targets:
-            return
-        cands = {}
-        for g in targets:
-            base = idx.rank_meshes(g.name, g.description, identify_verify.MAX_CANDS, self.memory)
-            if g.alts:
-                base = self._merge_cands(idx, base, g.alts, identify_verify.MAX_CANDS)
-            cands[id(g)] = [c.path for c in base][:identify_verify.MAX_CANDS]
-        all_paths = [p for ps in cands.values() for p in ps]
-        if not all_paths:
-            return
-
-        def prog(i, n, nm):
-            if w.cancel.is_set():
-                raise RuntimeError("취소했습니다")
-            w.progress.emit(i, n, "생김새 검증: 후보 뽑고 렌더 중 (게임마다 처음 한 번) " + nm)
-
-        thumbs = identify_verify.ensure_thumbs(game, all_paths, self._glb_getter(game, a),
-                                               blender=self.cfg.get("blender") or None, progress=prog)
-        work = os.path.join(identify_verify.cache_dir(game), "_work")
-        n_ok = 0
-        for i, g in enumerate(targets):
-            if w.cancel.is_set():
-                break
-            w.progress.emit(i, len(targets), "생김새 비교 중 %d/%d" % (i + 1, len(targets)))
-            try:
-                v = identify_verify.verify_one(prov.ask, game, g.frame, g.box, cands[id(g)], thumbs, work, panel.make_sheet)
-            except Exception as e:  # noqa: BLE001 - 한 줄 실패가 전체를 막지 않게
-                errors.append("생김새 비교: %s" % str(e)[:100])
-                continue
-            if v and v.get("path"):
-                if g.name and g.name not in g.alts:
-                    g.alts = [g.name] + list(g.alts)          # 원래 추측 이름은 후보로 남긴다
-                g.verified_path = v["path"]
-                g.name = assetidx.mesh_name(v["path"])        # 생김새로 확정한 메시가 곧 추측 결과
-                g.confidence = max(g.confidence, min(float(v.get("confidence") or 0.0), 0.9))
-                notes.append("생김새 확인: %s (%s)" % (g.name, (v.get("why") or "")[:60]))
-                n_ok += 1
-        made = sum(1 for t in thumbs.values() if t)
-        notes.append("생김새 검증: %d줄 중 %d줄 일치 (후보 렌더 %d/%d개)%s" % (
-            len(targets), n_ok, made, len(thumbs),
-            "" if made else " — 후보를 뽑거나 렌더하지 못했습니다 (추출 설정/Blender 확인)"))
-
-    def start_verify(self) -> None:
-        """후보 '생김새 검증' 다시 돌리기: 이름이 아니라 렌더된 모습으로 후보를 고른다 (느림, 게임별 캐시)."""
-        rows = [r for r in self.rows if r.base]
-        if not rows:
-            QMessageBox.information(self, "생김새 검증", "먼저 [캐릭터 추측]으로 검수 표를 채우세요.")
-            return
-        prov = self.provider()
-        if not prov.supports_images:
-            QMessageBox.warning(self, "생김새 검증", "%s 는 글 전용입니다. 비전 AI(Ollama 비전 모델/Claude 등)로 바꿔 주세요." % prov.label)
-            return
-        if not bridge.find_blender(self.cfg.get("blender") or None):
-            QMessageBox.warning(self, "생김새 검증", "후보 렌더에 Blender 가 필요합니다. 설치하거나 '파일 → Blender 경로 지정…'으로 지정하세요.")
-            return
-        a = self.win._extract_args()
-        if a is None:
-            return
-        helper, groot, ue, aes, usmap = a
-        game = (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "") or "game"
-        rows = rows[:8]
-        self._verify_rows = rows
-        jobs = [(r.group.frame, r.group.box, [c.path for c in r.base[:identify_verify.MAX_CANDS]]) for r in rows]
-        glb_of = self._glb_getter(game, a)
-
-        def job(w):
-            all_paths = [p for _f, _b, ps in jobs for p in ps]
-
-            def prog(i, n, nm):
-                if w.cancel.is_set():
-                    raise RuntimeError("취소했습니다")
-                w.progress.emit(i, n, "후보 뽑고 렌더 중 (게임마다 처음 한 번) " + nm)
-
-            thumbs = identify_verify.ensure_thumbs(game, all_paths, glb_of, blender=self.cfg.get("blender") or None, progress=prog)
-            res = []
-            work = os.path.join(identify_verify.cache_dir(game), "_work")
-            for i, (frame, box, paths) in enumerate(jobs):
-                if w.cancel.is_set():
-                    break
-                w.progress.emit(i, len(jobs), "생김새 비교 중 %d/%d" % (i + 1, len(jobs)))
-                try:
-                    v = identify_verify.verify_one(prov.ask, game, frame, box, paths, thumbs, work, panel.make_sheet)
-                except Exception as e:  # noqa: BLE001 - 한 줄 실패가 전체를 막지 않게
-                    v = {"path": None, "confidence": 0.0, "why": "오류: %s" % str(e)[:80], "sheet": ""}
-                res.append(v)
-            return {"results": res, "thumbs": sum(1 for t in thumbs.values() if t), "total": len(thumbs)}
-
-        self.win.run_async(job, self._after_verify, "생김새 검증 중 (처음엔 후보 추출·렌더로 오래 걸립니다)", cancellable=True,
-                           on_cancel=lambda: self.status.setText("생김새 검증을 취소했습니다."))
-
-    def _after_verify(self, res) -> None:
-        rows = self.__dict__.get("_verify_rows", [])
-        hits, whys = 0, []
-        for r, v in zip(rows, res.get("results", [])):
-            if not v or not v.get("path"):
-                continue
-            i = r.combo.findData(v["path"])
-            if i is None or i < 0:
-                continue
-            r.combo.setCurrentIndex(i)
-            r.group.confidence = max(r.group.confidence, min(float(v.get("confidence") or 0.0), 0.9))
-            hits += 1
-            if v.get("why"):
-                whys.append("%s: %s" % (assetidx.mesh_name(v["path"]), v["why"]))
-            try:
-                self._refresh_choice(r)
-            except Exception:  # noqa: BLE001
-                pass
-        note = "생김새 검증: %d줄 중 %d줄에서 일치 후보를 골랐습니다 (후보 렌더 %d/%d개)" % (len(rows), hits, res.get("thumbs", 0), res.get("total", 0))
-        if not hits:
-            note += " — 렌더를 못 만들었거나 AI 가 일치를 확신하지 못했습니다"
-        self.status.setText(note + (("\n" + " · ".join(whys[:3])) if whys else ""))
-        self._update_choice_summary()
 
     def confirm(self) -> None:
         self.char_mode = False

@@ -81,9 +81,10 @@ def main():
         QFileDialog.open_names_ret = (["/v/wukong.mp4"], "")
         vt.add_files()
         vt.start_guess()
-        kinds = ["gloss" if "decode what creature" in p else "pick" if "closed list of this game" in p else "see" for p in prompts]
+        kinds = ["gloss" if "decode what creature" in p else "pick" if "closed list of this game" in p
+                 else "expand" if "Expand the clue" in p else "see" for p in prompts]   # expand = '아는 정보' AI 확장 검색
         check(kinds.count("gloss") == 1, "이름 뜻 풀이를 한 번 물음: %s" % kinds)
-        see = next((p for p in prompts if "decode what creature" not in p and "closed list of this game" not in p), "")
+        see = next((p for p in prompts if "decode what creature" not in p and "closed list of this game" not in p and "Expand the clue" not in p), "")
         check("(Wandering Wight" in see and "pinyin" in see, "인식 AI 에게 주는 이름 목록에 뜻이 붙음")
         check("SK_GYCY_Lang_03" not in see or "SK_GYCY_Lang_02" not in see, "같은 캐릭터의 여러 벌은 하나만 알림")
         gl = nameglossary.Glossary.load("Black Myth Wukong")

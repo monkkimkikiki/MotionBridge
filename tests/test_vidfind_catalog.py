@@ -105,19 +105,7 @@ def main():
         vt.start_guess()
         check(prompts["read"] == [], "vf_read_text=False 면 글자 읽기 안 함")
 
-        # '게임 속 이름으로 찾기': 한국어 이름만 쳐도 그 캐릭터 폴더의 메시가 몸통 먼저, 이웃 캐릭터 없이
-        vt.rows = []
-        vt.table.setRowCount(0)
-        vt.add_blank_row()
-        vt.table.selectRow(0)
-        vt.ingame_ai.setChecked(False)
-        vt.ingame.setText("오염된 자취")
-        vt.find_by_ingame_name()
-        row = vt.rows[0]
-        cands = [c.path for c in row.base]
-        check(cands and cands[0] == [m for m in MESHES if m.endswith("SK_TarredVestige.uasset")][0], "이름 검색 1순위가 몸통 메시: %s" % cands[:3])
-        check(all("TarredVestige" in c for c in cands), "이름 검색 후보에 다른 캐릭터가 섞이지 않음: %s" % cands)
-        check("캐릭터 폴더" in row.base[0].why, "근거: " + row.base[0].why)
+        # ('게임 속 이름으로 찾기' 칸은 '아는 정보' + AI 확장 검색으로 흡수되어 UI 에서 빠졌다)
 
     if fails:
         print("\n실패 %d개" % len(fails))
