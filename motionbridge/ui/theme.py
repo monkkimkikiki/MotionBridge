@@ -190,11 +190,30 @@ def _remap(w, to: str) -> None:
         w.setStyleSheet(new)
 
 
+PLACEHOLDER = {"dark": (150, 158, 175), "light": (120, 128, 145)}
+
+
+def _fix_placeholder(w) -> None:
+    """입력 칸 안의 안내 글 색을 그 칸에 직접 지정한다. 앱 팔레트에만 넣으면 실제 칸에는 검정으로 남는 것을 실제 Qt 시험에서 확인했다."""
+    try:
+        if not hasattr(w, "setPlaceholderText"):
+            return
+        want = QColor(*PLACEHOLDER[_mode])
+        pal = w.palette()
+        if pal.color(QPalette.ColorRole.PlaceholderText) != want:
+            pal.setColor(QPalette.ColorRole.PlaceholderText, want)
+            w.setPalette(pal)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class _Follower(QObject):
     """테마가 밝음일 때, 나중에 만들어져 처음 보이는 위젯의 색도 바꿔 준다."""
 
     def eventFilter(self, obj, ev) -> bool:  # noqa: N802
         try:
+            if ev.type() in (QEvent.Type.Show, QEvent.Type.Polish):
+                _fix_placeholder(obj)
             # 처음 보일 때 + 프로그램이 글자색을 다시 지정했을 때(StyleChange: 판정 줄·선택 표시처럼 상태에 따라 색을 바꾸는 곳)
             if _mode == "light" and ev.type() in (QEvent.Type.Show, QEvent.Type.StyleChange) and hasattr(obj, "styleSheet"):
                 _remap(obj, "light")
@@ -235,6 +254,7 @@ def apply_theme(app, new_mode: str) -> str:
             app.installEventFilter(_follower)
         for w in list(app.allWidgets()):
             _remap(w, new_mode)
+            _fix_placeholder(w)
             try:
                 w.update()          # 직접 그리는 화면(그래프·프레임 막대)도 새 색으로 다시 그린다
             except Exception:  # noqa: BLE001

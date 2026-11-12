@@ -675,6 +675,11 @@ try:
         print("DIAG theme roundtrip:", _a[:110], "=>", (_b or "")[:110])
     check(not _diff, "왕복하면 스타일이 원래대로 (다른 것 %d개)" % len(_diff))
     from PySide6.QtGui import QPalette as _QP
+    from PySide6.QtWidgets import QLineEdit as _QLE, QPlainTextEdit as _QPT
+    _blk = [w for w in mw.findChildren(_QLE) + mw.findChildren(_QPT) if w.palette().color(_QP.ColorRole.PlaceholderText).red() < 100]
+    for _w in _blk[:5]:
+        print("DIAG placeholder black:", type(_w).__name__, _w.placeholderText()[:40], _w.palette().color(_QP.ColorRole.PlaceholderText).name())
+    check(not _blk, "모든 입력 칸의 안내 글이 회색 (검정으로 남은 칸 %d개)" % len(_blk))
     _ph = mw.ex_gname.palette().color(_QP.ColorRole.PlaceholderText)
     check(110 <= _ph.red() <= 190 and 110 <= _ph.green() <= 190, "입력 칸 안내 글은 회색: %s" % _ph.name())
     _dis = mw.ex_gname.palette().color(_QP.ColorGroup.Disabled, _QP.ColorRole.Text)
