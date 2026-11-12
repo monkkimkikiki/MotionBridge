@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ from ..core import nameglossary
 from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from ..core.identify import apply as identify_apply
 from ..core.identify import entity_store as entstore
+from ..core.identify import verify as identify_verify
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
@@ -452,6 +454,12 @@ class VidFindTab(QWidget):
         b.clicked.connect(lambda *_a: self.clear_rows())
         h.addWidget(b)
         h.addStretch(1)
+        self.btn_verify = QPushButton("🔍 생김새로 검증")
+        self.btn_verify.setToolTip("각 줄의 후보 메시를 게임에서 뽑아(GLB) Blender 로 렌더한 뒤, 장면과 나란히 놓고 AI 에게 '어느 렌더가 같은 캐릭터인지' 비교시켜 후보를 고릅니다.\n"
+                                   "이름이 아니라 생김새로 고르므로, 이름이 엉뚱할 때 특히 유용합니다.\n"
+                                   "처음에는 후보 추출·렌더로 오래 걸리지만 게임별로 캐시되어 다음부터 빠릅니다. Blender 와 비전 AI 가 필요합니다.")
+        self.btn_verify.clicked.connect(self.start_verify)
+        h.addWidget(self.btn_verify)
         self.btn_confirm = QPushButton("검수 확정 → 애니메이션 후보 보기")
         self.btn_confirm.setMinimumHeight(30)
         self.btn_confirm.clicked.connect(self.confirm)
@@ -1695,6 +1703,89 @@ class VidFindTab(QWidget):
         return True
 
     CHAR_LIST_MAX = 3000
+
+    def start_verify(self) -> None:
+        """후보 '생김새 검증': 이름이 아니라 렌더된 모습으로 후보를 고른다 (느림, 게임별 캐시)."""
+        rows = [r for r in self.rows if r.base]
+        if not rows:
+            QMessageBox.information(self, "생김새 검증", "먼저 [캐릭터 추측]으로 검수 표를 채우세요.")
+            return
+        prov = self.provider()
+        if not prov.supports_images:
+            QMessageBox.warning(self, "생김새 검증", "%s 는 글 전용입니다. 비전 AI(Ollama 비전 모델/Claude 등)로 바꿔 주세요." % prov.label)
+            return
+        if not bridge.find_blender(self.cfg.get("blender") or None):
+            QMessageBox.warning(self, "생김새 검증", "후보 렌더에 Blender 가 필요합니다. 설치하거나 '파일 → Blender 경로 지정…'으로 지정하세요.")
+            return
+        a = self.win._extract_args()
+        if a is None:
+            return
+        helper, groot, ue, aes, usmap = a
+        game = (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "") or "game"
+        rows = rows[:8]
+        self._verify_rows = rows
+        jobs = [(r.group.frame, r.group.box, [c.path for c in r.base[:identify_verify.MAX_CANDS]]) for r in rows]
+        glb_root = identify_verify.cache_dir(game, "refglb")
+
+        def glb_of(mesh_path: str):
+            d = os.path.join(glb_root, hashlib.sha1(mesh_path.replace("\\", "/").lower().encode("utf-8")).hexdigest()[:16])
+            if os.path.isdir(d):
+                got = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
+                if got:
+                    return got[0]
+            os.makedirs(d, exist_ok=True)
+            files = extractor.export_assets(helper, groot, ue, aes, usmap, [mesh_path], d, kind="mesh", mesh_format="glb", textures=True)
+            got = [f for f in files if f.lower().endswith(".glb")] or [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
+            return got[0] if got else None
+
+        def job(w):
+            all_paths = [p for _f, _b, ps in jobs for p in ps]
+
+            def prog(i, n, nm):
+                if w.cancel.is_set():
+                    raise RuntimeError("취소했습니다")
+                w.progress.emit(i, n, "후보 뽑고 렌더 중 (게임마다 처음 한 번) " + nm)
+
+            thumbs = identify_verify.ensure_thumbs(game, all_paths, glb_of, blender=self.cfg.get("blender") or None, progress=prog)
+            res = []
+            work = os.path.join(identify_verify.cache_dir(game), "_work")
+            for i, (frame, box, paths) in enumerate(jobs):
+                if w.cancel.is_set():
+                    break
+                w.progress.emit(i, len(jobs), "생김새 비교 중 %d/%d" % (i + 1, len(jobs)))
+                try:
+                    v = identify_verify.verify_one(prov.ask, game, frame, box, paths, thumbs, work, panel.make_sheet)
+                except Exception as e:  # noqa: BLE001 - 한 줄 실패가 전체를 막지 않게
+                    v = {"path": None, "confidence": 0.0, "why": "오류: %s" % str(e)[:80], "sheet": ""}
+                res.append(v)
+            return {"results": res, "thumbs": sum(1 for t in thumbs.values() if t), "total": len(thumbs)}
+
+        self.win.run_async(job, self._after_verify, "생김새 검증 중 (처음엔 후보 추출·렌더로 오래 걸립니다)", cancellable=True,
+                           on_cancel=lambda: self.status.setText("생김새 검증을 취소했습니다."))
+
+    def _after_verify(self, res) -> None:
+        rows = self.__dict__.get("_verify_rows", [])
+        hits, whys = 0, []
+        for r, v in zip(rows, res.get("results", [])):
+            if not v or not v.get("path"):
+                continue
+            i = r.combo.findData(v["path"])
+            if i is None or i < 0:
+                continue
+            r.combo.setCurrentIndex(i)
+            r.group.confidence = max(r.group.confidence, min(float(v.get("confidence") or 0.0), 0.9))
+            hits += 1
+            if v.get("why"):
+                whys.append("%s: %s" % (assetidx.mesh_name(v["path"]), v["why"]))
+            try:
+                self._refresh_choice(r)
+            except Exception:  # noqa: BLE001
+                pass
+        note = "생김새 검증: %d줄 중 %d줄에서 일치 후보를 골랐습니다 (후보 렌더 %d/%d개)" % (len(rows), hits, res.get("thumbs", 0), res.get("total", 0))
+        if not hits:
+            note += " — 렌더를 못 만들었거나 AI 가 일치를 확신하지 못했습니다"
+        self.status.setText(note + (("\n" + " · ".join(whys[:3])) if whys else ""))
+        self._update_choice_summary()
 
     def confirm(self) -> None:
         self.char_mode = False
