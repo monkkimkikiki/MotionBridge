@@ -215,17 +215,34 @@ class LinkServer:
                 elif self._auth():
                     self._send(200, {"ok": True, "app": APP_NAME, "version": srv.version, "pid": os.getpid()})
 
+            def _read_body(self) -> tuple:
+                """응답하기 전에 본문부터 읽는다 -> (오류글, 바이트).
+                본문을 안 읽고 응답 후 닫으면 Windows 가 연결을 리셋해(10054) 클라이언트가 401 같은 응답을 못 받는다."""
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    return "본문 크기가 올바르지 않습니다", b""
+                if n <= 0 or n > MAX_BODY:
+                    return "본문 크기가 올바르지 않습니다", b""
+                out = b""
+                while len(out) < n:
+                    chunk = self.rfile.read(n - len(out))
+                    if not chunk:
+                        break
+                    out += chunk
+                return "", out
+
             def do_POST(self):  # noqa: N802
+                body_err, raw = self._read_body()
                 if not self._auth():
                     return
                 if self.path.split("?")[0] != "/v1/open":
                     self._send(404, {"ok": False, "error": "없는 주소입니다"})
                     return
                 try:
-                    n = int(self.headers.get("Content-Length") or 0)
-                    if n <= 0 or n > MAX_BODY:
-                        raise ValueError("본문 크기가 올바르지 않습니다")
-                    data = json.loads(self.rfile.read(n).decode("utf-8-sig"))
+                    if body_err:
+                        raise ValueError(body_err)
+                    data = json.loads(raw.decode("utf-8-sig"))
                     if not isinstance(data, dict) or "query" not in data:
                         raise ValueError("query 가 필요합니다")
                 except (ValueError, UnicodeDecodeError) as e:

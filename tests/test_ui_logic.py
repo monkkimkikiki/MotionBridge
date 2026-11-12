@@ -815,7 +815,14 @@ def test_full_flow():
         os.environ.pop("MOTIONBRIDGE_BLENDER", None)
         mw.pr.blender = None
         QMessageBox.calls.clear()
-        mw.do_export()
+        # 이 PC 에 Blender 가 설치되어 있어도(고정 경로 탐색에 걸려도) 'Blender 없음' 상황을 시험한다
+        from motionbridge.core import bridge as _bridge
+        _fb = _bridge.find_blender
+        _bridge.find_blender = lambda explicit=None: None
+        try:
+            mw.do_export()
+        finally:
+            _bridge.find_blender = _fb
         assert QMessageBox.calls and "Blender" in QMessageBox.calls[-1][2]
         # 소스만 열린 상태에서 리타겟 내보내기 -> 경고
         mw2 = A.MainWindow()

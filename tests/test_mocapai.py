@@ -88,13 +88,15 @@ def test_paths_and_status():
 
 
 def _bash_ok(script: str) -> str:
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8", newline="\n") as f:
-        f.write(script)
+    # 파일 경로를 넘기면 WSL bash 가 Windows 경로를 못 읽는다 (C:\Users\... -> C:UsersNX3...).
+    # 표준입력으로 주면 WSL bash / Git bash 모두에서 문법 검사(-n)가 된다. bash 가 없는 PC 는 건너뛴다.
     try:
-        r = subprocess.run(["bash", "-n", f.name], capture_output=True, text=True)
-        return r.stderr
-    finally:
-        os.remove(f.name)
+        # text=True 는 Windows 에서 \n 을 \r\n 으로 바꿔 bash 문법을 깨뜨리므로 바이트로 넘긴다.
+        r = subprocess.run(["bash", "-n"], input=script.encode("utf-8"), capture_output=True)
+    except FileNotFoundError:
+        print("bash 없음: 문법 검사 건너뜀")
+        return ""
+    return r.stderr.decode("utf-8", "replace")
 
 
 def test_install_chumpy():
