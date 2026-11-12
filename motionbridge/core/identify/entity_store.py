@@ -157,7 +157,8 @@ class EntityStore:
             if KIND_RANK.get(c.kind, 0) >= KIND_RANK.get(e.kind, 0):
                 e.kind = c.kind or e.kind
             e.folder = c.folder or e.folder
-            for t in (c.leaf, c.body_name()):
+            raw = os.path.splitext(os.path.basename(c.body_mesh() or ""))[0]   # 'SK_Swordman' (접두사 안 뗀 파일 이름)
+            for t in (c.leaf, c.body_name(), raw):
                 self.add_name(e.eid, t, group="codename", evidence="에셋 카탈로그")
             for lang, lst in (("en", c.en), ("ko", c.ko)):
                 for t in lst:
@@ -192,10 +193,11 @@ class EntityStore:
             e.sources.append({"url": url, "tier": tier, "lang": lang, "evidence": evidence or text})
         return True
 
-    def learn(self, eid: str, text: str, lang: str = "") -> None:
-        """검수자가 '이 글자는 이 캐릭터다'라고 고친 것을 기억한다 (별명 + 확인 표시)."""
-        self.add_name(eid, text, lang=lang, group="alias", evidence="검수자 수정")
+    def learn(self, eid: str, text: str, lang: str = "") -> bool:
+        """검수자가 '이 글자는 이 캐릭터다'라고 고친 것을 기억한다 (별명 + 확인 표시). 새 별명이면 True."""
+        added = self.add_name(eid, text, lang=lang, group="alias", evidence="검수자 수정")
         self.ensure(eid).verified = True
+        return added
 
     def merge(self, keep_eid: str, drop_eid: str) -> Entity:
         """두 엔티티가 같은 캐릭터로 판명되면 하나로 합친다."""

@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..core import nameglossary
 from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
+from ..core.identify import apply as identify_apply
+from ..core.identify import entity_store as entstore
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
@@ -882,6 +884,21 @@ class VidFindTab(QWidget):
         self._charcat_memo = (key, cat)
         return cat
 
+    def _entities(self, idx: assetidx.AssetIndex, hint: str = "") -> "entstore.EntityStore":
+        """게임별 엔티티 사전: 카탈로그로 채우고(코드명·locres 이름), 검수자 학습을 계속 쌓는다."""
+        game = (hint or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "") or "game")
+        memo = self.__dict__.get("_entstore_memo")
+        if memo is not None and memo[0] == (id(idx), game):
+            return memo[1]
+        st = entstore.EntityStore.load(game)
+        try:
+            st.from_catalog(self._catalog(idx))
+            st.save()
+        except Exception:  # noqa: BLE001 - 사전은 보조 기능: 채우기 실패가 추측을 막지 않게
+            pass
+        self._entstore_memo = ((id(idx), game), st)
+        return st
+
     def _owned_anims(self, idx: assetidx.AssetIndex, mesh_path: str):
         """캐릭터 카탈로그에서 이 메시가 어느 캐릭터인지 알면, 그 캐릭터 폴더의 애니메이션 경로들 (모르면 None -> 예전처럼 이름 유사도만)."""
         try:
@@ -1148,6 +1165,13 @@ class VidFindTab(QWidget):
                             g_.confidence = max(g_.confidence, min(picks[0][1], 0.6))      # 뜻 풀이로 고른 것은 낮은 확신으로 (⚠ 표시) — 검수자가 확인
                             g_.alts = [p[0] for p in picks[1:]] + [a_ for a_ in g_.alts if a_ not in {p[0] for p in picks}]
                             notes.append("뜻 풀이로 찾음: %s → %s%s" % (ingame or desc_[:40], picks[0][0], (" (%s)" % picks[0][2]) if picks[0][2] else ""))
+                try:
+                    # 엔티티 사전: 별명·다국어 정식명·음차·오타로도 캐릭터를 잇는다 (검수자가 가르친 것 포함)
+                    n_fix = identify_apply.fix_groups(self._entities(idx, hint), self._catalog(idx), groups_, notes)
+                    if n_fix:
+                        notes.append("엔티티 사전으로 %d개 이름을 교정했습니다" % n_fix)
+                except Exception as e:  # noqa: BLE001 - 사전 교정은 보조 기능
+                    errors.append("엔티티 사전: %s" % str(e)[:120])
                 return groups_
 
             if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
@@ -1254,6 +1278,8 @@ class VidFindTab(QWidget):
             combo.addItem("(이름이 비슷한 메시를 못 찾았어요 — 아래 칸에 이름 일부를 적어 검색하세요)", None)
 
     def fill_table(self, groups: List[vision.Group]) -> None:
+        # 검수자가 메시를 바꾸면 group.name 이 메시 이름으로 덮이므로, 학습용으로 원래 추측을 남겨 둔다
+        self._orig_guess = {id(g): (g.name, g.description) for g in groups}
         self.rows = []
         self.table.setRowCount(0)
         self.table.setRowCount(len(groups))
@@ -1681,6 +1707,21 @@ class VidFindTab(QWidget):
             if p:
                 self.memory.remember(r.group.name, r.group.description, p)
         self.memory.save()
+        try:
+            # 엔티티 사전에도 학습: AI 가 냈던 이름/화면 글자 -> 확정된 메시의 캐릭터 별명
+            memo = self.__dict__.get("_entstore_memo")
+            og = self.__dict__.get("_orig_guess", {})
+            if memo is not None and self.index is not None:
+                picks = []
+                for r in self.rows:
+                    p = r.chosen()
+                    if p:
+                        o, d = og.get(id(r.group), (r.group.name, r.group.description))
+                        picks.append((o, d, p))
+                if identify_apply.learn_confirm(memo[1], self._catalog(self.index), picks) or picks:
+                    memo[1].save()
+        except Exception:  # noqa: BLE001 - 학습 실패가 확정을 막지 않게
+            pass
         self.confirmed = meshes
         self.mesh_list.clear()
         idx = self.index
