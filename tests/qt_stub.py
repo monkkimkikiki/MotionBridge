@@ -772,3 +772,18 @@ def install():
         _bridge.CONFIG_DIR = tempfile.mkdtemp(prefix="mb_test_cfg_")
     except Exception:  # noqa: BLE001
         pass
+    # 시험 중에는 진짜 탐색기/브라우저를 절대 열지 않는다.
+    # (임시 폴더를 탐색기로 연 뒤 시험이 그 폴더를 지우면, 탐색기가 한 박자 늦게
+    #  '위치를 사용할 수 없습니다' 오류 창을 사용자 화면에 띄운다)
+    try:
+        from motionbridge.core import osopen as _osopen
+        _osopen.open_in_explorer = lambda path: True
+        _osopen.open_url = lambda url: True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from motionbridge.animref.ui import widgets as _aw   # AnimRef 쪽 열기(reveal/open_path)도 막는다
+        _aw.open_path = lambda path: True
+        _aw.reveal = lambda path: None
+    except Exception:  # noqa: BLE001
+        pass
