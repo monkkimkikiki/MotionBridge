@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import quat as Q
-from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_creature_frame, detect_frame, estimate_up, finger_blend, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
+from .mapping import DEFAULT_FRAME, SPINE_SLOTS, detect_creature_frame, detect_frame, estimate_up, frame_from_axes, refine_frame_with_anim, spine_arc_mix, spine_blend, spine_path
 from .model import Animation, Skeleton, fk
 
 
@@ -43,6 +43,8 @@ class RetargetSettings:
     root_yaw_deg: float = 0.0  # 모션 전체를 시작 위치 기준으로 돌린다
     place_offset: Tuple[float, float] = (0.0, 0.0)  # 모션 전체의 바닥면 이동 (좌우 X, 앞뒤 Z; 타깃 단위). 몸 전체(골반+발 IK)가 같이 움직인다
     place_y: float = 0.0                # 모션 전체의 높이 이동 (타깃 단위): 골반·발 목표·바닥·고스트가 통째로 오르내린다 ('바닥을 0으로' 기능이 쓴다)
+    finger_follow: bool = True          # 매핑 안 된 손가락·발가락 아래 마디가 상단 마디의 굽힘(로컬 회전 변화)을 그대로 물려받는다
+                                        # (손가락은 비틀리지 않고 굽기만 하므로, 마디 수가 모자라도 자연스럽게 말린다)
     virtual_ends: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
     # 가상 끝점(더미의 계산용 대체): 타깃 본 번호 -> 그 본에서 끝점까지의 바인드 방향(타깃 단위, 표준 프레임).
     # 발끝 본이 없는 Foot 등에 '보이지 않는 자식 끝점'을 정해 두면, 소스의 끝 본(Toe)이 이 끝점을 움직이는 것처럼
@@ -324,19 +326,8 @@ def retarget(
         if spine_mix:
             pairs = [(s_, t_) for s_, t_ in pairs if t_ not in spine_mix] + [(pair_of[t_], t_) for t_ in spine_mix]
             warnings.append("ℹ 소스/타깃의 척추 본 구성이 달라 척추 움직임을 비율로 섞어 적용했습니다 (%s)" % spine_note)
-    # 손가락 수가 다르면(5지 -> 3지, 벙어리장갑 …) 빠진 소스 손가락의 회전을 이웃 타깃 손가락에 가중 평균으로 섞는다
-    if rig is None and st.spine_mix and src_slots and tgt_slots:
-        fb = finger_blend(src_slots, tgt_slots)
-        n_fb = 0
-        for name, parts in fb.items():
-            tj = tgt_slots[name]
-            if tj in spine_mix:
-                continue
-            spine_mix[tj] = [(src_slots[sn], w) for sn, w in parts]
-            pair_of.setdefault(tj, max(spine_mix[tj], key=lambda x: x[1])[0])
-            n_fb += 1
-        if n_fb:
-            warnings.append("ℹ 타깃 손가락이 소스보다 적어, 빠진 손가락의 움직임을 이웃 손가락에 섞어 넣었습니다 (%d마디)." % n_fb)
+    # 손가락은 혼합하지 않는다: 손가락은 비틀리지 않고 굽기만 하므로, 각 타깃 손가락은 짝이 된 소스 손가락만 따라가고
+    # 매핑되지 않은 아래 마디는 상단 마디의 굽힘을 그대로 물려받는다 (아래 finger_follow 후처리).
     mapped_t = sorted(pair_of)
     if not mapped_t:
         raise ValueError("매핑된 본이 없습니다.")
@@ -583,7 +574,14 @@ def retarget(
                     continue
                 ve = st.virtual_ends.get(tf)
                 dbind_t = np.asarray(ve, dtype=float) if ve is not None and np.linalg.norm(ve) > 1e-9 else _FWD
-                foot_follow[tf] = Q.mul(_frame_seq(dcur, _UP), Q.mul(Q.conj(_bone_frame(dbind_t)), brt[tf]))
+                # 발등(업벡터) 인식 — 업노드 방식: '발등은 항상 무릎(정강이) 쪽을 향한다'를 기준으로 쓴다.
+                # 월드 상방을 쓰면 발을 수직으로 차올릴 때 모호해지지만, 무릎 방향은 어떤 자세에서도 정의된다 (룩앳의 Up-Node 와 같은 원리).
+                s_knee = src_slots.get(side + "_LowLeg", -1)
+                if s_knee >= 0:
+                    up_cur = ps[:, s_knee] - ps[:, sf]
+                else:   # 무릎이 없으면 소스 발의 실제 구름(바인드 대비 회전)을 기준으로
+                    up_cur = Q.rotate(Q.mul(rs[:, sf], Q.conj(brs[sf])), _UP)
+                foot_follow[tf] = Q.mul(_frame_seq(dcur, up_cur), Q.mul(Q.conj(_bone_frame(dbind_t)), brt[tf]))
         if foot_follow:
             warnings.append("ℹ 타깃에 발끝 본이 없어 가상 끝점을 기준으로 소스의 발 방향(발->발끝)을 따라가게 했습니다 (내보내기에 더미는 포함되지 않습니다).")
 
@@ -919,6 +917,20 @@ def retarget(
             p = int(tgt.parents[j])
             vec = Q.rotate(FtI, Q.rotate(yaw_q, dv)) if p < 0 else Q.rotate(Q.conj(bwr_t[p]), Q.rotate(FtI, dv))
             Lp[:, j] += vec
+    # 손가락·발가락 굽힘 물려주기: 매핑되지 않은 아래 마디는 상단 마디의 '로컬 회전 변화(굽힘)'를 그대로 이어받는다.
+    # (손가락은 비틀리지 않고 한 축으로 굽기만 하므로, 마디 수가 모자라도 이렇게 하면 자연스럽게 말린다)
+    if st.finger_follow and rig is None and tgt_slots:
+        f_slots = {v for k, v in tgt_slots.items()
+                   if any(f in k for f in ("Thumb", "Index", "Middle", "Ring", "Pinky")) or k.endswith("_Toe")}
+        curl: Dict[int, np.ndarray] = {}
+        order = sorted(range(Jt), key=lambda j: tgt.depth(j))
+        for j in order:
+            p = int(tgt.parents[j])
+            if j in mapped_set and j in f_slots:
+                curl[j] = Q.mul(Lr[:, j], Q.conj(tgt.rest_rot[j]))          # 이 마디의 로컬 굽힘
+            elif p in curl and j not in mapped_set:
+                Lr[:, j] = Q.mul(curl[p], np.broadcast_to(tgt.rest_rot[j], Lr[:, j].shape))
+                curl[j] = curl[p]
     anim = Animation(sanim.name, fps, Lr, Lp)
 
     # ---- 소스 고스트: 소스 COM 의 바인드 위치를 타깃 COM 의 바인드 위치에 올려서 겹쳐 보이게 한다(루트 보정·회전·배치 포함). 높이는 소스 바닥 기준 그대로.

@@ -215,6 +215,7 @@ class ViewData:
     height: float = 1.0
     center: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ground_y: float = 0.0
+    virtual_pts: Optional[np.ndarray] = None  # (T,n,2,3) 가상 끝점 [본 위치, 끝점 위치] (표준 프레임) — 본을 따라 돈다
     _pt_cache: Dict[Tuple[int, int], Mesh] = field(default_factory=dict, repr=False)  # (메시 id, 최대 점 수) -> 간추린 정점 부분집합
 
     @staticmethod
@@ -249,6 +250,23 @@ class ViewData:
             vd.tgt_sc = res.scale_cum if res is not None else None
             vd.tgt_pos = Q.rotate(Ft, wp)
             vd.tgt_parents = reduced_parents(tk.parents, pr.tgt_slots, mf)
+            ves = getattr(pr.settings, "virtual_ends", None) or {}
+            if ves:   # 가상 끝점: 본의 바인드 대비 회전을 따라 도는 '보이지 않는 발끝' 표식 (내보내기에는 없음)
+                try:
+                    bwr, _bw = tk.bind_world()
+                    rows = []
+                    for j, d in sorted(ves.items()):
+                        dc = np.asarray(d, dtype=float)
+                        n_ = float(np.linalg.norm(dc))
+                        if not (0 <= int(j) < tk.n) or n_ < 1e-9:
+                            continue
+                        delta = Q.mul(wr[:, int(j)], Q.conj(bwr[int(j)]))             # (T,4) 파일 프레임
+                        df = Q.rotate(Q.conj(Ft), dc / n_)                            # 표준 -> 파일 프레임 방향
+                        e = vd.tgt_pos[:, int(j)] + Q.rotate(Ft, Q.rotate(delta, df))
+                        rows.append(np.stack([vd.tgt_pos[:, int(j)], e], axis=1))
+                    vd.virtual_pts = np.stack(rows, axis=1) if rows else None
+                except Exception:  # noqa: BLE001 - 표시용
+                    vd.virtual_pts = None
         elif pr.src is not None:
             sk = pr.src.skeleton
             from ..core.retarget import _resolve_frame
@@ -335,6 +353,14 @@ def build_scene(vd: ViewData, pr, frame: int, show_ghost=True, show_mesh=True, s
             sc["pt_plant"] = np.array(ok)
         if bad:
             sc["pt_bad"] = np.array(bad)
+    if getattr(vd, "virtual_pts", None) is not None:
+        fv = min(f, vd.virtual_pts.shape[0] - 1)
+        vp = np.array(vd.virtual_pts[fv], dtype=float)                    # (n,2,3)
+        d = vp[:, 1] - vp[:, 0]
+        ln = np.maximum(np.linalg.norm(d, axis=-1, keepdims=True), 1e-9)
+        vp[:, 1] = vp[:, 0] + d / ln * (vd.height * 0.18)                 # 표시 길이는 키에 비례
+        sc["seg_virtual"] = vp
+        sc["pt_virtual"] = vp[:, 1]
     sz = vd.height * 3.0
     sc["seg_grid"] = grid_segments((vd.center[0], vd.center[2]), vd.ground_y, sz, nice_step(sz))
     return sc

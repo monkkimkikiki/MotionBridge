@@ -647,6 +647,11 @@ class MainWindow(QMainWindow):
                                         "씬에 더미 본을 만들지 않으므로 내보내기(FBX/바이페드)에는 아무것도 추가되지 않습니다.")
         self.btn_virtual_end.clicked.connect(self._virtual_end_selected)
         bl2.addWidget(self.btn_virtual_end)
+        self.ck_show_ve = QCheckBox("표시")
+        self.ck_show_ve.setChecked(True)
+        self.ck_show_ve.setToolTip("가상 끝점(초록 점선·고리)을 뷰포트에 보일지 — 계산에는 영향 없음")
+        self.ck_show_ve.toggled.connect(lambda v: (setattr(self.viewport, "show_virtual_ends", bool(v)), self.viewport.update()))
+        bl2.addWidget(self.ck_show_ve)
         self.btn_place_reset = QPushButton("배치 초기화")
         self.btn_place_reset.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
         self.btn_place_reset.clicked.connect(self._place_reset)
@@ -3432,7 +3437,8 @@ class MainWindow(QMainWindow):
         self.viewport.update()
 
     _VE_PRESETS = [("전방 (+Z) — 보통 발끝", (0.0, 0.0, 1.0)), ("전방+아래 45°", (0.0, -0.7071, 0.7071)),
-                   ("아래 (-Y)", (0.0, -1.0, 0.0)), ("뒤 (-Z) — 뒤꿈치", (0.0, 0.0, -1.0)), ("가상 끝점 해제", None)]
+                   ("아래 (-Y)", (0.0, -1.0, 0.0)), ("뒤 (-Z) — 뒤꿈치", (0.0, 0.0, -1.0)),
+                   ("직접 입력 (x,y,z)…", "custom"), ("가상 끝점 해제", None)]
 
     def _virtual_end_selected(self) -> None:
         """고른 본에 가상 끝점(보이지 않는 발끝) 방향을 정한다 — 더미+룩앳과 같은 결과를 내보내기 오염 없이."""
@@ -3447,6 +3453,19 @@ class MainWindow(QMainWindow):
         if not ok:
             return
         v = dict(self._VE_PRESETS)[pick]
+        if v == "custom":
+            cur_txt = ("%.3g, %.3g, %.3g" % tuple(cur)) if cur is not None else "0, -0.3, 1"
+            txt, ok2 = QInputDialog.getText(self, "가상 끝점 — 직접 입력",
+                                            "끝점 방향 x, y, z (화면 기준: X=왼쪽+, Y=위, Z=앞):", text=cur_txt)
+            if not ok2:
+                return
+            try:
+                nums = [float(x) for x in txt.replace(",", " ").split()]
+                assert len(nums) == 3 and any(abs(x) > 1e-9 for x in nums)
+                v = (nums[0], nums[1], nums[2])
+            except Exception:  # noqa: BLE001
+                QMessageBox.warning(self, "가상 끝점", "숫자 세 개를 쉼표/공백으로 적어 주세요 (예: 0, -0.3, 1).")
+                return
         if v is None:
             self.pr.settings.virtual_ends.pop(int(j), None)
             self.statusBar().showMessage("가상 끝점을 해제했습니다.")

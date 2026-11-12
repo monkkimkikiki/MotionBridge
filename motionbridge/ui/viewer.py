@@ -254,6 +254,8 @@ class Viewport(QWidget):
                     for x, y in xy:
                         p.drawEllipse(QPointF(float(x), float(y)), rad, rad)
         self._draw_root_marker(p, w, h, sc, cam)
+        if getattr(self, "show_virtual_ends", True):
+            self._draw_virtual_ends(p, w, h, sc, cam)
         if self.bone_edit:
             self._draw_bone_edit(p, w, h)
         # 범례
@@ -329,6 +331,28 @@ class Viewport(QWidget):
             p.setFont(QFont("", 9))
             p.drawText(QPointF(float(xy[0, 0]) + 13, float(xy[0, 1]) - 8), "루트 (기준점)")
         except Exception:  # noqa: BLE001 - 표시용이라 오류가 앱을 멈추지 않게
+            pass
+
+    def _draw_virtual_ends(self, p: QPainter, w: float, h: float, sc, cam) -> None:
+        """가상 끝점(보이지 않는 발끝): 본에서 끝점까지 초록 선 + 끝에 초록 고리. 본을 따라 돈다."""
+        seg = sc.get("seg_virtual")
+        if seg is None or len(seg) == 0:
+            return
+        try:
+            for a, b in seg:
+                xy, z = cam.project(np.stack([a, b]), w, h)
+                if not (z.min() > 0 and np.isfinite(xy).all()):
+                    continue
+                p.setPen(QPen(QColor(90, 220, 120), 2.0, Qt.PenStyle.DashLine))
+                p.drawLine(QPointF(float(xy[0, 0]), float(xy[0, 1])), QPointF(float(xy[1, 0]), float(xy[1, 1])))
+                p.setPen(QPen(QColor(90, 220, 120), 2.0))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QPointF(float(xy[1, 0]), float(xy[1, 1])), 5.0, 5.0)
+            xy0, z0 = cam.project(seg[0, 1][None], w, h)
+            if z0[0] > 0 and np.isfinite(xy0).all():
+                p.setFont(QFont("", 8))
+                p.drawText(QPointF(float(xy0[0, 0]) + 8, float(xy0[0, 1]) - 5), "가상 끝점")
+        except Exception:  # noqa: BLE001 - 표시용
             pass
 
     def _draw_bone_edit(self, p: QPainter, w: float, h: float) -> None:

@@ -53,6 +53,36 @@ fbm = finger_blend(slots("R", ["Thumb", "Index", "Middle", "Ring", "Pinky"]), mi
 im = dict(fbm.get("R_Index1", []))
 check("R_Middle1" in im, "벙어리: 검지에 중지 섞임: %s" % im)
 
+# ---- finger_follow: 매핑 안 된 아래 마디가 상단 마디의 굽힘을 그대로 물려받는다 (리타겟 통째 확인)
+import numpy as np  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import synth  # noqa: E402
+from motionbridge.core import quat as Q  # noqa: E402
+from motionbridge.core.mapping import auto_map, pairs_from_slots  # noqa: E402
+from motionbridge.core.model import Animation  # noqa: E402
+from motionbridge.core.retarget import RetargetSettings, retarget  # noqa: E402
+
+ssk, smeta = synth.build_skeleton(style="mixamo", frame="y_up_z", scale=1.0, pose="T", local_axes="aligned")
+tsk, _tm2 = synth.build_skeleton(style="ue", frame="y_up_z", scale=1.0, pose="T", local_axes="aligned")
+sm, tm = auto_map(ssk), auto_map(tsk)
+check("L_Middle1" in sm and "L_Middle1" in tm, "합성 리그에 손가락 슬롯")
+pairs = [(s, t) for s, t in pairs_from_slots(sm, tm) if t != tm.get("L_Middle3")]   # 타깃 셋째 마디를 일부러 매핑에서 뺀다
+T = 8
+rot = np.tile(Q.identity(()), (T, ssk.n, 1))
+pos = np.tile(ssk.offsets[None], (T, 1, 1))
+bend = Q.from_axis_angle(np.array([0.0, 0.0, 1.0]), np.radians(np.full(T, 30.0)))   # 소스 중지 1·2마디를 30° 굽힌다
+for key in ("L_Middle1", "L_Middle2", "L_Middle3"):
+    rot[:, sm[key]] = bend
+an = Animation("curl", 30.0, rot, pos)
+res = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=False), [], sm, tm)
+m3 = tm["L_Middle3"]
+ang = float(np.degrees(Q.angle_between(res.anim.rot[:, m3], np.broadcast_to(tsk.rest_rot[m3], (T, 4)))).max())
+check(25.0 <= ang <= 35.0, "빠진 셋째 마디가 상단 굽힘(30°)을 물려받음: %.1f°" % ang)
+res_off = retarget(ssk, an, tsk, pairs, RetargetSettings(foot_ik=False, hand_ik=False, finger_follow=False), [], sm, tm)
+ang_off = float(np.degrees(Q.angle_between(res_off.anim.rot[:, m3], np.broadcast_to(tsk.rest_rot[m3], (T, 4)))).max())
+check(ang_off < 1e-6, "끄면 예전처럼 바인드 그대로: %.2f°" % ang_off)
+
 if fails:
     print("\n실패 %d개" % len(fails))
     sys.exit(1)
