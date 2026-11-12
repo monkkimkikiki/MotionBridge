@@ -58,6 +58,10 @@ class RetargetSettings:
     # 손 IK: 소스의 손 높이가 바닥(0) 근처이거나 그 아래로 내려갔을 때만 그쪽 팔에 IK 를 걸어 손을 바닥에 고정하고, 0 에서 벗어나면 풀어 준다
     hand_ik: bool = True
     spine_mix: bool = True              # 척추 본 개수가 소스와 다르면 곡선 구간 비율로 중간값을 섞는다 (끄면 이름이 맞는 본만 1:1)
+    corr_roll: bool = False             # (실험) 본 방향 보정의 롤을 표준 전방 기준으로 고정. 실측(오공)에서는 차이가 없어 기본 꺼짐
+                                        # — 척추 문제의 실제 해법은 spine_resample(곡선 핀), 발 문제는 발끝 방향 복사였다
+    spine_resample: bool = True         # 척추 본 수가 다를 때 회전 섞기(slerp) 대신 소스 척추 '곡선'을 매 프레임 다시 떠서 따라간다
+                                        # (섞기는 소스 바인드가 굽은 게임에서 척추가 덜 숙여지고 옆으로 새는 원인이었다)
     hand_contact_height: float = 0.05   # 팔 길이 대비: 손 높이가 이 값 이하(바닥에 닿거나 파고듦)이면 접촉
     hand_release_height: float = 0.12   # 팔 길이 대비: 한번 닿은 뒤 이 값을 넘어 떨어져야 IK 가 풀림 (경계에서 깜빡이지 않게)
     hip_drop: bool = True
@@ -380,6 +384,21 @@ def retarget(
             p = tgt.parents[p]
         return None
 
+    _FWD = np.array([0.0, 0.0, 1.0])
+    _UP = np.array([0.0, 1.0, 0.0])
+
+    def _bone_frame(d: np.ndarray) -> np.ndarray:
+        """본의 기준 프레임: X=본 방향, 롤은 표준 전방(+Z)을 기준으로 고정 (본이 전방과 거의 나란하면 — 발 — 상방 +Y).
+
+        방향만 맞추는 최소 회전(between)은 본 축을 도는 롤이 임의라서, 소스 바인드의 척추가
+        기울거나 비틀려 있으면 그 롤 오차가 모든 프레임에 들어가 몸이 옆으로 꺾인다."""
+        x = d / np.linalg.norm(d)
+        r = _FWD - x * float(x @ _FWD)
+        if np.linalg.norm(r) < 0.25:
+            r = _UP - x * float(x @ _UP)
+        y = r / np.linalg.norm(r)
+        return Q.from_matrix(np.stack([x, y, np.cross(x, y)], axis=-1))
+
     corr: Dict[int, np.ndarray] = {}
     primary: Dict[int, int] = {}
     for t in mapped_t:
@@ -391,7 +410,7 @@ def retarget(
             dt = bpt[d] - bpt[t]
             ds = bps[pair_of[d]] - bps[pair_of[t]]
             if np.linalg.norm(dt) > 1e-9 and np.linalg.norm(ds) > 1e-9:
-                corr[t] = Q.between(dt, ds)
+                corr[t] = Q.mul(_bone_frame(ds), Q.conj(_bone_frame(dt))) if st.corr_roll else Q.between(dt, ds)
                 primary[t] = d
                 continue
         a = nearest_mapped_ancestor(t)
@@ -437,6 +456,24 @@ def retarget(
             k = rad_t / rad_s if rad_s > 1e-9 else 1.0
             warnings.append("몸의 위쪽 방향(골반/발/머리)을 찾지 못해 전체 크기 비율로 스케일을 구했습니다.")
         k *= st.scale_mult
+        # 발 IK 를 쓰는데 골반 높이 비율이 다리 길이 비율보다 크면(소스가 바인드에서 다리를 굽힌 게임 등)
+        # 발 목표가 다리가 닿을 수 없는 곳에 떨어져 골반이 계속 끌려 내려간다 -> 다리 길이 비율로 맞춘다
+        if st.foot_ik and src_slots and tgt_slots:
+            ls_ = lt_ = 0.0
+            n_ = 0
+            for side_ in ("L", "R"):
+                ks_ = [side_ + "_UpLeg", side_ + "_LowLeg", side_ + "_Foot"]
+                if all(x in src_slots for x in ks_) and all(x in tgt_slots for x in ks_):
+                    a1, a2, a3 = (src_slots[x] for x in ks_)
+                    b1, b2, b3 = (tgt_slots[x] for x in ks_)
+                    ls_ += float(np.linalg.norm(bps[a2] - bps[a1]) + np.linalg.norm(bps[a3] - bps[a2]))
+                    lt_ += float(np.linalg.norm(bpt[b2] - bpt[b1]) + np.linalg.norm(bpt[b3] - bpt[b2]))
+                    n_ += 1
+            if n_ and ls_ > 1e-9:
+                k_legs = (lt_ / ls_) * st.scale_mult
+                if k > k_legs * 1.03:
+                    warnings.append("스케일을 골반 높이 비율(%.4g) 대신 다리 길이 비율(%.4g)로 맞췄습니다 — 발 IK 목표가 다리보다 멀어 골반이 끌려 내려가는 것을 막습니다." % (k, k_legs))
+                    k = k_legs
     else:
         k = st.manual_scale
 
@@ -451,10 +488,87 @@ def retarget(
             rootoff[:, [0, 2]] = d0[0, [0, 2]]  # 시작 위치만 모델 원점으로
 
     # ---- 목표 월드 회전
+    def _frame_seq(d: np.ndarray, ref: np.ndarray) -> np.ndarray:
+        """(T,3) 방향 + (T,3)|(3,) 기준 전방 -> (T,4) 본 프레임 쿼터니언 (롤을 기준 벡터로 고정)."""
+        x = d / np.maximum(np.linalg.norm(d, axis=-1, keepdims=True), 1e-12)
+        ref = np.broadcast_to(np.asarray(ref, float), x.shape)
+        r = ref - x * np.sum(x * ref, axis=-1, keepdims=True)
+        bad = np.linalg.norm(r, axis=-1) < 0.25
+        if np.any(bad):   # 본이 기준 전방과 나란하면(수직 척추에서 전방 기준은 괜찮지만, 수평 본이면) 상방으로 대체
+            alt = np.broadcast_to(_UP, x.shape) - x * np.sum(x * _UP, axis=-1, keepdims=True)
+            r = np.where(bad[:, None], alt, r)
+        y = r / np.maximum(np.linalg.norm(r, axis=-1, keepdims=True), 1e-12)
+        z = np.cross(x, y)
+        out = np.empty(x.shape[:-1] + (4,))
+        M = np.stack([x, y, z], axis=-1)
+        for i in range(out.shape[0]):
+            out[i] = Q.from_matrix(M[i])
+        return out
+
+    # 척추 곡선 따라가기: 소스 골반~목 폴리라인을 매 프레임 떠서, 타깃 척추 본이 맡는 구간의 '방향'을 얻는다.
+    # 자세·비틀림은 회전 섞기(slerp)가 가져오고, 그 위에 이 방향을 핀으로 박는다
+    # (섞기만 쓰면 소스 바인드가 굽은 게임에서 척추가 덜 숙여지고 옆으로 샜다 — 오공 실측 평균 9°/최대 17°).
+    spine_dirs: Dict[int, np.ndarray] = {}
+    spine_dbind: Dict[int, np.ndarray] = {}
+    if spine_mix and st.spine_resample and rig is None:
+        sp_s, sp_t = spine_path(src, src_slots), spine_path(tgt, tgt_slots)
+        if sp_s and sp_t:
+            chain_s, neck_s = sp_s
+            chain_t, neck_t = sp_t
+            pts = ps[:, [src_slots["Hips"]] + chain_s + [neck_s]]                     # (T,S,3) 소스 척추 폴리라인
+            seg = np.linalg.norm(np.diff(pts, axis=1), axis=-1)                       # (T,S-1)
+            cum = np.concatenate([np.zeros((T, 1)), np.cumsum(seg, axis=1)], axis=1)
+            total = np.maximum(cum[:, -1:], 1e-9)
+            cumf = cum / total                                                        # 프레임별 곡선 비율 0..1
+
+            def sample(f: float) -> np.ndarray:
+                """곡선 비율 f 지점의 월드 위치 (T,3)."""
+                i = np.clip((cumf[:, 1:] < f).sum(axis=1), 0, seg.shape[1] - 1)       # (T,) 구간 번호
+                f0 = np.take_along_axis(cumf, i[:, None], axis=1)[:, 0]
+                f1 = np.take_along_axis(cumf, (i + 1)[:, None], axis=1)[:, 0]
+                w = np.clip((f - f0) / np.maximum(f1 - f0, 1e-9), 0.0, 1.0)[:, None]
+                p0 = np.take_along_axis(pts, i[:, None, None].repeat(3, 2), axis=1)[:, 0]
+                p1 = np.take_along_axis(pts, (i + 1)[:, None, None].repeat(3, 2), axis=1)[:, 0]
+                return p0 + (p1 - p0) * w
+
+            # 타깃 본이 맡는 구간 경계 (타깃 바인드 곡선 비율): 골반 포함 폴리라인 기준
+            tb = [tgt_slots["Hips"]] + chain_t + [neck_t]
+            tp = bpt[tb]
+            tseg = np.linalg.norm(np.diff(tp, axis=0), axis=-1)
+            tcum = np.concatenate([[0.0], np.cumsum(tseg)]) / max(float(tseg.sum()), 1e-9)
+            for bi, t_ in enumerate(chain_t):
+                if t_ not in spine_mix:
+                    continue
+                # 본 t_ 가 제어하는 구간은 '자기 위치 -> 다음 본(마지막은 목)' (폴리라인에서 bi+1 -> bi+2)
+                dbind = tp[bi + 2] - tp[bi + 1]
+                if np.linalg.norm(dbind) < 1e-9:
+                    continue
+                spine_dirs[t_] = sample(float(tcum[bi + 2])) - sample(float(tcum[bi + 1]))
+                spine_dbind[t_] = dbind
+
+    # 발끝 본이 없는 타깃: 소스 발->발끝 방향을 그대로 복사해 발 방향을 맞춘다
+    # (없으면 발이 종아리 보정을 물려받아 바인드가 굽은 게임에서 발이 꺾인다)
+    foot_follow: Dict[int, np.ndarray] = {}
+    if rig is None and src_slots and tgt_slots:
+        for side in ("L", "R"):
+            tf = tgt_slots.get(side + "_Foot", -1)
+            if tf in mapped_set and (side + "_Toe") in src_slots and (side + "_Toe") not in tgt_slots:
+                sf, stoe = src_slots[side + "_Foot"], src_slots[side + "_Toe"]
+                dcur = ps[:, stoe] - ps[:, sf]
+                dbind = bps[stoe] - bps[sf]
+                if np.linalg.norm(dbind) > 1e-9 and float(np.linalg.norm(dcur, axis=-1).min()) > 1e-9:
+                    # 타깃 발의 바인드 방향은 알 수 없으므로(발끝 없음) 소스 바인드 발 방향을 기준으로 삼는다
+                    foot_follow[tf] = Q.mul(_frame_seq(dcur, _UP), Q.mul(Q.conj(_bone_frame(dbind)), brt[tf]))
+        if foot_follow:
+            warnings.append("ℹ 타깃에 발끝 본이 없어 소스의 발 방향(발->발끝)을 그대로 복사했습니다.")
+
     yaw_q = Q.from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(st.root_yaw_deg))
     rot_des: Dict[int, np.ndarray] = {}
     for t in mapped_t:
         s = pair_of[t]
+        if t in foot_follow:
+            rot_des[t] = foot_follow[t]
+            continue
         D = Q.mul(rs[:, s], Q.conj(brs[s]))
         if t in spine_mix and len(spine_mix[t]) > 1:
             D, wsum = None, 0.0
@@ -462,7 +576,12 @@ def retarget(
                 Db = Q.mul(rs[:, sb], Q.conj(brs[sb]))
                 wsum += wb
                 D = Db if D is None else Q.slerp(D, Db, wb / wsum)
-        rot_des[t] = Q.mul(D, Q.mul(corr[t], brt[t]))
+        R = Q.mul(D, Q.mul(corr[t], brt[t]))
+        if t in spine_dirs:
+            # 섞인 회전이 만든 본 방향을 소스 척추 곡선의 해당 구간 방향으로 핀 (자세·비틀림은 섞인 회전이 유지)
+            x_loc = Q.rotate(Q.conj(brt[t]), spine_dbind[t])
+            R = Q.mul(Q.between(Q.rotate(R, x_loc), spine_dirs[t]), R)
+        rot_des[t] = R
     pelvis_off = np.array([1.0, 0.0, 0.0, 0.0])      # 골반(루트)에 걸린 회전 보정의 합 — 발 IK 목표의 '골반 기준 위치'도 같이 돌리기 위해 모은다
     for tj, eul in st.rot_offsets.items():
         if not any(abs(x) > 1e-9 for x in eul) or tj < 0 or tj >= Jt:
