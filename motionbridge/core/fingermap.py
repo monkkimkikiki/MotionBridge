@@ -188,8 +188,10 @@ def map_hand(skel: Skeleton, hand: int, min_chains: int = 2) -> Dict[str, int]:
     """한 손의 손가락 슬롯 (Thumb1..Pinky3 -> 관절). 이름 접두(L_/R_)는 붙이지 않는다. 못 찾으면 빈 딕셔너리.
     min_chains: 마디가 셋 이상인 사슬이 이만큼은 있어야 손가락으로 본다 (발톱·촉수 한두 개를 손가락으로 착각하지 않도록)."""
     chains = finger_chains(skel, hand)
-    if sum(1 for c in chains if len(c) >= 3) < min_chains or not 2 <= len(chains) <= 5:
-        return {}                                        # 마디가 셋 이상인 사슬이 둘은 있어야 손가락으로 본다 (발톱·촉수 한두 개는 제외)
+    long_enough = sum(1 for c in chains if len(c) >= 3)
+    simple_hand = len(chains) >= 3 and all(len(c) >= 2 for c in chains)   # 2마디 손가락 리그(바이페드 3손가락 등): 평행 사슬 3개 이상이면 손이다
+    if (long_enough < min_chains and not simple_hand) or not 2 <= len(chains) <= 5:
+        return {}                                        # 마디 셋 이상 사슬이 이만큼 있거나, 2마디라도 평행 사슬 3개는 있어야 손가락 (발톱·촉수 한두 개는 제외)
     od = order_chains(skel, hand, chains)
     if od is None:
         return {}
