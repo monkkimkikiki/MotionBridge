@@ -2361,7 +2361,9 @@ class MainWindow(QMainWindow):
         self.export_log.setMinimumHeight(140)
         lay.addWidget(self.export_log)
         b = QPushButton("출력 폴더 열기")
-        b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.out_edit.text())))
+        # 없는 경로를 그대로 넘기면 Windows 가 '위치를 사용할 수 없습니다' 창을 띄운다 -> 확인하고 가장 가까운 폴더를 연다
+        b.clicked.connect(lambda: osopen.open_in_explorer(self.out_edit.text().strip())
+                          or self.statusBar().showMessage("출력 폴더가 아직 없습니다: " + self.out_edit.text()))
         lay.addWidget(b)
         lay.addStretch(1)
         return sc
