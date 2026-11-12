@@ -95,3 +95,30 @@ def test_preset_io():
 if __name__ == "__main__":
     test_update()
     test_preset_io()
+
+
+def test_key_store():
+    st = []
+    assert gamepresets.add_key(st, "오공", "0xAA") and gamepresets.add_key(st, "모탈쉘", "0xBB")
+    assert [e["name"] for e in st] == ["모탈쉘", "오공"]
+    assert not gamepresets.add_key(st, "모탈쉘", "0xBB"), "같은 것을 또 넣으면 변화 없음"
+    assert gamepresets.add_key(st, "Wukong", "0xAA") and [(e["name"], e["key"]) for e in st] == [("Wukong", "0xAA"), ("모탈쉘", "0xBB")], "같은 키는 한 줄, 이름만 고쳐 맨 위로"
+    assert not gamepresets.add_key(st, "x", "")
+    old = bridge.CONFIG_DIR
+    with tempfile.TemporaryDirectory() as a:
+        try:
+            bridge.CONFIG_DIR = a
+            class SC:
+                appid, exe, project, root = "1", "g.exe", "g", os.path.join(a, "G")
+            gamepresets.remember(SC(), name="세번째", aes="0xCC", status="ok")
+            gamepresets.remember(SC(), name="세번째", aes="0xCC")
+            ks = gamepresets.key_list(st)
+            assert [(k["name"], k["key"]) for k in ks] == [("Wukong", "0xAA"), ("모탈쉘", "0xBB"), ("세번째", "0xCC")], ks
+        finally:
+            bridge.CONFIG_DIR = old
+    print("key store OK")
+
+
+test_key_store() if __name__ != "__main__" else None
+if __name__ == "__main__":
+    test_key_store()

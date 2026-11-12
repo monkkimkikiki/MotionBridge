@@ -1283,9 +1283,19 @@ def test_clip_checks_export():
         cp.lst.setCurrentRow(0)
         cp.remove_current()
         assert len(mw.pr.src.animations) == n - 1 and len(cp.checked_clips()) == n - 1
-        while mw.pr.src is not None:
-            cp.lst.setCurrentRow(0)
-            cp.remove_current()
+        # 체크한 모션 지우기 / 전체 모션 지우기
+        m = len(mw.pr.src.animations)
+        if m >= 3:
+            cp.set_all_checked(False)
+            assert cp.remove_checked(ask=False) == 0 and len(mw.pr.src.animations) == m, "체크가 없으면 아무것도 안 지움"
+            keep = mw.pr.src.animations[1].name
+            cp.lst.item(0).setCheckState(Qt.CheckState.Checked)
+            cp.lst.item(m - 1).setCheckState(Qt.CheckState.Checked)
+            cp._item_changed(cp.lst.item(0))
+            cp._item_changed(cp.lst.item(m - 1))
+            assert cp.remove_checked(ask=False) == 2 and len(mw.pr.src.animations) == m - 2 and mw.pr.src.animations[0].name == keep
+            assert cp.lst.count() == m - 2 and cp.checked_clips() == []
+        assert cp.remove_all(ask=False) >= 1 and mw.pr.src is None
         assert mw.clip_combo.count() == 0 and cp.lst.count() == 0
     print("clip checks export OK")
 

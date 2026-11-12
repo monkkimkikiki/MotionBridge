@@ -879,7 +879,14 @@ class MainWindow(QMainWindow):
         self.btn_keys.setToolTip("인터넷에서 찾은 글(키가 여러 개 섞여 있어도 됨)을 통째로 붙여 넣으면, 키처럼 생긴 것을 모두 뽑아 이 게임에 하나씩 넣어 보고 실제로 열리는 키만 채워 줍니다.")
         self.btn_keys.clicked.connect(lambda *_a: self._verify_key_candidates())
         ah.addWidget(self.btn_keys)
+        self.ex_keylist = QComboBox()
+        self.ex_keylist.setToolTip("한 번이라도 넣었던 AES 키를 게임 이름과 함께 기억해 둡니다. 고르면 AES 칸에 채워집니다.")
+        self.ex_keylist.setMinimumWidth(170)
+        self.ex_keylist.activated.connect(lambda i: self._key_picked(i))
+        ah.addWidget(self.ex_keylist)
+        self.ex_aes.editingFinished.connect(lambda: self._remember_key())
         f.addRow("AES 키", ah)
+        self._refill_keylist()
         self.ex_ue = QComboBox()
         for v_ in gamescan.merge_versions([]):
             self.ex_ue.addItem(v_, v_)
@@ -1385,6 +1392,41 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("게임 설정 자동 채우기 실패: %s" % e)
         self._update_scan_gate()
 
+    def _refill_keylist(self) -> None:
+        cb = self.__dict__.get("ex_keylist")
+        if cb is None:
+            return
+        if not isinstance(self.cfg.get("aes_keys"), list):
+            self.cfg["aes_keys"] = []
+        keys = gamepresets.key_list(self.cfg["aes_keys"], self.cfg.get("preset_share_dir", "") or None)
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("보유 키 목록 (%d)" % len(keys), "")
+        for e in keys:
+            cb.addItem("%s — %s…%s" % (e["name"] or "(이름 없음)", e["key"][:8], e["key"][-4:]), e["key"])
+        cb.setCurrentIndex(0)
+        cb.blockSignals(False)
+
+    def _key_picked(self, i: int) -> None:
+        key = self.ex_keylist.itemData(i) if i > 0 else ""
+        if key:
+            self.ex_aes.setEnabled(True)
+            self.ex_aes.setText(str(key))
+        self.ex_keylist.setCurrentIndex(0)
+
+    def _remember_key(self) -> None:
+        """AES 칸에 올바른 키가 들어오면 게임 이름과 함께 보유 키 목록에 넣는다 (추출에 성공하지 않아도)."""
+        try:
+            key = gamescan.normalize_aes_key(self.ex_aes.text())
+        except Exception:  # noqa: BLE001 - 아직 덜 적었거나 형식이 틀림
+            return
+        if not isinstance(self.cfg.get("aes_keys"), list):
+            self.cfg["aes_keys"] = []
+        name = self.ex_gname.text().strip() or layout.detect_game_name(self.ex_game.text().strip())
+        if gamepresets.add_key(self.cfg["aes_keys"], name, key):
+            bridge.save_config(self.cfg)
+            self._refill_keylist()
+
     def _verify_key_candidates(self, text: Optional[str] = None) -> None:
         """붙여 넣은 글에서 AES 키 후보를 뽑아 실제로 열리는 키를 찾아 채운다."""
         game = self.ex_game.text().strip()
@@ -1408,6 +1450,7 @@ class MainWindow(QMainWindow):
             if key:
                 self.ex_aes.setEnabled(True)
                 self.ex_aes.setText(key)
+                self._remember_key()
                 self.statusBar().showMessage("후보 %d개 중 맞는 키를 찾아 채웠습니다 (%d번째)" % (len(cands), len(tried)))
             else:
                 why = (tried[-1].get("message") or "") if tried else ""

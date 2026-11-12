@@ -8,7 +8,7 @@ import types
 
 SIGNAL_NAMES = {
     "valueChanged", "currentIndexChanged", "toggled", "clicked", "timeout", "itemClicked", "triggered", "textChanged",
-    "stateChanged", "activated", "finished", "started", "returnPressed", "itemDoubleClicked", "itemSelectionChanged", "linkActivated", "anchorClicked", "currentChanged", "currentRowChanged", "itemChanged",
+    "stateChanged", "activated", "editingFinished", "finished", "started", "returnPressed", "itemDoubleClicked", "itemSelectionChanged", "linkActivated", "anchorClicked", "currentChanged", "currentRowChanged", "itemChanged",
 }
 
 

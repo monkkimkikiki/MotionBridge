@@ -191,3 +191,36 @@ def import_file(path: str) -> int:
     if changed:
         _write(local_path(), mine)
     return len(changed)
+
+
+def add_key(store: list, name: str, key: str) -> bool:
+    """보유 키 목록(store: [{"name","key","t"}])에 넣는다. 같은 키가 있으면 이름만 고치고 맨 위로. 바뀌었으면 True."""
+    key = (key or "").strip()
+    name = (name or "").strip() or "(이름 없는 게임)"
+    if not key:
+        return False
+    old = next((e for e in store if isinstance(e, dict) and e.get("key") == key), None)
+    if old is not None and old.get("name") == name and store and store[0] is old:
+        return False
+    if old is not None:
+        store.remove(old)
+    store.insert(0, {"name": name, "key": key, "t": time.time()})
+    del store[200:]
+    return True
+
+
+def key_list(store: list, share_dir: Optional[str] = None) -> List[dict]:
+    """화면에 보일 보유 키 목록: 직접 넣었던 키 + 게임별 설정(내 컴퓨터·공유 폴더)에 기억된 키. 같은 키는 한 번만. [{"name","key"}]"""
+    out: List[dict] = []
+    seen = set()
+    for e in store or []:
+        if isinstance(e, dict) and e.get("key") and e["key"] not in seen:
+            seen.add(e["key"])
+            out.append({"name": str(e.get("name") or ""), "key": e["key"]})
+    for p in _paths(share_dir):
+        for e in _read(p).values():
+            k = e.get("aes")
+            if k and k not in seen:
+                seen.add(k)
+                out.append({"name": str(e.get("name") or e.get("folder") or ""), "key": k})
+    return out
