@@ -359,12 +359,19 @@ class VidFindTab(QWidget):
         self.ck_fast.setToolTip("켜면 시간을 크게 줄입니다: ① 영상마다 장면 시트 한 장으로 AI 에게 한 번만 묻고(장면마다 묻지 않음), ② AI 에게 알리는 이름 목록을 %d개로 줄이고, "
                                 "③ 하나로 못 박지 않고 AI 가 꼽은 후보를 합쳐 검수 칸에 후보 5개를 보여 줍니다. 끄면 장면마다 정밀하게 묻습니다(느림)." % vision.FAST_VOCAB)
         self.ck_fast.toggled.connect(lambda v: (self.cfg.__setitem__("vf_fast", bool(v)), bridge.save_config(self.cfg)))
+        self.ck_verify = QCheckBox("생김새 검증")
+        self.ck_verify.setChecked(bool(self.cfg.get("vf_verify", True)))
+        self.ck_verify.setToolTip("추측한 뒤 후보 메시를 게임에서 뽑아(GLB) Blender 로 렌더해 장면과 나란히 비교하고, 생김새가 같은 후보를 고릅니다.\n"
+                                  "AI 가 이름을 엉뚱하게 골라도 모습으로 바로잡습니다. Blender 와 비전 AI 필요.\n"
+                                  "게임마다 처음 한 번은 후보 추출·렌더로 오래 걸립니다 (이후에는 캐시로 빠름).")
+        self.ck_verify.toggled.connect(lambda v: (self.cfg.__setitem__("vf_verify", bool(v)), bridge.save_config(self.cfg)))
         self.btn_guess = QPushButton("캐릭터 추측 시작")
         self.btn_guess.setMinimumHeight(32)
         if self.rb_mode_char.isChecked():
             self.btn_guess.setText("캐릭터 메쉬 목록 열기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.ck_fast)
+        h.addWidget(self.ck_verify)
         h.addWidget(self.btn_guess, 1)
         self.btn_guess_panel = QPushButton("🧑‍⚖ AI 회의로 추측")
         self.btn_guess_panel.setMinimumHeight(32)
@@ -1180,6 +1187,13 @@ class VidFindTab(QWidget):
                         notes.append("엔티티 사전으로 %d개 이름을 교정했습니다" % n_fix)
                 except Exception as e:  # noqa: BLE001 - 사전 교정은 보조 기능
                     errors.append("엔티티 사전: %s" % str(e)[:120])
+                try:
+                    # 생김새 검증: 이름이 아니라 렌더된 모습으로 후보를 확정한다 (추측의 일부)
+                    self._auto_verify(w, prov, idx, a, hint or "game", groups_, notes, errors)
+                except _Stopped:
+                    raise
+                except Exception as e:  # noqa: BLE001 - 검증 실패가 추측을 막지 않게
+                    errors.append("생김새 검증: %s" % str(e)[:120])
                 return groups_
 
             if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
@@ -1301,6 +1315,9 @@ class VidFindTab(QWidget):
             base = self._merge_cands(idx, base, g.alts, 5)
         if not base:      # 이름 글자로는 못 찾음 -> 뜻 풀이 사전(한국어/영어/한자 뜻)으로 후보를 낸다
             base = self._gloss_cands(" ".join(x for x in (g.name, g.description) if x))
+        vp = getattr(g, "verified_path", None)
+        if vp:            # 생김새 검증이 고른 메시는 맨 앞 후보로 (이름 점수와 무관하게)
+            base = [assetidx.MeshCandidate(vp, assetidx.mesh_name(vp), min(max(g.confidence, 0.8), 0.95), "생김새 일치")] + [c for c in base if c.path != vp]
         remembered = bool(base) and base[0].why.startswith("이전에 확정")
         sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
@@ -1704,8 +1721,78 @@ class VidFindTab(QWidget):
 
     CHAR_LIST_MAX = 3000
 
+    def _glb_getter(self, game: str, a):
+        """메시 경로 -> GLB 파일 (게임별 캐시, 없으면 추출 도우미로 뽑는다)."""
+        helper, groot, ue, aes, usmap = a
+        glb_root = identify_verify.cache_dir(game, "refglb")
+
+        def glb_of(mesh_path: str):
+            d = os.path.join(glb_root, hashlib.sha1(mesh_path.replace("\\", "/").lower().encode("utf-8")).hexdigest()[:16])
+            if os.path.isdir(d):
+                got = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
+                if got:
+                    return got[0]
+            os.makedirs(d, exist_ok=True)
+            files = extractor.export_assets(helper, groot, ue, aes, usmap, [mesh_path], d, kind="mesh", mesh_format="glb", textures=True)
+            got = [f for f in files if f.lower().endswith(".glb")] or [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
+            return got[0] if got else None
+        return glb_of
+
+    def _auto_verify(self, w, prov, idx, a, game: str, groups, notes, errors) -> None:
+        """추측 결과를 생김새로 한 번 더 거른다: 각 줄의 후보 메시를 렌더해 장면과 비교, 일치하면 그 메시로 확정.
+
+        Blender/추출/비전 AI 가 안 되는 환경이면 조용히 건너뛴다 (추측 자체는 그대로 진행)."""
+        if not bool(self.cfg.get("vf_verify", True)) or not prov.supports_images:
+            return
+        if not bridge.find_blender(self.cfg.get("blender") or None):
+            notes.append("생김새 검증 건너뜀: Blender 를 찾지 못했습니다")
+            return
+        targets = [g for g in groups if getattr(g, "frame", "") and os.path.isfile(g.frame)][:8]
+        if not targets:
+            return
+        cands = {}
+        for g in targets:
+            base = idx.rank_meshes(g.name, g.description, identify_verify.MAX_CANDS, self.memory)
+            if g.alts:
+                base = self._merge_cands(idx, base, g.alts, identify_verify.MAX_CANDS)
+            cands[id(g)] = [c.path for c in base][:identify_verify.MAX_CANDS]
+        all_paths = [p for ps in cands.values() for p in ps]
+        if not all_paths:
+            return
+
+        def prog(i, n, nm):
+            if w.cancel.is_set():
+                raise RuntimeError("취소했습니다")
+            w.progress.emit(i, n, "생김새 검증: 후보 뽑고 렌더 중 (게임마다 처음 한 번) " + nm)
+
+        thumbs = identify_verify.ensure_thumbs(game, all_paths, self._glb_getter(game, a),
+                                               blender=self.cfg.get("blender") or None, progress=prog)
+        work = os.path.join(identify_verify.cache_dir(game), "_work")
+        n_ok = 0
+        for i, g in enumerate(targets):
+            if w.cancel.is_set():
+                break
+            w.progress.emit(i, len(targets), "생김새 비교 중 %d/%d" % (i + 1, len(targets)))
+            try:
+                v = identify_verify.verify_one(prov.ask, game, g.frame, g.box, cands[id(g)], thumbs, work, panel.make_sheet)
+            except Exception as e:  # noqa: BLE001 - 한 줄 실패가 전체를 막지 않게
+                errors.append("생김새 비교: %s" % str(e)[:100])
+                continue
+            if v and v.get("path"):
+                if g.name and g.name not in g.alts:
+                    g.alts = [g.name] + list(g.alts)          # 원래 추측 이름은 후보로 남긴다
+                g.verified_path = v["path"]
+                g.name = assetidx.mesh_name(v["path"])        # 생김새로 확정한 메시가 곧 추측 결과
+                g.confidence = max(g.confidence, min(float(v.get("confidence") or 0.0), 0.9))
+                notes.append("생김새 확인: %s (%s)" % (g.name, (v.get("why") or "")[:60]))
+                n_ok += 1
+        made = sum(1 for t in thumbs.values() if t)
+        notes.append("생김새 검증: %d줄 중 %d줄 일치 (후보 렌더 %d/%d개)%s" % (
+            len(targets), n_ok, made, len(thumbs),
+            "" if made else " — 후보를 뽑거나 렌더하지 못했습니다 (추출 설정/Blender 확인)"))
+
     def start_verify(self) -> None:
-        """후보 '생김새 검증': 이름이 아니라 렌더된 모습으로 후보를 고른다 (느림, 게임별 캐시)."""
+        """후보 '생김새 검증' 다시 돌리기: 이름이 아니라 렌더된 모습으로 후보를 고른다 (느림, 게임별 캐시)."""
         rows = [r for r in self.rows if r.base]
         if not rows:
             QMessageBox.information(self, "생김새 검증", "먼저 [캐릭터 추측]으로 검수 표를 채우세요.")
@@ -1725,18 +1812,7 @@ class VidFindTab(QWidget):
         rows = rows[:8]
         self._verify_rows = rows
         jobs = [(r.group.frame, r.group.box, [c.path for c in r.base[:identify_verify.MAX_CANDS]]) for r in rows]
-        glb_root = identify_verify.cache_dir(game, "refglb")
-
-        def glb_of(mesh_path: str):
-            d = os.path.join(glb_root, hashlib.sha1(mesh_path.replace("\\", "/").lower().encode("utf-8")).hexdigest()[:16])
-            if os.path.isdir(d):
-                got = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
-                if got:
-                    return got[0]
-            os.makedirs(d, exist_ok=True)
-            files = extractor.export_assets(helper, groot, ue, aes, usmap, [mesh_path], d, kind="mesh", mesh_format="glb", textures=True)
-            got = [f for f in files if f.lower().endswith(".glb")] or [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".glb")]
-            return got[0] if got else None
+        glb_of = self._glb_getter(game, a)
 
         def job(w):
             all_paths = [p for _f, _b, ps in jobs for p in ps]
