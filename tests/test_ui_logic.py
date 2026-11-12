@@ -531,10 +531,20 @@ def test_full_flow():
         mw._bone_reset_selected()
         mw.recompute()
         assert not lp.layer().frames(jt) and np.degrees(_Q.angle_between(mw.pr.result.anim.rot[:, jt], base2[:, jt])).max() < 1e-6, "레이어에서 본 초기화"
-        lp._row_changed(0)                                        # 원본 상태: 본 편집은 전체 구간 보정으로
+        lp._row_changed(0)                                        # 오토키를 끄면: 본 편집은 키가 아니라 전체 구간 보정으로
+        nk0 = sum(l.n_keys() for l in mw.pr.layer_stack().layers)
+        mw.cb_autokey.setChecked(False)
+        assert not lp.rec.isChecked() and not lp.recording(), "오토키와 기록 체크는 같은 스위치"
         mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(10.0)))
         assert jt in mw.pr.settings.rot_offsets and not lp.recording()
+        assert sum(l.n_keys() for l in mw.pr.layer_stack().layers) == nk0, "오토키가 꺼져 있으면 키가 찍히지 않는다"
+        lp._row_changed(len(mw.pr.layer_stack().layers)) if len(mw.pr.layer_stack().layers) else None
+        mw._bone_dragged(jt, _Q.from_axis_angle(yax, np.radians(5.0)))
+        assert sum(l.n_keys() for l in mw.pr.layer_stack().layers) == nk0, "레이어를 고른 상태여도 오토키가 꺼져 있으면 키가 찍히지 않는다"
+        lp._row_changed(0)
         mw._bone_reset_selected()
+        lp.rec.setChecked(True)
+        assert mw.cb_autokey.isChecked()
         mw.pr.layers = {}
         mw.recompute()
         # 휠 잠금 토글 / 본 편집 버튼
@@ -592,6 +602,7 @@ def test_full_flow():
         # '원본' 상태 + 발 IK: 발을 옮기면 IK 목표가 옮겨져 전체 프레임에서 그대로 따라온다 (예전엔 발 IK 가 되돌려서 0)
         mw.pr.layers = {}
         mw.recompute()
+        mw.cb_autokey.setChecked(False)          # 오토키를 끈 '원본' 상태
         assert mw.pr.settings.foot_ik and not lay_.recording()
         Pa = np.array(mw.vd.tgt_pos, dtype=float)
         dv_ = np.array([0.02, 0.03, 0.0])
@@ -610,6 +621,7 @@ def test_full_flow():
         mw.recompute()
         lay_.add_layer()
         lay_.layer().fade = 0
+        mw.cb_autokey.setChecked(True)
         mw.cb_pos_only.setChecked(True)
         mw._bone_drag_started()
         mw._bone_moved(foot, d_)

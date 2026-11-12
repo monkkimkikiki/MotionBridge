@@ -76,7 +76,7 @@ class LayerPanel(CollapsibleBox):
         self.fade.changed.connect(self._fade_changed)
         fd.addWidget(self.fade, 1)
         v.addLayout(fd)
-        self.rec = QCheckBox("🔴 레이어를 고른 동안 본 편집을 이 레이어의 키로 기록 (끄면 전체 구간 '본별 보정'으로 들어가며 레이어가 아닙니다)")
+        self.rec = QCheckBox("🔴 오토키 — 본 편집을 레이어의 키로 기록 (끄면 전체 구간 '본별 보정'으로 들어가며 레이어가 아닙니다)")
         self.rec.setChecked(True)
         self.rec.setToolTip("켜 두면, 레이어가 선택된 상태에서 뷰포트로 본을 돌리거나 옮길 때 현재 프레임에 키가 찍히고 앞뒤로 블렌드됩니다.\n"
                             "'원본' 줄이 선택돼 있거나 레이어가 없으면 전체 구간 '본별 보정'에 기록됩니다 (레이어를 꺼도 남는 값). 크기(R)는 레이어에 기록되지 않습니다.")
@@ -184,9 +184,10 @@ class LayerPanel(CollapsibleBox):
 
     def recording(self) -> bool:
         """본 편집을 레이어 키로 기록할지: 레이어가 골라져 있고 기록이 켜져 있을 때."""
-        if not self.rec.isChecked():
-            return False
-        return self.stack().current() is not None or self.autokey_on()
+        cb = self.app.__dict__.get("cb_autokey")
+        if cb is not None:          # 오토키가 꺼져 있으면 어떤 경우에도 키를 찍지 않는다
+            return bool(cb.isChecked())
+        return bool(self.rec.isChecked() and self.stack().current() is not None)
 
     def autokey_on(self) -> bool:
         """뷰포트의 '오토키' 체크박스. 켜져 있으면 본을 고칠 때 (레이어가 없거나 '원본'을 보고 있어도) 알아서 레이어를 만들어 키를 찍는다."""
@@ -252,7 +253,7 @@ class LayerPanel(CollapsibleBox):
                 " · 내보내기도 이 상태로 나갑니다.")
         if st.top < len(st.layers):
             head += " (위쪽 %d개는 잠시 숨김)" % (len(st.layers) - st.top)
-        head += "\n본 편집 기록 위치: " + ("레이어 '%s' 의 키 (프레임별, 앞뒤로 블렌드)" % cur.name if self.recording() else
+        head += "\n본 편집 기록 위치: " + (("레이어 '%s' 의 키 (프레임별, 앞뒤로 블렌드)" % cur.name if cur is not None else "새 '오토키' 레이어의 키 (본을 고치면 만들어짐)") if self.recording() else
                                             "전체 구간 '본별 보정' — 레이어가 아니라서 레이어를 꺼도 남습니다")
         if self._msg:
             head += "\n" + self._msg
@@ -358,6 +359,10 @@ class LayerPanel(CollapsibleBox):
             self.app.schedule()
 
     def _rec_toggled(self, on: bool) -> None:
+        # '🔴 기록'과 뷰포트의 '🔑 오토키'는 같은 스위치다 (둘이 따로 놀아, 오토키를 꺼도 기록이 켜져 있으면 키가 찍혔다)
+        cb = self.app.__dict__.get("cb_autokey")
+        if cb is not None and cb.isChecked() != bool(on):
+            cb.setChecked(bool(on))
         if on:
             if not self.app.cb_bone_edit.isChecked():
                 self.app.cb_bone_edit.setChecked(True)

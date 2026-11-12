@@ -605,6 +605,7 @@ class MainWindow(QMainWindow):
                                    "끄면 편집이 전체 구간 '본별 보정'으로 들어갑니다 (레이어가 골라져 있고 🔴 기록이 켜져 있으면 그 레이어에 기록).\n"
                                    "오토키와 상관없이 K 키를 누르면 고른 본에 지금 프레임의 키를 찍습니다 (뷰포트 위에서).")
         self.cb_autokey.toggled.connect(self._autokey_toggled)
+        self._sync_rec_autokey()
         bl2.addWidget(self.cb_autokey)
         self.tool_buttons: Dict[str, QPushButton] = {}
         for tool, text, tip in (("select", "Q 선택", "점을 눌러 본을 고릅니다 (끌어도 아무것도 바뀌지 않음)"),
@@ -2100,6 +2101,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(g)
 
         self.layer_panel = LayerPanel(self)
+        self._sync_rec_autokey()
         lay.addWidget(self.layer_panel)
 
         g = CollapsibleBox("모션 다듬기 (좌우 반전 · 떨림 줄이기 · 튀는 구간 제거 · 부위별 세기)")
@@ -2958,8 +2960,19 @@ class MainWindow(QMainWindow):
             self.pr.settings.rot_offsets.pop(j, None)
         self._after_bone_value_edit(j)
 
+    def _sync_rec_autokey(self) -> None:
+        """'🔴 기록' 체크와 '🔑 오토키'는 같은 스위치 — 둘 다 만들어진 뒤 시작 상태를 오토키 쪽에 맞춘다."""
+        lp, cb = self.__dict__.get("layer_panel"), self.__dict__.get("cb_autokey")
+        if lp is None or cb is None:
+            return
+        if lp.rec.isChecked() != cb.isChecked():
+            lp.rec.setChecked(bool(cb.isChecked()))
+
     def _autokey_toggled(self, on: bool) -> None:
         self.cfg["autokey"] = bool(on)
+        lp = self.__dict__.get("layer_panel")
+        if lp is not None and lp.rec.isChecked() != bool(on):
+            lp.rec.setChecked(bool(on))
         try:
             bridge.save_config(self.cfg)
         except Exception:  # noqa: BLE001
