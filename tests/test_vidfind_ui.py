@@ -832,10 +832,10 @@ def main():
         check(seen_start == [clips], "클립 폴더 대화상자 시작 위치: %s" % seen_start)
 
         # 탭: 크롬식 탭 줄 (번호 = 처음 추가된 순서)
-        check(mw.tabs.count() == 8 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AI모캡", "탭 8개 (AnimRef 는 최상단 선택으로 이동)")
-        mw.tabs.setCurrentIndex(5)
-        check(mw.tabs.currentIndex() == 5 and mw.tabs.current_page() is vt, "탭 이동/표시")
-        check(mw.tabs.pages[1] is vt and mw.tabs.pages[0] is mw.tabs.widget(0), "탭 줄 둘째 칸은 영상찾기 (번호는 5 그대로)")
+        check(mw.tabs.count() == 9 and mw.tabs.tabText(6) == "영상찾기" and mw.tabs.indexOf(vt) == 6 and mw.tabs.tabText(8) == "AI모캡", "탭 9개 (Unity 추가, AnimRef 는 최상단 선택으로 이동)")
+        mw.tabs.setCurrentIndex(6)
+        check(mw.tabs.currentIndex() == 6 and mw.tabs.current_page() is vt, "탭 이동/표시")
+        check(mw.tabs.pages[1] is vt and mw.tabs.pages[0] is mw.tabs.widget(0), "탭 줄 둘째 칸은 영상찾기 (번호는 6 그대로)")
         check(mw.tabs.indexOf(mw.animref) == -1, "AnimRef 는 탭 줄에 없다")
         mw0 = A.MainWindow()
         check(mw0.mode() == "animref" and mw0.mode_stack.currentWidget() is mw0.animref and mw0.mode_btns["animref"].isChecked(), "시작 화면은 AnimRef")
@@ -849,7 +849,7 @@ def main():
         hub = mw.tabs.hub
         win = hub.detach(vt, None)
         check(win is not None and hub.is_detached(vt) and vt not in mw.tabs.pages and len(win.view.pages) == 1, "탭 분리")
-        mw.tabs.setCurrentIndex(5)
+        mw.tabs.setCurrentIndex(6)
         check(hub.view_of(vt) is win.view and win.view.current_page() is vt, "분리된 탭도 번호로 접근")
         hub.dock(vt)
         check(not hub.is_detached(vt) and mw.tabs.pages.index(vt) == 1 and win not in hub.floats, "합치기: 원래 순서 자리(둘째 칸)로")
@@ -858,7 +858,7 @@ def main():
         check(mw.tabs.pages.index(mw.tabs.widget(1)) == 2 and not hub.floats, "창 닫으면 메인으로 복귀")
         a, b = mw.tabs.pages[1], mw.tabs.pages[2]
         hub.move(a, mw.tabs, len(mw.tabs.pages))
-        check(mw.tabs.pages[-1] is a and mw.tabs.pages[1] is b and mw.tabs.indexOf(a) == 5, "순서 바꿔도 번호는 그대로")
+        check(mw.tabs.pages[-1] is a and mw.tabs.pages[1] is b and mw.tabs.indexOf(a) == 6, "순서 바꿔도 번호는 그대로")
         w3 = hub.detach(vt, None)
         hub.redock_window(w3)
         check(mw.tabs.pages[1] is vt, "영상찾기를 분리했다 합쳐도 둘째 칸")

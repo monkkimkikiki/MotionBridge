@@ -46,7 +46,7 @@ def main():
         mw = A.MainWindow()
         mt = mw.mocap
         errs = sync_async(mw)
-        check(mw.tabs.indexOf(mt) == 7 and mw.tabs.tabText(7) == "AI모캡", "탭 등록")
+        check(mw.tabs.indexOf(mt) == 8 and mw.tabs.tabText(8) == "AI모캡", "탭 등록")
         check(mt.engine.count() == 2 and mt._eng().key == "gvhmr", "엔진 2개, 기본 GVHMR")
         mt.engine.setCurrentIndex(mt.engine.findData("wham"))
         mt._engine_changed()
