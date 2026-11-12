@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
+from ..core import nameglossary
 from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
@@ -1072,6 +1073,32 @@ class VidFindTab(QWidget):
             ids = bool(getattr(vocab, "ids", False))
             cat = self._catalog(idx) if ids else None
             read_text = bool(self.cfg.get("vf_read_text", True)) and cat is not None
+            gl = None
+            if not ids and bool(self.cfg.get("vf_gloss", True)):
+                # 리소스 이름이 영어 낱말이 아닌 게임(오공 = 병음)은 이름만으로 캐릭터를 이을 수 없다 -> 게임마다 한 번 AI 에게 이름 뜻을 풀어 받아 저장해 쓴다
+                try:
+                    gl = self.glossary(hint)
+                    all_names = self._gloss_names(idx)
+                    if gl.entries or nameglossary.looks_opaque(all_names):
+                        todo = gl.missing(all_names)
+                        if todo:
+                            n_new, gerrs = nameglossary.generate(prov.ask_text, all_names, hint, gl,
+                                                                 on_progress=lambda i, n: (stop_check(w), w.progress.emit(i, max(n, 1), "리소스 이름 뜻 풀이 중 (게임마다 처음 한 번) %d/%d" % (i, n))))
+                            notes.append("리소스 이름 뜻 풀이: %d개 새로 풀었습니다 (전체 %d개 기억 중)%s" % (n_new, len(gl.entries), (" · 오류: " + gerrs[0]) if gerrs else ""))
+                        # 같은 캐릭터의 여러 벌(_01, _02a…)은 하나만 남겨 더 많은 캐릭터를 알리고, 뜻이 풀린 이름을 앞에 둔다
+                        reps_ = {}
+                        for v in (all_names if not pat else list(vocab)):
+                            reps_.setdefault(nameglossary.base_key(v), v)
+                        ordered = sorted(reps_.values(), key=lambda v: (0 if gl.meaning(v) else 1, (gl.get(v) or {}).get("kind") not in ("boss", "enemy", "npc", "player")))
+                        vocab = _Vocab([gl.annotate(v) for v in ordered[:prov.vocab_limit()]])
+                        notes.append("이름 목록에 뜻을 붙여 AI 에게 알렸습니다 (%d종, 예: %s)" % (len(vocab), vocab[0] if vocab else ""))
+                    else:
+                        gl = None
+                except _Stopped:
+                    raise
+                except Exception as e:  # noqa: BLE001 - 풀이는 보조 기능
+                    notes.append("리소스 이름 뜻 풀이를 건너뜁니다: %s" % str(e)[:160])
+                    gl = None
             if not ids and fast and len(vocab) > vision.FAST_VOCAB:
                 vocab = vocab[:vision.FAST_VOCAB]
             if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
@@ -1083,6 +1110,46 @@ class VidFindTab(QWidget):
             klines = [k.prompt_line() for k in known]
             dets: List[vision.Detection] = []
             errors: List[str] = []
+
+            def finish(dets):
+                """인식 결과 마무리: 뜻이 붙은 이름 정리 -> 묶기 -> 못 찾은 줄은 뜻 풀이로 다시 찾기."""
+                if gl is not None:
+                    for d_ in dets:      # '이름 (뜻)' 을 통째로 답한 경우 이름만 남긴다
+                        d_.name = nameglossary.strip_annotation(d_.name)
+                        d_.alts = [nameglossary.strip_annotation(x) for x in d_.alts]
+                groups_ = gamenames.merge_known(vision.aggregate(dets), known)
+                if gl is not None and gl.entries:
+                    # 이름을 못 댔거나(모름) 이름과 맞는 메시가 없는 줄: 외형 설명·게임 속 이름으로, 뜻이 붙은 전체 목록에서 AI 가 다시 고른다
+                    all_names = self._gloss_names(idx)
+                    asked = 0
+                    for g_ in groups_:
+                        if asked >= 8:
+                            break
+                        unknown_ = (g_.name or "").strip().lower() in assetidx.UNKNOWN_WORDS
+                        if not unknown_ and idx.rank_meshes(g_.name, "", 1, None):
+                            continue
+                        stop_check(w)
+                        w.progress.emit(asked, 8, "뜻 풀이로 캐릭터 다시 찾는 중")
+                        m_ = re.search(r"게임 속 이름: ([^.]+)", g_.description or "")
+                        ingame = (m_.group(1).strip() if m_ else "") or ("" if unknown_ else g_.name)
+                        desc_ = re.sub(r"게임 속 이름: [^.]+\.?", "", g_.description or "").strip()
+                        asked += 1
+                        try:
+                            picks = nameglossary.pick(prov.ask_text, desc_, ingame, all_names, gl, hint)
+                        except Exception as e:  # noqa: BLE001
+                            errors.append("뜻 풀이로 찾기: %s" % str(e)[:160])
+                            continue
+                        if not picks:
+                            picks = [(n, s, why) for n, s, why in gl.search(ingame or desc_, all_names, 5)]
+                        if picks:
+                            if ingame and unknown_ is False and g_.name == ingame:
+                                g_.description = ("게임 속 이름: %s. %s" % (ingame, desc_)).strip()
+                            g_.name = picks[0][0]
+                            g_.confidence = max(g_.confidence, min(picks[0][1], 0.6))      # 뜻 풀이로 고른 것은 낮은 확신으로 (⚠ 표시) — 검수자가 확인
+                            g_.alts = [p[0] for p in picks[1:]] + [a_ for a_ in g_.alts if a_ not in {p[0] for p in picks}]
+                            notes.append("뜻 풀이로 찾음: %s → %s%s" % (ingame or desc_[:40], picks[0][0], (" (%s)" % picks[0][2]) if picks[0][2] else ""))
+                return groups_
+
             if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
                 by_src: Dict[str, List[str]] = {}
                 for f in fr:
@@ -1124,7 +1191,7 @@ class VidFindTab(QWidget):
                             done_n += 1
                 if cat is not None:
                     screenname.canonicalize(dets, cat)   # AI 가 낸 이름(ID/줄 통째/영·한 이름) -> 대표 메시 이름
-                return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
+                return {"idx": idx, "groups": finish(dets), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
             if read_text:
                 dets += screenname.read_names(prov, [f.path for f in fr], cat, 3, on_error=lambda e: errors.append("글자 읽기: %s" % e))
             for i, f in enumerate(fr):
@@ -1138,7 +1205,8 @@ class VidFindTab(QWidget):
                         break  # 계속 실패하면 멈춘다 (키/연결 문제)
             if cat is not None:
                 screenname.canonicalize(dets, cat)
-            return {"idx": idx, "groups": gamenames.merge_known(vision.aggregate(dets), known), "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
+            groups_ = finish(dets)
+            return {"idx": idx, "groups": groups_, "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
 
         self.win.run_async(job, self._after_guess, "캐릭터 추측 중", cancellable=True,
                            on_cancel=lambda: self.status.setText("캐릭터 추측을 취소했습니다. 인식 방식을 바꾸고 다시 시작할 수 있어요."))
@@ -1197,6 +1265,8 @@ class VidFindTab(QWidget):
         base = idx.rank_meshes(g.name, g.description, 8, self.memory)
         if g.alts or self.ck_fast.isChecked():   # 후보군: AI 가 꼽은 다른 이름들도 합쳐 5개
             base = self._merge_cands(idx, base, g.alts, 5)
+        if not base:      # 이름 글자로는 못 찾음 -> 뜻 풀이 사전(한국어/영어/한자 뜻)으로 후보를 낸다
+            base = self._gloss_cands(" ".join(x for x in (g.name, g.description) if x))
         remembered = bool(base) and base[0].why.startswith("이전에 확정")
         sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
@@ -1273,13 +1343,65 @@ class VidFindTab(QWidget):
         if p:
             self.open_mesh_in_viewport(p)
 
+    def glossary(self, hint: str = "") -> "nameglossary.Glossary":
+        """이 게임의 리소스 이름 풀이 사전 (게임 이름별로 저장)."""
+        game = (hint or self.hint.text().strip() or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")
+                or layout.detect_game_name(self.cfg.get("game_dir", "")) or "game")
+        cur = self.__dict__.get("_gloss")
+        if cur is None or cur.game != game:
+            cur = nameglossary.Glossary.load(game)
+            self._gloss = cur
+        return cur
+
+    @staticmethod
+    def _gloss_names(idx) -> List[str]:
+        """풀이할 이름들: 뼈대가 있는(캐릭터일 가능성이 큰) 메시 이름을 앞에, 나머지를 뒤에 (개수 제한에 걸릴 때 캐릭터가 먼저 풀리게)."""
+        rig, rest, seen = [], [], set()
+        for m in idx.meshes:
+            k = m.name.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            (rig if assetidx.is_rigged_path(m.path) else rest).append(m.name)
+        return sorted(rig, key=str.lower) + sorted(rest, key=str.lower)
+
+    def _gloss_cands(self, text: str, limit: int = 5) -> List[assetidx.MeshCandidate]:
+        """뜻 풀이 사전으로 찾은 메시 후보 ('게임 속 이름: …' 이 들어 있으면 그 이름을 우선)."""
+        idx = self.index
+        if idx is None or not (text or "").strip():
+            return []
+        try:
+            gl = self.glossary()
+            if not gl.entries:
+                return []
+            m = re.search(r"게임 속 이름: ([^.]+)", text)
+            queries = ([m.group(1).strip()] if m else []) + [text]
+            names = self._gloss_names(idx)
+            out: List[assetidx.MeshCandidate] = []
+            have = set()
+            for q in queries:
+                for n, s, why in gl.search(q, names, limit):
+                    for c in idx.rank_meshes(n, "", 1, None):
+                        if c.path not in have:
+                            have.add(c.path)
+                            out.append(assetidx.MeshCandidate(c.path, c.name, s, why))
+                if out:
+                    break
+            return out[:limit]
+        except Exception:  # noqa: BLE001 - 보조 기능
+            return []
+
     def _on_search(self, row: _Row, text: str) -> None:
         text = (text or "").strip()
         if not text:
             self._fill_combo(row.combo, row.base, pick_first=row.sure)
             return
         idx = self.index
-        self._fill_combo(row.combo, idx.search(text) if idx else [])
+        found = idx.search(text) if idx else []
+        if idx and len(found) < 3:      # 한국어·영어 뜻으로도 찾는다 (예: '늑대' -> GYCY_Lang)
+            have = {c.path for c in found}
+            found = found + [c for c in self._gloss_cands(text) if c.path not in have]
+        self._fill_combo(row.combo, found)
 
     # ================================================================== 게임 속 이름으로 찾기
     def _load_index_cached(self) -> Optional[assetidx.AssetIndex]:
