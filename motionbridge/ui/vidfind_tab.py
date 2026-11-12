@@ -2068,6 +2068,33 @@ class VidFindTab(QWidget):
             msg += " 아직 파일 안을 읽어 확인하지 않아 이름 점수만 보입니다 — [스켈레톤으로 확인]을 누르면 실제 연결로 걸러냅니다."
         self.anim_note.setText(msg)
         self._apply_anim_filter()
+        self._auto_motion_rank(msg)
+
+    def _auto_motion_rank(self, base_msg: str) -> None:
+        """메시의 '생김새 검증'처럼, 애니 후보도 영상의 실제 움직임으로 자동 정렬한다.
+
+        고른 영상에 AI 모캡 결과(.bvh)가 있으면 후보가 채워지는 즉시 동작 비교(DTW)로 줄 세우고,
+        없으면 만드는 방법을 안내만 한다. 같은 확정/같은 모캡 파일로는 한 번만 돈다."""
+        if self.char_mode or not self.confirmed or self.anim_list.count() == 0:
+            return
+        if not bool(self.cfg.get("vf_motion_auto", True)):
+            return
+        mf = ""
+        for sp in self.source_paths(True):
+            mf = animref.motion_file(sp)
+            if mf:
+                break
+        key = (tuple(sorted(self.confirmed)), mf)
+        if not mf:
+            if self.__dict__.get("_motion_hint_key") != key:
+                self._motion_hint_key = key
+                self.anim_note.setText(base_msg + "\n💡 영상의 AI 모캡(.bvh)이 있으면 실제 움직임이 비슷한 순으로 자동 정렬됩니다 — "
+                                                  "AnimRef 의 AI 모캡으로 만들거나, [🎬 영상 동작과 비슷한 순 정렬]에서 파일을 직접 고르세요.")
+            return
+        if self.__dict__.get("_motion_ranked_key") == key or getattr(self.win, "_worker", None) is not None:
+            return
+        self._motion_ranked_key = key
+        self.rank_by_motion(mf)
 
     def _skel_index(self):
         try:
