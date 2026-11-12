@@ -418,8 +418,6 @@ class MainWindow(QMainWindow):
 
         self.tabs = ChromeTabs()  # 크롬식 탭 줄: 누르면 전환 · 끌어내면 별도 창 · 다른 창 탭 줄에 놓으면 합쳐짐
         self.tabs.addTab(self._tab_extract(), "추출", "0. 게임에서 추출")
-        self.unity_tab = UnityExtractTab(self)
-        self.tabs.addTab(self.unity_tab, "Unity", "Unity 에셋 추출")
         self.tabs.addTab(self._tab_files(), "파일·매핑", "1. 파일·매핑")
         self.tabs.addTab(self._tab_retarget(), "리타겟", "2. 리타겟 조절")
         self.tabs.addTab(self._tab_quality(), "검수", "3. 품질 검수")
@@ -870,6 +868,11 @@ class MainWindow(QMainWindow):
         vh.addWidget(self.btn_to_animref)
         v.addLayout(vh)
         lay.addWidget(g)
+
+        # 유니티 게임이면 [검사]가 알아보고 아래 언리얼 설정 대신 이 패널을 보여 준다 (별도 탭 없음)
+        self.unity_tab = UnityExtractTab(self, embedded=True)
+        self.unity_tab.setVisible(False)
+        lay.addWidget(self.unity_tab)
 
         g = CollapsibleBox("2) 추출 설정")
         self._scan_gated = [g]
@@ -1402,6 +1405,23 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001 - 자동 채우기 실패가 검사를 막지 않게
             self.statusBar().showMessage("게임 설정 자동 채우기 실패: %s" % e)
         self._update_scan_gate()
+        self._engine_switch(sc)
+
+    def _engine_switch(self, sc) -> None:
+        """검사로 알아낸 엔진에 맞는 추출 화면을 보여 준다: 언리얼 설정 <-> 유니티 패널 (같은 탭 안)."""
+        is_unity = getattr(sc, "engine", "") == "unity"
+        ut = self.__dict__.get("unity_tab")
+        if ut is None:
+            return
+        ut.setVisible(is_unity)
+        for box in self.__dict__.get("_scan_gated", []):
+            box.setVisible(not is_unity)
+        if is_unity:
+            self.ex_summary.setText("유니티 엔진 게임입니다 (pak/utoc 이 없는 것이 정상). 아래에서 에셋을 검사·추출하세요.")
+            self.ex_verdict.setText("🟢 유니티 게임 — 메시·텍스처·AnimationClip 원본을 추출할 수 있습니다.")
+            self.ex_verdict.setStyleSheet("color:#5ab0ff;font-weight:700")
+            self.btn_to_animref.setVisible(False)
+            ut.scan_game()   # 검사 버튼 한 번으로 유니티 에셋 검사까지 이어진다
 
     def _refill_keylist(self) -> None:
         cb = self.__dict__.get("ex_keylist")

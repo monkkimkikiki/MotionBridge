@@ -15,15 +15,20 @@ from ..core import unity_extractor
 
 
 class UnityExtractTab(QWidget):
-    """Scan a local Unity install and export selected UnityPy-supported assets."""
+    """Scan a local Unity install and export selected UnityPy-supported assets.
 
-    def __init__(self, host) -> None:
+    embedded=True 면 추출 탭 안에 패널로 들어간다: 게임 폴더 칸을 따로 두지 않고
+    추출 탭의 게임 폴더(host.ex_game)를 그대로 쓴다 ([검사]가 유니티로 판별하면 나타난다)."""
+
+    def __init__(self, host, embedded: bool = False) -> None:
         super().__init__()
         self.host = host
+        self.embedded = bool(embedded)
         self.records: list[dict] = []
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setContentsMargins(0 if self.embedded else 10, 0 if self.embedded else 10,
+                                0 if self.embedded else 10, 0 if self.embedded else 10)
 
         intro = QLabel(
             "Unity 게임 폴더의 *_Data / AssetBundle을 검사합니다. "
@@ -33,15 +38,16 @@ class UnityExtractTab(QWidget):
         intro.setWordWrap(True)
         root.addWidget(intro)
 
-        row = QHBoxLayout()
         self.game_path = QLineEdit()
         self.game_path.setPlaceholderText(r"Unity 게임 설치 폴더 (예: D:\Games\MyUnityGame)")
         self.game_path.setText(str(self.host.cfg.get("unity_game_dir", "")))
-        row.addWidget(self.game_path, 1)
-        browse = QPushButton("폴더 선택…")
-        browse.clicked.connect(self._pick_game)
-        row.addWidget(browse)
-        root.addLayout(row)
+        if not self.embedded:
+            row = QHBoxLayout()
+            row.addWidget(self.game_path, 1)
+            browse = QPushButton("폴더 선택…")
+            browse.clicked.connect(self._pick_game)
+            row.addWidget(browse)
+            root.addLayout(row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("AssetBundle 키"))
@@ -107,6 +113,12 @@ class UnityExtractTab(QWidget):
 
         self.filter.textChanged.connect(self._apply_filter)
 
+    def _game_dir(self) -> str:
+        """패널로 내장됐을 때는 추출 탭의 게임 폴더를, 아니면 자체 칸의 경로를 쓴다."""
+        if self.embedded:
+            return str(self.host.ex_game.text()).strip()
+        return self.game_path.text().strip()
+
     def _pick_game(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Unity 게임 폴더 선택", self.game_path.text())
         if path:
@@ -121,7 +133,7 @@ class UnityExtractTab(QWidget):
         if getattr(self.host, "_worker", None) is not None:
             self.host.statusBar().showMessage("다른 작업이 끝난 뒤 Unity 검사를 시작하세요.")
             return
-        game = self.game_path.text().strip()
+        game = self._game_dir()
         if not game or not os.path.isdir(game):
             QMessageBox.warning(self, "Unity 검사", "Unity 게임 설치 폴더를 먼저 선택하세요.")
             return
@@ -184,7 +196,7 @@ class UnityExtractTab(QWidget):
         if not selected:
             QMessageBox.information(self, "Unity 추출", "목록에서 추출할 에셋을 선택하세요.")
             return
-        game = self.game_path.text().strip()
+        game = self._game_dir()
         out = self.out_path.text().strip()
         if not game or not out:
             QMessageBox.warning(self, "Unity 추출", "게임 폴더와 출력 폴더를 확인하세요.")
