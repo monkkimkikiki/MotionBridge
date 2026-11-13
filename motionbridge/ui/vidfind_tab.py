@@ -103,7 +103,7 @@ class _GrabDialog(QDialog):
         self._scale = 1.0
         v = QVBoxLayout(self)
         tip = QLabel("① 타임바를 움직여 몬스터가 잘 보이는 장면에 놓고 → ② 화면에서 몬스터를 마우스로 끌어 박스 지정 → ③ [완료]를 누르면 1) 목록에 이미지로 들어갑니다.\n"
-                     "찾기는 그 다음에 — '아는 정보'에 보스 이름을 적고 [이미지에서 영역 지정해서 찾기]를 누르세요.")
+                     "찾기는 그 다음에 — '아는 정보'에 보스 이름을 적고 [영역 지정한 이미지로 찾기]를 누르세요.")
         tip.setWordWrap(True)
         v.addWidget(tip)
         self.view = _PickLabel(self)
@@ -131,7 +131,7 @@ class _GrabDialog(QDialog):
         self.btn_go = QPushButton("완료 — 1) 목록에 추가")
         self.btn_go.setEnabled(False)
         self.btn_go.setToolTip("담아 둔 영역(박스가 그려져 있으면 그것까지)을 잘라 1) 영상/이미지 목록에 넣습니다.\n"
-                              "그 다음 '아는 정보'에 보스 이름 등을 적고 [이미지에서 영역 지정해서 찾기]를 누르면 찾기 시작 — 바로 찾지 않아요.")
+                              "그 다음 '아는 정보'에 보스 이름 등을 적고 [영역 지정한 이미지로 찾기]를 누르면 찾기 시작 — 바로 찾지 않아요.")
         self.btn_go.clicked.connect(self._go)
         h.addWidget(self.btn_go)
         self.note = QLabel("")
@@ -390,7 +390,7 @@ class VidFindTab(QWidget):
         b = QPushButton("🎞 영상에서 몬스터 영역 따기…")
         b.setToolTip("목록에서 고른 영상(안 골랐으면 첫 영상)을 열어:\n"
                      "① 타임바로 몬스터가 잘 보이는 장면을 고르고 → ② 그 화면에서 몬스터를 마우스로 박스 지정 → ③ [완료]로 1) 목록에 이미지로 추가.\n"
-                     "그 뒤 '아는 정보'에 보스 이름 등을 적고 [이미지에서 영역 지정해서 찾기]를 누르면, 그 영역만 AI 에게 보여 줘 몇 초 만에 찾습니다.")
+                     "그 뒤 '아는 정보'에 보스 이름 등을 적고 [영역 지정한 이미지로 찾기]를 누르면, 그 영역만 AI 에게 보여 줘 몇 초 만에 찾습니다.")
         b.clicked.connect(self.grab_from_video)
         h.addWidget(b)
         b = QPushButton("AnimRef 클립 폴더…")
@@ -540,10 +540,10 @@ class VidFindTab(QWidget):
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮은 줄에는 검수 표에 '⚠ 확신 낮음' 표시를 붙여 한 번 더 보게 합니다 (메시는 가장 유력한 후보가 그래도 골라져 있습니다).")
         r = QHBoxLayout()
         self.rb_mode_monster = QRadioButton("영상으로 찾기 — AI 가 장면을 보고 추측 (오래 걸림)")
-        self.rb_mode_img = QRadioButton("이미지로 찾기 — 스크린샷에서 몬스터 영역 지정 (빠름)")
+        self.rb_mode_img = QRadioButton("영역 지정한 이미지로 찾기 — 몬스터만 집어서 (빠름)")
         self.rb_mode_char = QRadioButton("이름으로 찾기 — 검색·AI 확장 (영상 없이)")
         self.rb_mode_monster.setToolTip("영상 전체를 분석해 몬스터를 추측합니다 — 장면을 수십 장 뽑아 AI 에게 여러 번 물어서 가장 오래 걸립니다.\n"
-                                        "찾는 몬스터가 정해져 있으면 '이미지로 찾기'가 훨씬 빠릅니다. 결과는 어느 모드든 4) 검수 표로 이어집니다.")
+                                        "찾는 몬스터가 정해져 있으면 '영역 지정한 이미지로 찾기'가 훨씬 빠릅니다. 결과는 어느 모드든 4) 검수 표로 이어집니다.")
         self.rb_mode_img.setToolTip("게임 영상을 일시정지하고 찍은 스크린샷을 1)에 넣고, 찾을 몬스터를 마우스로 박스 지정합니다.\n"
                                     "그 영역만 AI 에게 한 번 보여 주므로 몇 초 만에 끝나고, 어떤 몬스터인지 헷갈리지도 않습니다.\n"
                                     "이 모드는 이미지 파일만 쓰고 1) 목록의 영상은 건드리지 않습니다.")
@@ -604,7 +604,7 @@ class VidFindTab(QWidget):
         if self.rb_mode_char.isChecked():
             self.btn_guess.setText("캐릭터 메쉬 목록 열기")
         elif self.rb_mode_img.isChecked():
-            self.btn_guess.setText("이미지에서 영역 지정해서 찾기")
+            self.btn_guess.setText("영역 지정한 이미지로 찾기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.ck_fast)
         h.addWidget(self.btn_guess, 1)
@@ -1198,7 +1198,7 @@ class VidFindTab(QWidget):
         self.cfg["vf_mode_char"] = on
         self.cfg["vf_mode"] = "char" if on else ("image" if img else "video")
         self.char_panel.setVisible(on)
-        self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else ("이미지에서 영역 지정해서 찾기" if img else "캐릭터 추측 시작"))
+        self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else ("영역 지정한 이미지로 찾기" if img else "캐릭터 추측 시작"))
         self.btn_guess_panel.setVisible(not on and not img)
         if on:
             if self._load_index_cached():
@@ -1350,7 +1350,7 @@ class VidFindTab(QWidget):
         self.rb_mode_img.setChecked(True)     # 모드도 '이미지로 찾기'로
         self._update_src_note()
         self.status.setText("지정한 영역 %d장을 1) 목록에 추가했습니다.\n"
-                            "'아는 정보'에 보스 이름 등을 적으면 정확도가 올라갑니다 — 준비되면 [이미지에서 영역 지정해서 찾기]를 누르세요." % len(dlg.crops))
+                            "'아는 정보'에 보스 이름 등을 적으면 정확도가 올라갑니다 — 준비되면 [영역 지정한 이미지로 찾기]를 누르세요." % len(dlg.crops))
 
     def start_guess(self, force_index: bool = False, pre_frames: Optional[List[str]] = None) -> None:
         if self.rb_mode_char.isChecked():  # 캐릭터 메쉬 찾기: AI 추측 없이 이름 검색
@@ -1363,7 +1363,7 @@ class VidFindTab(QWidget):
         if pre_frames is None and self.rb_mode_img.isChecked():   # 이미지로 찾기: 이미지 파일만 쓰고(영상은 건드리지 않음), 유저가 몬스터 영역을 박스로 지정
             imgs = [s for s in srcs if os.path.splitext(s)[1].lower() in IMAGE_EXTS]
             if not imgs:
-                QMessageBox.information(self, "이미지로 찾기",
+                QMessageBox.information(self, "영역 지정한 이미지로 찾기",
                                         "1) 목록에 이미지(스크린샷)가 없습니다 — 이 모드는 이미지 파일만 쓰고 영상은 건드리지 않습니다.\n"
                                         "영상에서 찾으려면 1) 의 [🎞 영상에서 몬스터 지정해서 찾기…]를 누르세요 (장면 고르기 + 영역 지정).")
                 return
