@@ -66,7 +66,9 @@ FIND_TIPS = (
     "   · 특징이 보이게: 꼬리·무기·방패·갑옷이 박스 안에 들어가게 (이런 게 변형 구분의 결정타)\n"
     "   · 같은 몬스터를 다른 각도로 2~3장 담으면([＋ 이 몬스터도]) 생김새 대조가 더 정확해집니다\n"
     "③ 설명: 종족(늑대/쥐/호랑이…) + 들고 있는 것(방패/횃불/활…) + 옷 색을 적으면 외형 검색이 변형까지 좁혀 줍니다.\n"
-    "④ 종류 체크: 잡몹을 찾을 땐 '일반 몬스터'만 체크 — 보스가 후보를 차지하는 걸 막고 속도도 빨라집니다.")
+    "④ 종류 체크: 잡몹을 찾을 땐 '일반 몬스터'만 체크 — 보스가 후보를 차지하는 걸 막고 속도도 빨라집니다.\n"
+    "⑤ 이미지 모드의 결정타는 '생김새 렌더 대조'(후보 모델을 실제로 렌더해 AI 가 비교) — Blender 가 설치돼 있어야 동작합니다.\n"
+    "   Blender 없이는 AI 의 첫 추측에 의존해 비슷한 종족을 혼동할 수 있어요 (늑대 인간형 ↔ 진짜 늑대).")
 
 
 class _PickLabel(QLabel):
@@ -662,13 +664,14 @@ class VidFindTab(QWidget):
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮은 줄에는 검수 표에 '⚠ 확신 낮음' 표시를 붙여 한 번 더 보게 합니다 (메시는 가장 유력한 후보가 그래도 골라져 있습니다).")
         r = QHBoxLayout()
+        self.rb_mode_char = QRadioButton("⌨ 이름·설명으로 찾기 — 가장 빠르고 정확 (추천)")
+        self.rb_mode_img = QRadioButton("🖼 영역 지정한 이미지로 찾기 — 이름을 모를 때 (정확도 낮음)")
         self.rb_mode_monster = QRadioButton("📹 영상으로 찾기 — 영상 전체를 훑어 자동 추측 (가장 느림)")
-        self.rb_mode_img = QRadioButton("🖼 영역 지정한 이미지로 찾기 — 몬스터만 집어서 (추천)")
-        self.rb_mode_char = QRadioButton("⌨ 이름·설명으로 찾기 — 영상 없이 글로")
         self.rb_mode_monster.setToolTip("영상 전체를 분석해 몬스터를 추측합니다 — 장면을 수십 장 뽑아 AI 에게 여러 번 물어서 가장 오래 걸립니다.\n"
                                         "찾는 몬스터가 정해져 있으면 '영역 지정한 이미지로 찾기'를 쓰세요. 결과는 어느 모드든 4) 검수 표로 이어집니다.")
         self.rb_mode_img.setToolTip("게임 영상을 일시정지하고 찍은 스크린샷을 1)에 넣고, 찾을 몬스터를 마우스로 박스 지정합니다.\n"
-                                    "그 영역만 AI 에게 보여 주므로 어떤 몬스터인지 헷갈리지 않고, 후보가 여럿이면 실제 렌더로 생김새까지 대조합니다.\n"
+                                    "⚠ 정확도는 AI 의 눈에 달려 있어 이름 검색보다 떨어집니다 — 비슷한 종족(늑대 인간형 ↔ 진짜 늑대)을 혼동할 수 있어요.\n"
+                                    "정확도를 끌어올리는 결정타는 '생김새 렌더 대조'인데, 이는 Blender 가 설치돼 있어야 동작합니다.\n"
                                     "이 모드는 이미지 파일만 쓰고 1) 목록의 영상은 건드리지 않습니다.")
         self.rb_mode_char.setToolTip("영상 없이 이름으로 찾습니다: 파일 이름 검색 + [🌐 AI 확장 검색](금지장로 같은 한국어 보스 이름·동작 설명도 원어/음차/지역 코드로 확장).\n"
                                      "찾은 캐릭터의 메시가 후보 목록에 바로 올라가고, 해당 애니메이션 클립도 같이 나옵니다.")
@@ -676,9 +679,9 @@ class VidFindTab(QWidget):
         self.rb_mode_char.setChecked(mode0 == "char")
         self.rb_mode_img.setChecked(mode0 == "image")
         self.rb_mode_monster.setChecked(mode0 not in ("char", "image"))
-        r.addWidget(self.rb_mode_monster)
-        r.addWidget(self.rb_mode_img)
         r.addWidget(self.rb_mode_char)
+        r.addWidget(self.rb_mode_img)
+        r.addWidget(self.rb_mode_monster)
         r.addWidget(HelpIcon(FIND_TIPS))   # ❓ 잘 찾는 법: 어떤 정보/이미지를 주면 쉽게 찾는지
         r.addStretch(1)
         v.addLayout(r)
@@ -2164,6 +2167,10 @@ class VidFindTab(QWidget):
                             thumbs_ = identify_verify.ensure_thumbs(
                                 gname_v, ok_v, lambda p_: glb_map.get(p_),
                                 progress=lambda i_, nn2, nm_: w.progress.emit(i_, nn2, "후보 렌더 %s" % nm_))
+                            if not any(thumbs_.values()):    # 결정타를 건너뛰게 되면 조용히 넘어가지 말고 알린다
+                                notes.append("⚠ 생김새 비교(렌더 대조)를 건너뛰었습니다 — Blender 가 없거나 후보 메시 추출이 실패했어요. "
+                                             "이미지 모드의 정확도는 이 단계가 좌우합니다: Blender 를 설치하면 비슷한 변형(늑대 인간형 ↔ 진짜 늑대)을 실제 모델 렌더로 가려냅니다.")
+                                break
                             r_v = identify_verify.verify_rounds(prov.ask, gname_v,
                                                                 g_.frame, getattr(g_, "box", None), ok_v, thumbs_,
                                                                 FRAME_DIR, panel.make_sheet)
