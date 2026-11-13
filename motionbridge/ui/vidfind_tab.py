@@ -2705,6 +2705,15 @@ class VidFindTab(QWidget):
         meshes = idx.character_meshes(self.char_q.text(), self.char_rig.currentData() or "all", bool(self.ck_char_player.isChecked()))
         if self._cls_want() is not None:
             meshes = [m for m in meshes if self._class_ok(m.path)]
+        if not meshes and self.char_q.text().strip() and not getattr(self, "_name_fallback", False):
+            # 파일 이름 글자로 0개 = 한국어/표시 이름일 가능성 — 자동으로 확장 검색(정답표 → 도감 → AI)으로 넘어간다
+            self._name_fallback = True
+            try:
+                self.char_note.setText("파일 이름 글자로는 0개 — '%s' 를 정답표·도감·AI 확장으로 이어서 찾는 중…" % self.char_q.text().strip())
+                self.start_namefind()
+            finally:
+                self._name_fallback = False
+            return True
         self.char_mode = True
         self.confirmed = [m.path for m in meshes]
         self.mesh_list.clear()
