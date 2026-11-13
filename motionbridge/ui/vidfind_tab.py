@@ -610,44 +610,9 @@ class VidFindTab(QWidget):
         h.addWidget(HelpIcon("게임 이름을 알면 AI 가 그 게임의 몬스터를 떠올리기 쉬워 정확도가 올라갑니다.\n"
                              "비워 두면 [0. 게임에서 추출] 탭에서 게임 폴더를 검사할 때 자동으로 잡힌 이름(폴더 이름 기준)을 그대로 씁니다.\n"
                              "직접 적은 이름이 있으면 그것이 우선입니다."))
-        h.addWidget(QLabel("이름 필터(정규식)"))
-        self.filter = QLineEdit(self.cfg.get("vf_filter", ""))
-        self.filter.setPlaceholderText("예: (?i)(monster|boss) — 비우면 자동")
-        self.filter.setToolTip("AI에게 알려줄 후보 이름을 경로로 줄입니다. 무기/소품이 섞이면 정확도가 떨어집니다.")
-        h.addWidget(self.filter, 1)
-        h.addWidget(HelpIcon("게임 파일의 '경로 글자'를 거르는 규칙입니다. 비우면 자동입니다.\n\n"
-                             "· 쉼표(,)로 나누면 모두 들어간 것만 남깁니다 (예: boss,skeleton)\n"
-                             "· 정규식도 됩니다 — 예: (?i)(monster|boss) 는 대소문자 무시하고 monster 또는 boss 가 든 경로\n"
-                             "· 한글로 적어도 오류는 없지만, 게임 파일 경로는 대부분 영어라 한글 글자는 경로에 한글이 있을 때만 맞습니다.\n"
-                             "  한글 이름으로 캐릭터를 찾고 싶으면 '아는 정보' 칸에 보스 이름을 적으세요 (글자 사전 + AI 확장 검색으로 내부 이름을 찾아 줍니다)."))
+        self.filter = QLineEdit("")      # 이름 필터(정규식): 의미가 없어 화면에서 뺐다 (내부 호환용 빈 값 — 항상 자동)
+        self.filter.setVisible(False)
         v.addLayout(h)
-        kl = QHBoxLayout()
-        kl.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모"), 1)
-        self.btn_lore = QPushButton("📖 게임 도감 열기")
-        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
-        self.btn_lore.clicked.connect(self._open_lore)
-        self.btn_lore.setVisible(False)      # 도감이 있는 게임에서만 보인다 (_update_known_tip 이 켠다)
-        kl.addWidget(self.btn_lore)
-        kl.addWidget(HelpIcon("한 줄에 캐릭터 하나씩, 'Enter' 로 줄을 나눠 적으세요. 형식: 이름 — 메모 (메모는 없어도 됩니다)\n\n"
-                              "메모에 적으면 도움이 되는 정보:\n"
-                              "· 찾으려는 몬스터 이름\n"
-                              "· 외형적 특징 (색, 크기, 갑옷, 뿔 …)\n"
-                              "· 인간형인지 / 4족 보행인지 / 크리처(괴물)인지\n"
-                              "· 쓰는 무기가 무엇인지 (검, 도끼, 창, 맨손 …)\n"
-                              "· 공격 방식이 무엇인지 (내려찍기, 돌진, 회전 …)"))
-        v.addLayout(kl)
-        self.known = QPlainTextEdit()
-        self.known.setPlainText(self.cfg.get("vf_known", ""))
-        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\n금지장로 — 보스, 불탄 노승, 석장\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\n(비워도 됩니다)\n\n💡 가장 빠른 방법: 게임 화면·도감에 나오는 '인게임 표기 그대로' 적으세요 (한국어든 영어든 그대로).\n   게임 데이터(유닛 ↔ 이름 정답표)와 글자 사전에서 바로 이어져 AI 확장 없이 즉시 맞습니다.\n   별명·줄임말·오타는 AI 확장 검색(원어·음차·지역·모티프 코드명)으로 넘어가서 시간이 더 걸립니다.")
-        self.known.setMinimumHeight(50)
-        v.addWidget(Resizable(self.known, "vf_known_h", 50))
-        self.known_tip = QLabel("")        # 게임별 맞춤 팁: 이 게임의 도감/정답표를 보고 '어떻게 적으면 바로 찾는지' 예시로 알려 준다
-        self.known_tip.setWordWrap(True)
-        self.known_tip.setStyleSheet("color:#8fb0d0")
-        self.known_tip.setVisible(False)
-        v.addWidget(self.known_tip)
-        self._update_known_tip()
-        self._warm_lore_bg()       # 글자 사전이 이미 있으면 도감을 뒤에서 조용히 읽어 [📖 도감] 버튼·팁을 켠다
         self.engine_note = QLabel("")
         self.engine_note.setWordWrap(True)
         v.addWidget(self.engine_note)
@@ -708,12 +673,50 @@ class VidFindTab(QWidget):
         eng_line.setWordWrap(True)
         eng_line.setStyleSheet("color:#8a93a6")
         v.addWidget(eng_line)
+        # 아는 정보: 영상·이미지 모드 전용 입력 — 모드 바로 아래에 두고, 이름·설명 모드에서는 통째로 숨긴다 (입력 칸 혼동 방지)
+        self.known_box = QWidget()
+        kv = QVBoxLayout(self.known_box)
+        kv.setContentsMargins(0, 0, 0, 0)
+        kl = QHBoxLayout()
+        self.known_label = QLabel("아는 정보 (선택) — 이 영상/이미지에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모")
+        kl.addWidget(self.known_label, 1)
+        self.btn_lore = QPushButton("📖 게임 도감 열기")
+        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
+        self.btn_lore.clicked.connect(self._open_lore)
+        self.btn_lore.setVisible(False)      # 도감이 있는 게임에서만 보인다 (_update_known_tip 이 켠다)
+        kl.addWidget(self.btn_lore)
+        kl.addWidget(HelpIcon("한 줄에 캐릭터 하나씩, 'Enter' 로 줄을 나눠 적으세요. 형식: 이름 — 메모 (메모는 없어도 됩니다)\n\n"
+                              "메모에 적으면 도움이 되는 정보:\n"
+                              "· 찾으려는 몬스터 이름\n"
+                              "· 외형적 특징 (색, 크기, 갑옷, 뿔 …)\n"
+                              "· 인간형인지 / 4족 보행인지 / 크리처(괴물)인지\n"
+                              "· 쓰는 무기가 무엇인지 (검, 도끼, 창, 맨손 …)\n"
+                              "· 공격 방식이 무엇인지 (내려찍기, 돌진, 회전 …)"))
+        kv.addLayout(kl)
+        self.known = QPlainTextEdit()
+        self.known.setPlainText(self.cfg.get("vf_known", ""))
+        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\n금지장로 — 보스, 불탄 노승, 석장\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\n(비워도 됩니다)\n\n💡 가장 빠른 방법: 게임 화면·도감에 나오는 '인게임 표기 그대로' 적으세요 (한국어든 영어든 그대로).\n   게임 데이터(유닛 ↔ 이름 정답표)와 글자 사전에서 바로 이어져 AI 확장 없이 즉시 맞습니다.\n   별명·줄임말·오타는 AI 확장 검색(원어·음차·지역·모티프 코드명)으로 넘어가서 시간이 더 걸립니다.")
+        self.known.setMinimumHeight(50)
+        kv.addWidget(Resizable(self.known, "vf_known_h", 50))
+        self.known_tip = QLabel("")        # 게임별 맞춤 팁: 이 게임의 도감/정답표를 보고 '어떻게 적으면 바로 찾는지' 예시로 알려 준다
+        self.known_tip.setWordWrap(True)
+        self.known_tip.setStyleSheet("color:#8fb0d0")
+        self.known_tip.setVisible(False)
+        kv.addWidget(self.known_tip)
+        v.addWidget(self.known_box)
+        self.known_box.setVisible(mode0 != "char")
+        self._update_known_tip()
+        self._warm_lore_bg()       # 글자 사전이 이미 있으면 도감을 뒤에서 조용히 읽어 [📖 도감] 버튼·팁을 켠다
         self.char_panel = QWidget()
         cp = QVBoxLayout(self.char_panel)
         cp.setContentsMargins(0, 0, 0, 0)
         ch = QHBoxLayout()
+        lb_q = QLabel("🔍 여기에 입력")
+        lb_q.setStyleSheet("font-weight:700;color:#7ff0a0")
+        ch.addWidget(lb_q)
         self.char_q = QLineEdit()
-        self.char_q.setPlaceholderText("캐릭터 메쉬 이름 검색 (쉼표/띄어쓰기 = 모두 포함, 예: knight,armor). 비우고 검색하면 전체")
+        self.char_q.setPlaceholderText("찾을 몬스터의 이름이나 특징 — 예: 저팔계 / 흰 옷 늑대 / wolf  (글자로 못 찾으면 자동으로 정답표·도감·AI 확장)")
+        self.char_q.setToolTip("'이름·설명으로 찾기' 모드의 입력 칸은 여기입니다. 위의 '아는 정보' 칸은 영상·이미지 모드에서만 쓰여요.")
         self.char_q.returnPressed.connect(self.show_char_meshes)
         ch.addWidget(self.char_q, 1)
         self.char_rig = QComboBox()
@@ -1588,6 +1591,9 @@ class VidFindTab(QWidget):
         self.cfg["vf_mode_char"] = on
         self.cfg["vf_mode"] = "char" if on else ("image" if img else "video")
         self.char_panel.setVisible(on)
+        # '아는 정보'는 영상·이미지 모드 전용 — 이름·설명 모드에서는 통째로 숨겨 입력 칸을 헷갈리지 않게
+        if hasattr(self, "known_box"):
+            self.known_box.setVisible(not on)
         self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else ("영역 지정한 이미지로 찾기" if img else "캐릭터 추측 시작"))
         self.btn_guess_panel.setVisible(not on and not img)
         if on:
@@ -2174,6 +2180,17 @@ class VidFindTab(QWidget):
                             r_v = identify_verify.verify_rounds(prov.ask, gname_v,
                                                                 g_.frame, getattr(g_, "box", None), ok_v, thumbs_,
                                                                 FRAME_DIR, panel.make_sheet)
+                            n_th = sum(1 for t_ in thumbs_.values() if t_)
+                            if r_v is None:
+                                notes.append("생김새 비교: 시트를 만들지 못해 건너뜀 (후보 %d개 중 썸네일 %d개)" % (len(ok_v), n_th))
+                            elif not r_v.get("path"):
+                                notes.append("생김새 비교: 후보 %d개를 렌더해 비교했지만 AI 가 일치를 못 골랐습니다 (확신 %.0f%%%s). "
+                                             "이 판정은 인식 AI 성능에 좌우됩니다 — Gemini/Claude 로 바꾸면 좋아져요." % (
+                                                 n_th, float(r_v.get("confidence") or 0) * 100,
+                                                 (", " + r_v["why"]) if r_v.get("why") else ""))
+                            elif float(r_v.get("confidence") or 0) < 0.45:
+                                notes.append("생김새 비교: %s 를 지목했지만 확신이 낮아(%.0f%%) 반영하지 않았습니다." % (
+                                    assetidx.mesh_name(r_v["path"]), float(r_v.get("confidence") or 0) * 100))
                             if r_v and r_v.get("path") and float(r_v.get("confidence") or 0) >= 0.45:
                                 try:
                                     g_.ver_pick = r_v["path"]
