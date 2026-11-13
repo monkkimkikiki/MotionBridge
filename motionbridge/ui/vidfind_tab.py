@@ -1252,9 +1252,13 @@ class VidFindTab(QWidget):
 
         def job(w):
             idx = self._ensure_index(a, w, False)
-            w.progress.emit(0, 2, "단서 확장 중 (%s)" % clue)
+            w.progress.emit(0, 3, "에셋 목록 준비됨 (메시 %d · 애니 %d) — 엔티티 사전 여는 중" % (len(idx.meshes), len(idx.anims)))
             store = self._entities(idx, hint)
+            w.progress.emit(1, 3, "AI 에게 '%s' 확장 요청 중 (원어 정식명·병음 음차·지역 이니셜·모티프 코드명)" % clue)
             res = identify_namefind.find(prov.ask_text, clue, hint, [m.path for m in idx.meshes], idx.anims, store)
+            exp_ = res.get("expansion") or {}
+            got_ = ", ".join((exp_.get("romanized") or []) + (exp_.get("codenames") or []) + (exp_.get("initials") or []))[:120]
+            w.progress.emit(2, 3, ("확장 결과: %s → 폴더 %d개 점수 매김, 동작 이름으로 교차 확인 중" % (got_ or "(없음)", len(res.get("candidates") or []))))
             try:
                 # 같은 입구에서 '동작 설명'(7연속 스핀 공격 …)으로도 찾는다 — 두 엔진이 같은 캐릭터를 지목하면 가산
                 _c, mons, _h, mq = motionsearch.find_meshes_by_motion(idx, clue)

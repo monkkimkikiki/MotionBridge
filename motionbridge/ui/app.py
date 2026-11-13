@@ -1563,18 +1563,25 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - AI 미설정이면 바로 브라우저 검색으로
             prov = None
 
-        def job(_w):
+        def job(w):
             text = ""
+            cands = list(gamepresets.known_keys_for(name, os.path.basename(game.rstrip("\\/"))))
+            if cands:
+                w.progress.emit(0, 3, "내장 키 목록에서 '%s' 후보 %d개 찾음" % (name, len(cands)))
             if prov is not None:
                 try:
+                    w.progress.emit(1, 3, "AI 에게 '%s' 의 공개된 AES 키를 묻는 중" % name)
                     text = prov.ask_text(
                         "언리얼 엔진 게임 '%s' 의 커뮤니티에 공개된 pak/utoc AES-256 암호화 키를 아는 대로 알려줘.\n"
                         "형식: 0x 로 시작하는 64자리 16진수. 키만 한 줄에 하나씩, 다른 설명 없이." % name) or ""
                 except Exception:  # noqa: BLE001 - AI 실패는 '후보 없음'으로 처리
                     text = ""
-            cands = gamescan.extract_key_candidates(text)
+            for k in gamescan.extract_key_candidates(text):
+                if k not in cands:
+                    cands.append(k)
             if not cands:
                 return (None, [], 0)
+            w.progress.emit(2, 3, "후보 %d개를 실제로 넣어 보며 여는지 확인 중" % len(cands))
             key, tried = extractor.pick_working_key(helper, game, ue, usmap, cands)
             return (key, tried, len(cands))
 
@@ -1664,6 +1671,34 @@ class MainWindow(QMainWindow):
         self.ex_verdict.setStyleSheet("color:%s;font-weight:700" % color)
         self.btn_to_animref.setVisible(state == "red")
         self._verdict_state = state
+        # 암호화 게임인데 키가 비어 있으면: 내장 공개 키 목록에서 이름으로 매칭해 실제로 열리는지 검증 후 자동 입력
+        if sc.encrypted and not has_key:
+            folder = os.path.basename(os.path.normpath(sc.root or ""))
+            cands = gamepresets.known_keys_for(self.ex_gname.text(), folder, getattr(sc, "project", "") or "")
+            if cands:
+                QTimer.singleShot(0, lambda c=cands: self._try_known_keys(c))
+
+    def _try_known_keys(self, cands) -> None:
+        """내장 키 목록에서 매칭된 후보를 조용히 검증해 맞으면 채운다 (검사 직후 자동)."""
+        if self._worker is not None or self.ex_aes.text().strip():
+            return
+        helper = extractor.find_helper(self.cfg.get("helper"))
+        game = self.ex_game.text().strip()
+        if not helper or not game:
+            return
+        ue = self.ex_ue.currentData() or "GAME_UE5_4"
+        usmap = self.ex_usmap.text().strip() or None
+
+        def done(res) -> None:
+            key, _tried = res
+            if key and not self.ex_aes.text().strip():
+                self.ex_aes.setEnabled(True)
+                self.ex_aes.setText(key)
+                self._remember_key()
+                self.statusBar().showMessage("내장 키 목록에서 이 게임의 AES 키를 찾아 자동으로 채웠습니다 (실제로 열리는지 확인함).")
+
+        self.run_async(lambda w: extractor.pick_working_key(helper, game, ue, usmap, list(cands)), done,
+                       "내장 키 목록에서 AES 키 확인 중")
 
     def _remember_game(self, status: str = "ok", reason: str = "") -> None:
         """추출/검색이 실제로 성공한 설정을 게임과 함께 기억한다 (다음에 같은 게임 폴더를 고르면 자동으로 채움)."""

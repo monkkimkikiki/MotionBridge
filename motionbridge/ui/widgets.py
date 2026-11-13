@@ -547,6 +547,7 @@ class BusyDialog(QDialog):
         self.log.setVisible(False)
         self._last_log = ""
         v.addWidget(self.log)
+        self._log_line(0, 1, "작업 시작 — " + title)   # 보고가 드문 작업이라도 비어 보이지 않게
         row = QHBoxLayout()
         self.hint = QLabel("오른쪽 위 ✕ 로도 취소할 수 있어요" if closable else "작업이 끝나면 자동으로 닫혀요")
         self.hint.setEnabled(False)

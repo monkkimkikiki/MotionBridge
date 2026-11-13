@@ -15,6 +15,7 @@ import time
 from typing import Dict, List, Optional
 
 from . import bridge
+from .knownkeys import keys_for as known_keys_for  # noqa: F401 - 내장(배포용) 공개 키 목록 매칭
 
 FILE_NAME = "game_presets.json"
 FIELDS = ("name", "ue", "aes", "usmap", "links", "note", "status", "reason", "appid", "project", "exe", "folder", "updated")
