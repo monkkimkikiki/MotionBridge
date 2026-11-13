@@ -1560,6 +1560,25 @@ class VidFindTab(QWidget):
             idx = self._ensure_index(a, w, False)
             w.progress.emit(0, 3, "에셋 목록 준비됨 (메시 %d · 애니 %d) — 엔티티 사전 여는 중" % (len(idx.meshes), len(idx.anims)))
             store = self._entities(idx, hint)
+            # ⓪ 정답표/사전 '완전 일치'면 AI 를 아예 부르지 않는다 — 게임 데이터가 이미 이름 ↔ 코드명을 알고 있으므로 즉시.
+            #    (도감에서 고른 이름, 인게임 표기 그대로 적은 이름이 여기로 끝난다. 유닛 정답표는 [추출기 업데이트] 후 생김.)
+            direct = []
+            for hh in store.find(clue, limit=3):
+                if hh.score < 0.93:
+                    continue
+                for code in hh.entity.codenames:
+                    cl = "/" + (code or "").lower() + "/"
+                    ms = [m.path for m in idx.meshes if cl in m.path.lower()]
+                    if not ms:
+                        continue
+                    na = sum(1 for a2 in idx.anims if cl in (a2 or "").lower() or (code or "").lower() in (a2 or "").lower().rsplit("/", 1)[-1])
+                    if not any(d["folder"].lower() == code.lower() for d in direct):
+                        direct.append({"folder": code, "score": round(min(hh.score, 1.0), 3),
+                                       "why": "게임 데이터 일치 — '%s'" % clue, "meshes": ms, "anims": na})
+            if direct:
+                w.progress.emit(2, 3, "게임 데이터(정답표/사전)에서 즉시 일치 — AI 확장 생략")
+                return {"candidates": direct, "expansion": {}, "idx": idx, "clue": clue,
+                        "note": "게임 데이터 정답표로 즉시 일치 (AI 확장 생략 — 0.1초 미만)"}
             w.progress.emit(1, 3, "AI 에게 '%s' 확장 요청 중 (원어 정식명·병음 음차·지역 이니셜·모티프 코드명)" % clue)
             res = identify_namefind.find(prov.ask_text, clue, hint, [m.path for m in idx.meshes], idx.anims, store)
             exp_ = res.get("expansion") or {}
@@ -1630,21 +1649,30 @@ class VidFindTab(QWidget):
         self.char_mode = True
         self.mesh_list.clear()
         seen, n_items = set(), 0
-        for c in cands:
-            paths = c.get("meshes") or ([m.path for m in idx.meshes if ("/" + c["folder"].lower() + "/") in m.path.lower()] if idx else [])
-            for p in paths:
-                m = idx.mesh(p) if idx else None
-                if p in seen or m is None or not m.rigged or not self._class_ok(p):   # 인덱스에 있는 리깅 메시만 + 찾을 종류 체크
-                    continue
-                seen.add(p)
-                it = QListWidgetItem("[%d%% %s] %s    (%s)" % (round(c["score"] * 100), c["folder"], m.name, p))
-                it.setData(Qt.ItemDataRole.UserRole, p)
-                it.setToolTip("%s — %s\n%s" % (c["folder"], c["why"], p))
-                self.mesh_list.addItem(it)
-                n_items += 1
+
+        def _fill(apply_cls: bool) -> None:
+            nonlocal n_items
+            for c in cands:
+                paths = c.get("meshes") or ([m.path for m in idx.meshes if ("/" + c["folder"].lower() + "/") in m.path.lower()] if idx else [])
+                for p in paths:
+                    m = idx.mesh(p) if idx else None
+                    if p in seen or m is None or not m.rigged or (apply_cls and not self._class_ok(p)):   # 인덱스에 있는 리깅 메시만 + 찾을 종류 체크
+                        continue
+                    seen.add(p)
+                    it = QListWidgetItem("[%d%% %s] %s    (%s)" % (round(c["score"] * 100), c["folder"], m.name, p))
+                    it.setData(Qt.ItemDataRole.UserRole, p)
+                    it.setToolTip("%s — %s\n%s\n더블클릭하면 뷰포트(타깃)로 바로 열립니다" % (c["folder"], c["why"], p))
+                    self.mesh_list.addItem(it)
+                    n_items += 1
+
+        _fill(True)
+        if n_items == 0 and self._cls_want() is not None:   # 분류가 거칠어 전부 걸러진 경우: 0개로 끝내지 말고 전부 보여 준다
+            _fill(False)
+            if n_items:
+                lines.append("⚠ '찾을 종류' 체크와 맞는 후보가 없어 종류 구분 없이 전부 올렸습니다 — 이 게임의 분류가 아직 거칠 수 있어요 ([추출기 업데이트] 후 도감 연결로 정확해집니다).")
         self.confirmed = sorted(seen)
         self.mesh_list.selectAll()
-        lines.append("후보 %d종의 메시 %d개를 아래 후보 목록에 모두 올리고 선택해 두었습니다 — 애니메이션 후보도 같이 나옵니다. 아닌 것은 선택을 풀면 됩니다." % (len(cands), n_items))
+        lines.append("후보 %d종의 메시 %d개를 아래 후보 목록에 올리고 선택해 두었습니다 — 더블클릭하면 그 메시가 뷰포트로 바로 열립니다. 애니메이션 후보도 같이 나옵니다." % (len(cands), n_items))
         self.char_q.setText(res.get("clue") or top["folder"])
         self.char_note.setText("\n".join(lines))
         self._refill_anims()
@@ -1827,9 +1855,28 @@ class VidFindTab(QWidget):
                 gamenames.resolve_known(known, idx, book)
                 # 표시 이름으로 못 이은 보스 이름(금지장로 등): AI 확장 검색(원어·음차·지역·모티프 코드명)으로 잇고,
                 # 유력 후보 보스들을 전부 검수 후보에 넣어 검수자가 고르게 한다 (여러 개면 동시에 질의)
-                ks_ = [k for k in known if k.top is None]
-                store_k = self._entities(idx, hint) if ks_ else None
+                ks_all = [k for k in known if k.top is None]
+                store_k = self._entities(idx, hint) if ks_all else None
                 mp_k = [m.path for m in idx.meshes if cls_ok_j(m.path)]
+                ks_ = []
+                for k in ks_all:   # ⓪ 정답표/사전 '완전 일치'면 AI 를 부르지 않는다 — 내부 데이터가 이미 아는 이름은 즉시
+                    hitd = []
+                    for hh in (store_k.find(k.name, limit=2) if store_k is not None else []):
+                        if hh.score < 0.93:
+                            continue
+                        for code in hh.entity.codenames:
+                            cl = "/" + (code or "").lower() + "/"
+                            ms2 = [p for p in mp_k if cl in p.lower()]
+                            if ms2:
+                                p2 = min(ms2, key=lambda x: ("base" not in x.lower(), len(x)))
+                                if p2 not in {c.path for c in hitd}:
+                                    hitd.append(assetidx.MeshCandidate(p2, assetidx.mesh_name(p2), min(hh.score, 0.98), "게임 데이터 일치 — '%s'" % k.name))
+                    if hitd:
+                        for ci2, c2 in enumerate(hitd[:3]):
+                            k.cands.insert(ci2, c2)
+                        notes.append("아는 정보 '%s' → 게임 데이터(정답표/사전) 즉시 일치 — AI 확장 생략" % k.name)
+                    else:
+                        ks_.append(k)
                 for k, nf_ in zip(ks_, _pmap(ks_, lambda k_: identify_namefind.find(prov.ask_text, k_.name, hint, mp_k, idx.anims, store_k),
                                              "아는 정보 AI 확장 검색 (원어·음차·지역 코드명)")):
                     if isinstance(nf_, Exception):
