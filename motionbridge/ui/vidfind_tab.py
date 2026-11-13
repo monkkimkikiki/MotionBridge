@@ -30,6 +30,7 @@ from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, 
 from ..core.identify import apply as identify_apply
 from ..core.identify import entity_store as entstore
 from ..core.identify import namefind as identify_namefind
+from ..core.identify import unitlink as identify_unitlink
 from ..core.identify import verify as identify_verify
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
@@ -536,6 +537,12 @@ class VidFindTab(QWidget):
         self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\n금지장로 — 보스, 불탄 노승, 석장\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\n(비워도 됩니다)\n\n💡 가장 빠른 방법: 게임 화면·도감에 나오는 '인게임 표기 그대로' 적으세요 (한국어든 영어든 그대로).\n   게임 데이터(유닛 ↔ 이름 정답표)와 글자 사전에서 바로 이어져 AI 확장 없이 즉시 맞습니다.\n   별명·줄임말·오타는 AI 확장 검색(원어·음차·지역·모티프 코드명)으로 넘어가서 시간이 더 걸립니다.")
         self.known.setMinimumHeight(50)
         v.addWidget(Resizable(self.known, "vf_known_h", 50))
+        self.known_tip = QLabel("")        # 게임별 맞춤 팁: 이 게임의 도감/정답표를 보고 '어떻게 적으면 바로 찾는지' 예시로 알려 준다
+        self.known_tip.setWordWrap(True)
+        self.known_tip.setStyleSheet("color:#8fb0d0")
+        self.known_tip.setVisible(False)
+        v.addWidget(self.known_tip)
+        self._update_known_tip()
         self.engine_note = QLabel("")
         self.engine_note.setWordWrap(True)
         v.addWidget(self.engine_note)
@@ -552,9 +559,9 @@ class VidFindTab(QWidget):
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮은 줄에는 검수 표에 '⚠ 확신 낮음' 표시를 붙여 한 번 더 보게 합니다 (메시는 가장 유력한 후보가 그래도 골라져 있습니다).")
         r = QHBoxLayout()
-        self.rb_mode_monster = QRadioButton("영상으로 찾기 — AI 가 장면을 보고 추측 (오래 걸림)")
-        self.rb_mode_img = QRadioButton("영역 지정한 이미지로 찾기 — 몬스터만 집어서")
-        self.rb_mode_char = QRadioButton("이름으로 찾기 — 검색·AI 확장 (영상 없이)")
+        self.rb_mode_monster = QRadioButton("📹 영상으로 찾기 — 영상 전체를 훑어 자동 추측 (가장 느림)")
+        self.rb_mode_img = QRadioButton("🖼 영역 지정한 이미지로 찾기 — 몬스터만 집어서 (추천)")
+        self.rb_mode_char = QRadioButton("⌨ 이름·설명으로 찾기 — 영상 없이 글로")
         self.rb_mode_monster.setToolTip("영상 전체를 분석해 몬스터를 추측합니다 — 장면을 수십 장 뽑아 AI 에게 여러 번 물어서 가장 오래 걸립니다.\n"
                                         "찾는 몬스터가 정해져 있으면 '영역 지정한 이미지로 찾기'를 쓰세요. 결과는 어느 모드든 4) 검수 표로 이어집니다.")
         self.rb_mode_img.setToolTip("게임 영상을 일시정지하고 찍은 스크린샷을 1)에 넣고, 찾을 몬스터를 마우스로 박스 지정합니다.\n"
@@ -591,6 +598,11 @@ class VidFindTab(QWidget):
                               "체크한 종류 안에서만 후보를 찾습니다 — 잡몹을 찾는데 보스가 후보에 올라오는 것을 막아 줘요. 전부 체크하면 필터 없음."))
         r2.addStretch(1)
         v.addLayout(r2)
+        eng_line = QLabel("어느 모드든 같은 검색 엔진을 차례로 씁니다: ① 정답표(게임 데이터의 이름↔코드명) → ② 도감 일화 글 검색 → ③ 글자 사전·뜻 풀이 → ④ AI 확장(원어·음차·지역 코드) → ⑤ 외형(종족·들고 있는 것)."
+                          "  생김새 렌더 대조(⑥)는 🖼 이미지 모드에서만 돕니다. 자세한 건 옆 ? 와 [▸ 자세히] 로그.")
+        eng_line.setWordWrap(True)
+        eng_line.setStyleSheet("color:#8a93a6")
+        v.addWidget(eng_line)
         self.char_panel = QWidget()
         cp = QVBoxLayout(self.char_panel)
         cp.setContentsMargins(0, 0, 0, 0)
@@ -604,10 +616,9 @@ class VidFindTab(QWidget):
             self.char_rig.addItem(lab, key)
         self.char_rig.currentIndexChanged.connect(lambda *_a: self.show_char_meshes())
         ch.addWidget(self.char_rig)
-        self.ck_char_player = QCheckBox("플레이어블만")
-        self.ck_char_player.setToolTip("player/pc/hero 이름이 든 메시와 같은 폴더의 같은 리그 변형만. 끄면 몬스터·NPC 등 캐릭터 전체.")
+        self.ck_char_player = QCheckBox("플레이어블만")   # 화면에는 안 보임 — '찾을 종류'의 플레이어블 체크와 겹쳐서 숨김 (내부/테스트 호환용)
+        self.ck_char_player.setVisible(False)
         self.ck_char_player.toggled.connect(self._char_player_toggled)
-        ch.addWidget(self.ck_char_player)
         b = QPushButton("검색")
         b.clicked.connect(lambda *_a: self.show_char_meshes())
         ch.addWidget(b)
@@ -1162,6 +1173,48 @@ class VidFindTab(QWidget):
         self._lore_memo = (mt, cards)
         return cards
 
+    def _update_known_tip(self) -> None:
+        """게임별 맞춤 팁: 이 게임의 도감(일화)·정답표를 확인해서, 실제 예시를 들어 '어떻게 적으면 바로 찾는지'를 보여 준다."""
+        try:
+            cards = self._lore_cards()
+            game = ((self.hint.text().strip() if hasattr(self, "hint") else "")
+                    or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "") or "game")
+            linked = 0
+            try:
+                marker = os.path.join(bridge.CONFIG_DIR, "entities", entstore._safe(game) + "_unitlink.json")
+                with open(marker, "r", encoding="utf-8") as f:
+                    linked = int((json.load(f) or {}).get("linked") or 0)
+            except (OSError, ValueError, TypeError):
+                pass
+            lines = []
+            if cards:
+                lines.append("💡 이 게임('%s') 팁: 도감 %d종 발견 — 게임이 몬스터 특징을 '글'로 적어 둡니다. 적은 낱말이 이 글과 겹치면 AI 없이 즉시 찾습니다." % (game, len(cards)))
+                ex = self._lore_example(cards)
+                if ex:
+                    lines.append("   예) 이 게임의 도감은 이런 식입니다 — %s" % ex)
+                    lines.append("   → 저런 글에 나올 법한 낱말(종족·옷차림·무기·장소)이나 '인게임 이름 그대로'를 적으세요.")
+            if linked:
+                lines.append("   정답표: 게임 데이터에서 이름 ↔ 코드명 %d쌍을 읽어 뒀습니다 — 인게임 이름이면 즉시 확정됩니다." % linked)
+            if not cards and not linked:
+                lines = []     # 아직 자료가 없으면(검사 전/도감 없는 게임) 일반 팁(자리 글)만 보인다
+            self.known_tip.setText("\n".join(lines))
+            self.known_tip.setVisible(bool(lines))
+        except Exception:  # noqa: BLE001 - 팁은 보조
+            self.known_tip.setVisible(False)
+
+    @staticmethod
+    def _lore_example(cards) -> str:
+        """도감 카드 하나를 예시로: '이 게임은 몬스터를 이런 식으로 설명한다'."""
+        best = ""
+        for _i, c in sorted(cards.items()):
+            nm = c["names"].get("ko") or c["names"].get("en") or ""
+            tx = (c["texts"].get("ko") or c["texts"].get("en") or "").strip().replace("\n", " ")
+            if nm and len(tx) >= 20:
+                best = "'%s': \"%s…\"" % (nm, tx[:56])
+                if c["names"].get("ko"):
+                    break
+        return best
+
     def _ensure_unitlinks(self, st: "entstore.EntityStore", game: str) -> None:
         """게임이 데이터로 적어 둔 '유닛 ↔ 표시 이름' 연결(CardDesc ID)을 읽어 엔티티 사전에 넣는다 — 게임마다 한 번.
 
@@ -1346,6 +1399,7 @@ class VidFindTab(QWidget):
 
         def done(idx):
             self.index = idx
+            self._update_known_tip()
             self.show_char_meshes()
 
         self.win.run_async(job, done, "에셋 이름 목록 읽는 중")
@@ -1373,6 +1427,28 @@ class VidFindTab(QWidget):
             got_ = ", ".join((exp_.get("romanized") or []) + (exp_.get("codenames") or []) + (exp_.get("initials") or []))[:120]
             w.progress.emit(2, 3, ("확장 결과: %s → 폴더 %d개 점수 매김, 동작 이름으로 교차 확인 중" % (got_ or "(없음)", len(res.get("candidates") or []))))
             try:
+                # 도감 일화 검색: 적은 글('흰 옷 늑대' 같은 특징 문구)이 게임 도감의 설명과 겹치면 그 몬스터를 후보에 더한다
+                cards_n = self._lore_cards()
+                for h_ in (identify_unitlink.search_lore(clue, cards_n) if cards_n else [])[:3]:
+                    if h_["score"] < 0.5:
+                        continue
+                    for hh_ in store.find(h_["name"], limit=1):
+                        if hh_.score < 0.9:
+                            continue
+                        for code_ in hh_.entity.codenames:
+                            hit_ = next((c for c in res["candidates"] if c["folder"].lower() == code_.lower()), None)
+                            if hit_ is not None:
+                                hit_["score"] = round(min(hit_["score"] + 0.2, 1.0), 3)
+                                hit_["why"] += " + 도감 일화 '%s'" % h_["name"]
+                            else:
+                                res["candidates"].append({"folder": code_, "score": 0.9,
+                                                          "why": "도감 일화 — '%s' (%s)" % (h_["name"], ",".join(h_["words"])[:40]),
+                                                          "meshes": [], "anims": 0})
+                    res.setdefault("note", "")
+                res["candidates"].sort(key=lambda d: -d["score"])
+            except Exception:  # noqa: BLE001 - 도감 검색은 보조
+                pass
+            try:
                 # 같은 입구에서 '동작 설명'(7연속 스핀 공격 …)으로도 찾는다 — 두 엔진이 같은 캐릭터를 지목하면 가산
                 _c, mons, _h, mq = motionsearch.find_meshes_by_motion(idx, clue)
                 for m_ in mons:
@@ -1396,6 +1472,7 @@ class VidFindTab(QWidget):
 
     def _after_namefind(self, res) -> None:
         self.index = res.get("idx") or self.index
+        self._update_known_tip()
         cands = res.get("candidates") or []
         exp = res.get("expansion") or {}
         if not cands:
@@ -1893,6 +1970,7 @@ class VidFindTab(QWidget):
 
     def _after_guess(self, res) -> None:
         self.index = res["idx"]
+        self._update_known_tip()   # 이제 도감/정답표가 준비됐을 수 있으니 게임 맞춤 팁 갱신
         groups: List[vision.Group] = res["groups"]
         self.fill_table(groups)
         lines = ["장면 %d장 분석, 캐릭터 %d종 추측 (AI에게 알린 이름 %d종, 에셋 메시 %d / 애니메이션 %d)" % (
