@@ -1195,7 +1195,8 @@ class VidFindTab(QWidget):
         idx = assetidx.AssetIndex(meshes, anims, statics)
         assetidx.save_index(INDEX_CACHE, idx, game)
         try:
-            w.progress.emit(0, 1, "캐릭터 종류 분류 중 (보스/일반 몬스터/플레이어블/NPC — 목록 만들 때 한 번만)")
+            w.progress.emit(0, 1, "캐릭터 종류 분류·도감 읽는 중 (목록 만들 때 한 번만)")
+            self._lore_cards()      # 도감(27MB 사전)을 작업 스레드에서 미리 읽어 둔다 — UI 가 얼지 않게
             self._cls_map(idx)      # 분류를 지금 계산해 파일로 저장 — 이후 찾기에서는 바로 읽는다
         except Exception:  # noqa: BLE001 - 분류는 보조
             pass
@@ -1232,8 +1233,9 @@ class VidFindTab(QWidget):
         self._entstore_memo = ((id(idx), game), st)
         return st
 
-    def _lore_cards(self):
-        """게임 도감(일화·시구) 카드 — names.json 이 바뀌지 않는 한 한 번만 만든다."""
+    def _lore_cards(self, build: bool = True):
+        """게임 도감(일화·시구) 카드 — names.json 이 바뀌지 않는 한 한 번만 만든다.
+        build=False (UI 스레드용): 이미 읽어 둔 것만 쓴다 — 27MB 파싱으로 화면이 얼지 않게."""
         try:
             mt = os.path.getmtime(NAMES_CACHE) if os.path.isfile(NAMES_CACHE) else 0.0
         except OSError:
@@ -1241,6 +1243,8 @@ class VidFindTab(QWidget):
         memo = self.__dict__.get("_lore_memo")
         if isinstance(memo, tuple) and memo[0] == mt:
             return memo[1]
+        if not build:
+            return {}
         cards = {}
         try:
             from ..core.identify import unitlink
@@ -1254,7 +1258,7 @@ class VidFindTab(QWidget):
     def _update_known_tip(self) -> None:
         """게임별 맞춤 팁: 이 게임의 도감(일화)·정답표를 확인해서, 실제 예시를 들어 '어떻게 적으면 바로 찾는지'를 보여 준다."""
         try:
-            cards = self._lore_cards()
+            cards = self._lore_cards(build=False)   # UI 스레드: 작업(job)이 읽어 둔 것만 — 아직이면 팁은 다음 갱신 때
             game = ((self.hint.text().strip() if hasattr(self, "hint") else "")
                     or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "") or "game")
             linked = 0
@@ -1330,8 +1334,14 @@ class VidFindTab(QWidget):
             self.known_tip.setVisible(False)
 
     def _open_lore(self) -> None:
-        """도감 브라우저: 몬스터를 고르면 그 이름으로 '이름·설명으로 찾기'를 바로 돌린다."""
-        cards = self._lore_cards()
+        """도감 브라우저: 몬스터를 고르면 그 이름으로 '이름·설명으로 찾기'를 바로 돌린다. (큰 사전 파싱은 뒤에서)"""
+        cards = self._lore_cards(build=False)
+        if cards:
+            self._show_lore(cards)
+            return
+        self.win.run_async(lambda w: self._lore_cards(), self._show_lore, "게임 도감 읽는 중 (처음 한 번)")
+
+    def _show_lore(self, cards) -> None:
         if not cards:
             QMessageBox.information(self, "게임 도감", "이 게임에서 도감 데이터를 찾지 못했습니다. (글자 사전을 만든 뒤에 생깁니다 — 찾기를 한 번 돌리면 자동)")
             return
@@ -2185,9 +2195,12 @@ class VidFindTab(QWidget):
                 out.append(0)
         return out
 
-    def _cls_map(self, idx):
+    def _cls_map(self, idx, build: bool = True):
         """'캐릭터 폴더 -> 종류' 표. 인덱스를 묶을 때 한 번 계산해 파일로 저장하고, 다음부터는 바로 읽는다.
-        근거 서열(아래가 위를 덮어씀): 추정(애니 수·전용 연출) < 뜻 풀이 사전(AI) < 게임 도감(공식 분류). 플레이어블 표시는 유지."""
+        근거 서열(아래가 위를 덮어씀): 추정(애니 수·전용 연출) < 뜻 풀이 사전(AI) < 게임 도감(공식 분류). 플레이어블 표시는 유지.
+
+        build=False (UI 스레드용): 이미 계산된 것(메모/캐시 파일)만 쓰고, 없으면 빈 표 — 화면이 얼지 않게.
+        무거운 계산(도감 27MB 파싱·카탈로그)은 작업 스레드(build=True: 인덱스 묶기/추측 job)에서만 한다."""
         if idx is None or not idx:
             return {}
         memo = self.__dict__.get("_cls_memo")
@@ -2203,6 +2216,8 @@ class VidFindTab(QWidget):
                 return d["map"]
         except (OSError, ValueError):
             pass
+        if not build:
+            return {}
         from ..core import classify
         m = classify.classify([mm.path for mm in idx.meshes], idx.anims)
         try:
@@ -2253,7 +2268,10 @@ class VidFindTab(QWidget):
             return True
         idx = self.index or self._load_index_cached()
         from ..core import classify
-        return self._cls_map(idx).get(classify.folder_of(path), "mob") in want
+        m = self._cls_map(idx, build=False)      # UI 스레드: 계산된 표가 없으면 거르지 않는다 (화면이 얼지 않게)
+        if not m:
+            return True
+        return m.get(classify.folder_of(path), "mob") in want
 
     def _cls_tag(self, path: str) -> str:
         """후보 글머리에 붙일 [보스]/[일반 몬스터] 같은 표시."""
@@ -2261,7 +2279,7 @@ class VidFindTab(QWidget):
         if idx is None or not path:
             return ""
         from ..core import classify
-        k = self._cls_map(idx).get(classify.folder_of(path))
+        k = self._cls_map(idx, build=False).get(classify.folder_of(path))
         return ("[%s] " % classify.LABEL[k]) if k else ""
 
     # ================================================================== 검수 표
