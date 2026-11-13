@@ -102,7 +102,8 @@ class _GrabDialog(QDialog):
         self._full = ""            # 지금 장면의 원본 해상도 프레임 파일
         self._scale = 1.0
         v = QVBoxLayout(self)
-        tip = QLabel("① 타임바를 움직여 몬스터가 잘 보이는 장면에 놓고 → ② 화면에서 몬스터를 마우스로 끌어 박스 지정 → ③ [✂ 이 영역으로 바로 찾기]")
+        tip = QLabel("① 타임바를 움직여 몬스터가 잘 보이는 장면에 놓고 → ② 화면에서 몬스터를 마우스로 끌어 박스 지정 → ③ [완료]를 누르면 1) 목록에 이미지로 들어갑니다.\n"
+                     "찾기는 그 다음에 — '아는 정보'에 보스 이름을 적고 [이미지에서 영역 지정해서 찾기]를 누르세요.")
         tip.setWordWrap(True)
         v.addWidget(tip)
         self.view = _PickLabel(self)
@@ -122,16 +123,17 @@ class _GrabDialog(QDialog):
         h.addWidget(self.time_lb)
         v.addLayout(h)
         h = QHBoxLayout()
-        self.btn_go = QPushButton("✂ 이 영역으로 바로 찾기")
-        self.btn_go.setEnabled(False)
-        self.btn_go.setToolTip("지정한 박스만 잘라 AI 에게 한 번 보여 주고 곧바로 후보를 찾습니다.")
-        self.btn_go.clicked.connect(self._go)
-        h.addWidget(self.btn_go)
-        self.btn_more = QPushButton("＋ 이 몬스터도 (계속 지정)")
+        self.btn_more = QPushButton("✂ 이 영역 추가")
         self.btn_more.setEnabled(False)
-        self.btn_more.setToolTip("이 박스를 담아 두고 창을 닫지 않습니다 — 다른 장면/다른 몬스터를 더 지정한 뒤 [✂ 바로 찾기]로 한꺼번에 찾습니다.")
+        self.btn_more.setToolTip("지정한 박스를 잘라 담아 둡니다 — 다른 장면/다른 몬스터를 계속 지정할 수 있어요.")
         self.btn_more.clicked.connect(self._keep)
         h.addWidget(self.btn_more)
+        self.btn_go = QPushButton("완료 — 1) 목록에 추가")
+        self.btn_go.setEnabled(False)
+        self.btn_go.setToolTip("담아 둔 영역(박스가 그려져 있으면 그것까지)을 잘라 1) 영상/이미지 목록에 넣습니다.\n"
+                              "그 다음 '아는 정보'에 보스 이름 등을 적고 [이미지에서 영역 지정해서 찾기]를 누르면 찾기 시작 — 바로 찾지 않아요.")
+        self.btn_go.clicked.connect(self._go)
+        h.addWidget(self.btn_go)
         self.note = QLabel("")
         h.addWidget(self.note, 1)
         b = QPushButton("닫기")
@@ -187,8 +189,9 @@ class _GrabDialog(QDialog):
         pm = QPixmap(self._full)
         s = max(self._scale, 1e-9)
         orig = QRect(int(r.x() / s), int(r.y() / s), int(r.width() / s), int(r.height() / s)).intersected(pm.rect())
+        import time as _time
         t = self._t()
-        out = os.path.join(self.out_dir, "crop_%02d-%04.1f_%d.png" % (t // 60, t % 60, len(self.crops)))
+        out = os.path.join(self.out_dir, "crop_%s_%02d-%04.1f_%d.png" % (_time.strftime("%H%M%S"), t // 60, t % 60, len(self.crops)))
         try:
             if pm.copy(orig).save(out, "PNG"):
                 return out
@@ -203,7 +206,7 @@ class _GrabDialog(QDialog):
             self.view.band.hide()
             self.view.rect_sel = None
             self._picked()
-            self.note.setText("담아 둔 몬스터 %d개 — 계속 지정하거나 [✂ 바로 찾기]" % len(self.crops))
+            self.note.setText("담아 둔 영역 %d개 — 계속 지정하거나 [완료]로 목록에 추가" % len(self.crops))
 
     def _go(self) -> None:
         p = self._cut()
@@ -384,10 +387,10 @@ class VidFindTab(QWidget):
         b = QPushButton("영상/이미지 추가…")
         b.clicked.connect(self.add_files)
         h.addWidget(b)
-        b = QPushButton("🎞 영상에서 몬스터 지정해서 찾기…")
+        b = QPushButton("🎞 영상에서 몬스터 영역 따기…")
         b.setToolTip("목록에서 고른 영상(안 골랐으면 첫 영상)을 열어:\n"
-                     "① 타임바로 몬스터가 잘 보이는 장면을 고르고 → ② 그 화면에서 몬스터를 마우스로 박스 지정 → ③ 그 영역만 AI 에게 한 번 보여 줘 몇 초 만에 찾습니다.\n"
-                     "영상 전체 분석(오래 걸림) 없이 원하는 몬스터만 집어서 찾는 가장 빠른 방법입니다.")
+                     "① 타임바로 몬스터가 잘 보이는 장면을 고르고 → ② 그 화면에서 몬스터를 마우스로 박스 지정 → ③ [완료]로 1) 목록에 이미지로 추가.\n"
+                     "그 뒤 '아는 정보'에 보스 이름 등을 적고 [이미지에서 영역 지정해서 찾기]를 누르면, 그 영역만 AI 에게 보여 줘 몇 초 만에 찾습니다.")
         b.clicked.connect(self.grab_from_video)
         h.addWidget(b)
         b = QPushButton("AnimRef 클립 폴더…")
@@ -1332,10 +1335,22 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "영상에서 몬스터 지정", "ffmpeg 를 찾지 못해 영상에서 장면을 뽑을 수 없습니다.\n환경 설정에서 ffmpeg 경로를 지정해 주세요.")
             return
         dlg = _GrabDialog(self, ff, vids[0], os.path.join(bridge.CONFIG_DIR, "vf_crops"))
-        if not dlg.exec() or not dlg.crops:
+        dlg.exec()
+        if not dlg.crops:
             return
-        self.rb_mode_img.setChecked(True)     # 모드 표시도 '이미지로 찾기'로
-        self.start_guess(pre_frames=list(dlg.crops))
+        # 바로 찾지 않고 1) 목록에 이미지로 추가만 한다 — '아는 정보'를 적을 틈을 주기 위해
+        have = set(self.source_paths(False))
+        self.src_list.clearSelection()
+        for p in dlg.crops:
+            if p not in have:
+                self._add_source(p, "장면")
+            for i in range(self.src_list.count()):          # 새로 넣은(또는 이미 있던) 크롭을 선택해 둔다
+                if self.src_list.item(i).data(Qt.ItemDataRole.UserRole) == p:
+                    self.src_list.item(i).setSelected(True)
+        self.rb_mode_img.setChecked(True)     # 모드도 '이미지로 찾기'로
+        self._update_src_note()
+        self.status.setText("지정한 영역 %d장을 1) 목록에 추가했습니다.\n"
+                            "'아는 정보'에 보스 이름 등을 적으면 정확도가 올라갑니다 — 준비되면 [이미지에서 영역 지정해서 찾기]를 누르세요." % len(dlg.crops))
 
     def start_guess(self, force_index: bool = False, pre_frames: Optional[List[str]] = None) -> None:
         if self.rb_mode_char.isChecked():  # 캐릭터 메쉬 찾기: AI 추측 없이 이름 검색
@@ -1352,11 +1367,14 @@ class VidFindTab(QWidget):
                                         "1) 목록에 이미지(스크린샷)가 없습니다 — 이 모드는 이미지 파일만 쓰고 영상은 건드리지 않습니다.\n"
                                         "영상에서 찾으려면 1) 의 [🎞 영상에서 몬스터 지정해서 찾기…]를 누르세요 (장면 고르기 + 영역 지정).")
                 return
-            crop_dir = os.path.join(bridge.CONFIG_DIR, "vf_crops")
-            shutil.rmtree(crop_dir, ignore_errors=True)
+            import time as _time
+            crop_dir = os.path.normpath(os.path.join(bridge.CONFIG_DIR, "vf_crops"))
             pre_frames = []
             for ci, p in enumerate(imgs[:4]):
-                dlg = _CropDialog(self, p, os.path.join(crop_dir, "crop_%02d.png" % ci))
+                if os.path.normpath(os.path.dirname(p)) == crop_dir:
+                    pre_frames.append(p)                     # 영상에서 이미 영역 지정으로 만든 크롭 — 다시 지정하지 않고 그대로
+                    continue
+                dlg = _CropDialog(self, p, os.path.join(crop_dir, "crop_%s_%02d.png" % (_time.strftime("%H%M%S"), ci)))
                 if dlg.exec():
                     pre_frames.append(dlg.out_path or p)     # 영역 지정 → 크롭, '전체 이미지로' → 원본
             if not pre_frames:
