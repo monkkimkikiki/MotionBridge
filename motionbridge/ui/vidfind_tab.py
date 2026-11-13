@@ -597,6 +597,11 @@ class VidFindTab(QWidget):
         v.addLayout(h)
         kl = QHBoxLayout()
         kl.addWidget(QLabel("아는 정보 (선택) — 이 영상에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모"), 1)
+        self.btn_lore = QPushButton("📖 게임 도감 열기")
+        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
+        self.btn_lore.clicked.connect(self._open_lore)
+        self.btn_lore.setVisible(False)      # 도감이 있는 게임에서만 보인다 (_update_known_tip 이 켠다)
+        kl.addWidget(self.btn_lore)
         kl.addWidget(HelpIcon("한 줄에 캐릭터 하나씩, 'Enter' 로 줄을 나눠 적으세요. 형식: 이름 — 메모 (메모는 없어도 됩니다)\n\n"
                               "메모에 적으면 도움이 되는 정보:\n"
                               "· 찾으려는 몬스터 이름\n"
@@ -676,11 +681,6 @@ class VidFindTab(QWidget):
         eng_line.setWordWrap(True)
         eng_line.setStyleSheet("color:#8a93a6")
         v.addWidget(eng_line)
-        self.btn_lore = QPushButton("📖 게임 도감 열기 — 몬스터를 고르면 바로 찾기")
-        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
-        self.btn_lore.clicked.connect(self._open_lore)
-        self.btn_lore.setVisible(False)      # 도감이 있는 게임에서만 보인다 (_update_known_tip 이 켠다)
-        v.addWidget(self.btn_lore)
         self.char_panel = QWidget()
         cp = QVBoxLayout(self.char_panel)
         cp.setContentsMargins(0, 0, 0, 0)
@@ -1325,7 +1325,7 @@ class VidFindTab(QWidget):
             if hasattr(self, "btn_lore"):
                 self.btn_lore.setVisible(bool(cards))
                 if cards:
-                    self.btn_lore.setText("📖 게임 도감 열기 (%d종) — 몬스터를 고르면 바로 찾기" % len(cards))
+                    self.btn_lore.setText("📖 게임 도감 (%d종)" % len(cards))
         except Exception:  # noqa: BLE001 - 팁은 보조
             self.known_tip.setVisible(False)
 
