@@ -16,8 +16,8 @@ import shutil
 import tempfile
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QMimeData, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import QMimeData, QRect, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
     QHeaderView, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -510,9 +510,33 @@ class VidFindTab(QWidget):
         # 2) 인식 방식
         g = CollapsibleBox("2) 인식 방식 (검수자가 고릅니다)")
         v = QVBoxLayout(g)
+        qs = QHBoxLayout()      # 빠른 선택: 한 번 눌러 엔진·서비스·모델까지 설정 + 키 발급 페이지 열기
+        qs.addWidget(QLabel("빠른 선택"))
+        b = QPushButton("🆓 Gemini 무료 (추천)")
+        b.setToolTip("Google 무료 티어 — 카드 등록 없이 키만 발급(aistudio.google.com). 무료 중 성능이 가장 좋고 호출당 2~4초.\n누르면 설정이 끝나고, 키가 없으면 발급 페이지가 열립니다.")
+        b.clicked.connect(lambda *_a: self._quick_engine("gemini"))
+        qs.addWidget(b)
+        b = QPushButton("🆓 OpenRouter 무료")
+        b.setToolTip("무료 비전 모델 자동 선택 (하루 50회 제한, 모델이 매번 달라 정확도가 들쭉날쭉). 키는 openrouter.ai 에서 무료 발급.")
+        b.clicked.connect(lambda *_a: self._quick_engine("openrouter"))
+        qs.addWidget(b)
+        b = QPushButton("💳 Claude Haiku (유료·1회 ≈ 10원)")
+        b.setToolTip("가장 안정적 — 한도 걱정 없이 빠르고 정확. console.anthropic.com 에서 키 발급 + 크레딧 충전(최소 $5, 수백~수천 회 분량).")
+        b.clicked.connect(lambda *_a: self._quick_engine("claude"))
+        qs.addWidget(b)
+        qs.addWidget(HelpIcon(
+            "무료/유료 AI 고르기 — 어디서 키를 받나:<br><br>"
+            "🆓 <b>Google Gemini</b> (추천): 카드 불필요, 무료 중 최고 성능 — <a href='https://aistudio.google.com/apikey'>aistudio.google.com/apikey</a><br>"
+            "&nbsp;&nbsp;⚠ 무료 티어에 보낸 이미지는 Google 이 모델 개선에 쓸 수 있어요 (게임 스크린샷이면 보통 무방)<br>"
+            "🆓 <b>OpenRouter 무료</b>: 하루 50회 — <a href='https://openrouter.ai/keys'>openrouter.ai/keys</a><br>"
+            "🆓 <b>Groq</b>: 분당 30회, 매우 빠름 (비전 모델을 [모델 목록]에서 직접 선택) — <a href='https://console.groq.com/keys'>console.groq.com/keys</a><br>"
+            "💳 <b>Claude Haiku</b>: 1회 찾기 ≈ 10원, 한도 걱정 없음 — <a href='https://console.anthropic.com/settings/keys'>console.anthropic.com</a> (크레딧 최소 $5 충전)<br>"
+            "🐢 <b>Ollama(내 PC)</b>: 무료지만 호출당 수십 초~수 분 — 고사양 GPU 가 아니면 추천하지 않습니다"))
+        qs.addStretch(1)
+        v.addLayout(qs)
         h = QHBoxLayout()
         self.engine = QComboBox()
-        self.engine.addItem(vision.OllamaProvider.label, "ollama")
+        self.engine.addItem(vision.OllamaProvider.label + " — 느림, 고사양 GPU 전용", "ollama")
         self.engine.addItem(vision.GptOssProvider.label, "gptoss")
         self.engine.addItem(vision.ClaudeProvider.label, "claude")
         self.engine.addItem(vision.OpenAICompatProvider.label, "openai")
@@ -1008,6 +1032,29 @@ class VidFindTab(QWidget):
         kind = self._provider_kind()
         if kind in self._keys and not getattr(self, "_switching", False):
             self._keys[kind] = self.key.text()
+
+    def _quick_engine(self, which: str) -> None:
+        """빠른 선택: 엔진·서비스·모델을 한 번에 설정하고, 키가 없으면 발급 페이지를 연다."""
+        if which == "claude":
+            self.engine.setCurrentIndex(max(self.engine.findData("claude"), 0))
+            self.model.setText("claude-haiku-5-5")
+            if not self.key.text().strip():
+                QDesktopServices.openUrl(QUrl("https://console.anthropic.com/settings/keys"))
+                self.engine_note.setText("Claude(Haiku)로 설정했습니다. 키 발급 페이지를 열었어요 — 키를 만들어 'Claude API 키' 칸에 붙여 넣고 [연결 확인]을 누르세요 (Billing 에서 크레딧 최소 $5 충전 필요, 수백~수천 회 분량).")
+            self.key.setFocus()
+            return
+        name = {"gemini": "Google Gemini", "openrouter": "🆓 OpenRouter 무료 (자동 선택)", "groq": "🆓 Groq"}.get(which, "Google Gemini")
+        self.engine.setCurrentIndex(max(self.engine.findData("openai"), 0))
+        i = self.oa_preset.findData(name)
+        if i >= 0:
+            self.oa_preset.setCurrentIndex(i)
+        self._preset_changed()
+        if not self.key.text().strip():
+            url = vision.PRESET_INFO.get(name, ("", ""))[1]
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+            self.engine_note.setText("'%s' 로 설정했습니다. 키 발급 페이지를 열었어요 — 로그인해서 키를 만들어 'API 키' 칸에 붙여 넣고 [연결 확인]을 누르면 끝입니다." % name)
+        self.key.setFocus()
 
     def _preset_changed(self, *_a) -> None:
         """서비스를 바꾸면 모델을 그 서비스의 기본 모델로 (직접 고친 모델이 다른 서비스 기본값이 아닐 때만 유지)."""
