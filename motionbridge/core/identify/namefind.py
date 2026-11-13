@@ -209,16 +209,20 @@ def parse_mob(text: str) -> Dict:
 # 서로 자주 헷갈리는 종족 묶음 — AI 가 '여우'라고 봐도 실제 폴더는 늑대(Lang)인 경우가 흔하다 (어둡고 흐린 장면).
 # 한 묶음의 어간이 하나라도 나오면 묶음 전체로 넓혀 변형 폴더를 찾는다 (AI 호출 추가 없음 = 공짜 확장).
 _SPECIES_GROUPS = [
-    ["wolf", "fox", "dog", "jackal", "hound", "lang", "huli", "gou", "chai", "quan"],          # 개과 (狼/狐/狗/豺/犬)
-    ["tiger", "cat", "lion", "leopard", "panther", "mao", "shi", "bao", "laohu"],              # 고양이과 (虎/猫/狮/豹)
-    ["rat", "mouse", "weasel", "ferret", "marten", "shu", "huangshulang", "diao"],             # 쥐·족제비 (鼠/黄鼠狼/貂)
-    ["snake", "serpent", "viper", "she", "mang"],                                              # 뱀 (蛇/蟒)
-    ["monkey", "ape", "gorilla", "hou", "yuan"],                                               # 원숭이 (猴/猿)
-    ["bear", "xiong"],
-    ["boar", "pig", "hog", "zhu"],
-    ["bird", "eagle", "hawk", "crow", "crane", "niao", "ying", "que", "he"],
-    ["frog", "toad", "wa", "chan"],
-    ["deer", "elk", "lu"],
+    ["wolf", "fox", "dog", "jackal", "hound", "lang", "huli", "gou", "chai", "quan",
+     "늑대", "여우", "이리", "승냥이", "狼", "狐"],                                               # 개과
+    ["tiger", "cat", "lion", "leopard", "panther", "mao", "shi", "bao", "laohu",
+     "호랑이", "고양이", "사자", "표범", "虎", "猫", "狮", "豹"],                                  # 고양이과
+    ["rat", "mouse", "weasel", "ferret", "marten", "shu", "huangshulang", "diao",
+     "쥐", "족제비", "담비", "鼠", "貂"],                                                         # 쥐·족제비
+    ["snake", "serpent", "viper", "she", "mang", "뱀", "구렁이", "蛇", "蟒"],
+    ["monkey", "ape", "gorilla", "hou", "yuan", "원숭이", "猴", "猿"],
+    ["bear", "xiong", "곰", "熊"],
+    ["boar", "pig", "hog", "zhu", "돼지", "멧돼지", "猪"],
+    ["bird", "eagle", "hawk", "crow", "crane", "niao", "ying", "que", "he",
+     "새", "독수리", "매", "까마귀", "학", "鸟", "鹰", "鹤"],
+    ["frog", "toad", "wa", "chan", "개구리", "두꺼비", "蛙"],
+    ["deer", "elk", "lu", "사슴", "鹿"],
 ]
 
 

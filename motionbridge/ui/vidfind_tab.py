@@ -1143,6 +1143,25 @@ class VidFindTab(QWidget):
         self._entstore_memo = ((id(idx), game), st)
         return st
 
+    def _lore_cards(self):
+        """게임 도감(일화·시구) 카드 — names.json 이 바뀌지 않는 한 한 번만 만든다."""
+        try:
+            mt = os.path.getmtime(NAMES_CACHE) if os.path.isfile(NAMES_CACHE) else 0.0
+        except OSError:
+            mt = 0.0
+        memo = self.__dict__.get("_lore_memo")
+        if isinstance(memo, tuple) and memo[0] == mt:
+            return memo[1]
+        cards = {}
+        try:
+            from ..core.identify import unitlink
+            with open(NAMES_CACHE, "r", encoding="utf-8") as f:
+                cards = unitlink.journal_cards((json.load(f) or {}).get("entries") or [])
+        except Exception:  # noqa: BLE001 - 도감이 없는 게임
+            cards = {}
+        self._lore_memo = (mt, cards)
+        return cards
+
     def _ensure_unitlinks(self, st: "entstore.EntityStore", game: str) -> None:
         """게임이 데이터로 적어 둔 '유닛 ↔ 표시 이름' 연결(CardDesc ID)을 읽어 엔티티 사전에 넣는다 — 게임마다 한 번.
 
@@ -1676,10 +1695,36 @@ class VidFindTab(QWidget):
                         rows_x.append((g_, nm_, unknown_))
                     mesh_paths_ = [m.path for m in idx.meshes if cls_ok_j(m.path)]
                     store_ = self._entities(idx, hint) if rows_x else None
+                    lore_cards = self._lore_cards() if rows_x else {}
 
                     def _expand(t):
+                        from ..core.identify import unitlink as _ul
                         g_, nm_, unknown_ = t
                         ex_, why_ = [], ""
+                        desc_full = " ".join(x for x in (nm_, g_.description or "") if x).strip()
+                        lore_names = []
+                        # ⓪ 게임 도감(일화·시구) 글 검색 — AI 없이 수 ms. 게임이 직접 적어 둔 특징 글이라 가장 믿을 만하다.
+                        #    예: "white robed wolf" -> 도감 '늑대 검객' -> (정답표가 있으면) 코드명 -> 메시 바로.
+                        if lore_cards and desc_full:
+                            try:
+                                hits_l = _ul.search_lore(desc_full, lore_cards)
+                                lore_names = [h["name"] for h in hits_l if h["score"] >= 0.5][:3]
+                                if lore_names and store_ is not None:
+                                    for nm2 in lore_names:
+                                        for hh in store_.find(nm2, limit=1):
+                                            if hh.score < 0.9:
+                                                continue
+                                            for code in hh.entity.codenames:
+                                                cl = "/" + (code or "").lower() + "/"
+                                                ms2 = [mp for mp in mesh_paths_ if cl in mp.lower()]
+                                                if ms2:
+                                                    p2 = min(ms2, key=lambda x: ("base" not in x.lower(), len(x)))
+                                                    if not any(c.path == p2 for c in ex_):
+                                                        ex_.append(assetidx.MeshCandidate(p2, assetidx.mesh_name(p2), 0.9, "도감 일화 — '%s'" % nm2))
+                                    if ex_:
+                                        why_ = "도감 일화(정답표)"
+                            except Exception:  # noqa: BLE001 - 도감 검색은 보조
+                                lore_names = []
                         if not unknown_:   # 이름이 있으면: 원어·음차·지역 코드명 확장 (금지장로 방식)
                             nf_ = identify_namefind.find(prov.ask_text, nm_, hint, mesh_paths_, idx.anims, store_)
                             for cand_ in (nf_.get("candidates") or [])[:4]:
@@ -1689,7 +1734,7 @@ class VidFindTab(QWidget):
                                 ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
                             why_ = "AI 확장"
                         if not ex_:        # 이름이 없거나(잡몹) 이름 확장이 비면: 외형 설명으로 종족 변형 + 부속 파일 특징 (방패 든 늑대 방식)
-                            desc_x = " ".join(x for x in (nm_ if not unknown_ else "", g_.description or "") if x).strip()
+                            desc_x = " ".join(x for x in (nm_ if not unknown_ else "", g_.description or "", " ".join(lore_names)) if x).strip()
                             if desc_x:
                                 mob_ = identify_namefind.find_mob(prov.ask_text, desc_x, hint, mesh_paths_, idx.anims)
                                 for cand_ in (mob_.get("candidates") or [])[:8]:   # 같은 종족 변형이 많으면 생김새 토너먼트가 가린다

@@ -48,6 +48,23 @@ hits_en = st.find("Elder Jinchi", limit=3)
 check(hits_en and "GYCY_YanJianXi_01" in hits_en[0].entity.codenames, "영어 이름도 즉시 일치")
 check(unitlink.apply_to_store(st, links) == 0, "두 번 넣어도 중복 등록 없음")
 
+# ---- 도감 글 검색 (search_lore): 특징 낱말 -> 몬스터 이름 (AI 없이)
+CARDS_E = ENTRIES + [
+    ["en", "StringKVMapDesc", "CardDesc.103006.StoryBrief", "A burnt old monk with a khakkhara staff, consumed by greed."],
+    ["ko", "StringKVMapDesc", "CardDesc.103006.StoryBrief", "불에 탄 노승이 석장을 짚고 보물을 탐했다."],
+    ["en", "StringKVMapDesc", "CardDesc.101011.StoryBrief", "A grey wolf soldier patrolling the hills with a spear."],
+    ["ko", "StringKVMapDesc", "CardDesc.101011.UnitPoetry", "잿빛 늑대가 창을 들고 산을 지킨다."],
+]
+cards = unitlink.journal_cards(CARDS_E)
+check(len(cards) == 2 and "석장" in cards[103006]["texts"]["ko"], "카드 글 수집: %s" % sorted(cards))
+r1 = unitlink.search_lore("불탄 노승 석장", cards)
+check(r1 and r1[0]["name"] == "금지장로", "한국어 특징 -> 금지장로: %s" % [(h["name"], h["score"]) for h in r1[:2]])
+r2 = unitlink.search_lore("grey wolf with spear", cards)
+check(r2 and r2[0]["name"] == "Wolf Soldier", "영어 설명 -> Wolf Soldier: %s" % [(h["name"], h["score"]) for h in r2[:2]])
+check(unitlink.search_lore("", cards) == [] and unitlink.search_lore("용암 거인", cards) == [], "빈 질의/무관 질의는 빈 결과")
+r3 = unitlink.search_lore("늑대가 창을", cards)   # 조사 떼기: 늑대가->늑대, 창을->창
+check(r3 and r3[0]["name"] == "Wolf Soldier", "조사 붙은 한국어도 매칭: %s" % [(h["name"],) for h in r3[:1]])
+
 if fails:
     print("\n실패 %d개" % len(fails))
     sys.exit(1)
