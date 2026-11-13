@@ -21,10 +21,14 @@ def find_max(preferred: str = "", environ: Optional[Dict[str, str]] = None, glob
     env = os.environ if environ is None else environ
     cands: List[str] = []
     if preferred:
-        if exists(preferred):
+        low = preferred.replace("\\", "/").lower()
+        if exists(preferred) and low.endswith(".exe"):
             return preferred
+        # 실행 파일이 아니라 .max 장면/스크립트를 지정한 경우(WinError 193 의 원인): 그 폴더에서 진짜 실행 파일을 찾는다
+        base = os.path.dirname(preferred) if "." in low.rsplit("/", 1)[-1] else preferred
         for n in (BATCH, GUI):
-            cands.append(os.path.join(preferred, n))
+            if base:
+                cands.append(os.path.join(base, n))
     for k, v in sorted(env.items(), reverse=True):          # Autodesk 설치기가 ADSK_3DSMAX_x64_2025 같은 변수를 만든다
         if k.upper().startswith("ADSK_3DSMAX") and v:
             for n in (BATCH, GUI):
@@ -89,6 +93,10 @@ def make_wrapper(script: str, quit_after: bool) -> str:
 def run(exe: str, script: str, log: str, timeout: float = 900.0, runner: Callable = subprocess.run) -> Dict[str, object]:
     """3ds Max 로 script 를 실행. 반환: {"ok", "saved", "warnings", "log", "error"}. 로그는 실행 전에 지운다."""
     out: Dict[str, object] = {"ok": False, "saved": [], "warnings": [], "log": "", "error": ""}
+    if not exe.replace("\\", "/").lower().endswith(".exe"):
+        out["error"] = ("'%s' 은(는) 3ds Max 실행 파일이 아닙니다 (.max 장면 파일을 지정하면 WinError 193 이 납니다). "
+                        "설정의 Max 경로에 3dsmaxbatch.exe 또는 3dsmax.exe 를 지정하세요." % exe)
+        return out
     try:
         if os.path.exists(log):
             os.remove(log)

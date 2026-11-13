@@ -4,6 +4,8 @@ name: mbextract-weekly
 # 빌드나 확인이 실패하면 올리지 않으므로, 지난번에 올라간 정상 파일이 그대로 남는다.
 on:
   workflow_dispatch:
+  push:
+    paths: ["tools/mbextract/**", ".github/workflows/mbextract-weekly.yml"]   # 추출기 소스가 바뀌면 바로 다시 빌드
   schedule:
     - cron: "17 19 * * 0"   # 매주 월요일 04:17 (한국 시간)
 permissions:

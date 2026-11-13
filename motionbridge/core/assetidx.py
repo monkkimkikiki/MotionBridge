@@ -145,6 +145,19 @@ def norm_key(text: str) -> str:
 
 
 _STATIC_RX = re.compile(r"(?i)^sm[a-z]{0,2}_")
+_NOVIEW_HEAD = {"skel", "skeleton", "phys", "pa"}
+_NOVIEW_TAIL = ("_skeleton", "_physicsasset", "_physasset", "_phy")
+
+
+def is_viewable_mesh_path(path: str) -> bool:
+    """뷰포트에서 열어 볼 수 있는 메시 에셋인가.
+
+    스켈레톤 에셋(SKEL_*)과 피직스 에셋(*_PhysicsAsset)은 메시 패턴(sk*_)에 걸리지만
+    지오메트리가 없어 추출해도 뷰포트에서 열 수 없다 -> 메시 후보에서 거른다."""
+    base = os.path.basename((path or "").replace("\\", "/")).split(".")[0].lower()
+    if base.split("_", 1)[0] in _NOVIEW_HEAD:
+        return False
+    return not base.endswith(_NOVIEW_TAIL)
 
 
 def is_rigged_path(path: str) -> bool:
@@ -273,10 +286,11 @@ class MatchMemory:
 
 class AssetIndex:
     def __init__(self, mesh_paths: Iterable[str] = (), anim_paths: Iterable[str] = (), static_paths: Optional[Iterable[str]] = None) -> None:
-        self.meshes: List[MeshEntry] = [MeshEntry.of(p, True) for p in dict.fromkeys(mesh_paths)]   # 스켈레탈(리깅됨): AI 추측 대상
+        # 뷰포트에서 열 수 없는 것(SKEL_*/피직스 에셋)은 메시 후보에 넣지 않는다
+        self.meshes: List[MeshEntry] = [MeshEntry.of(p, True) for p in dict.fromkeys(mesh_paths) if is_viewable_mesh_path(p)]   # 스켈레탈(리깅됨): AI 추측 대상
         self.anims: List[str] = list(dict.fromkeys(anim_paths))
         self.statics_known = static_paths is not None   # 예전에 저장한 목록에는 스태틱 메시가 없다 (새로 읽어야 함)
-        self.statics: List[MeshEntry] = [MeshEntry.of(p, False) for p in dict.fromkeys(static_paths or ())]  # 리깅 없는 캐릭터 모델링
+        self.statics: List[MeshEntry] = [MeshEntry.of(p, False) for p in dict.fromkeys(static_paths or ()) if is_viewable_mesh_path(p)]  # 리깅 없는 캐릭터 모델링
         self._anim_toks: Dict[str, frozenset] = {}
         self._by_path: Dict[str, MeshEntry] = {m.path: m for m in self.statics}
         self._by_path.update({m.path: m for m in self.meshes})

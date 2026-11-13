@@ -40,8 +40,12 @@ def main():
         os.makedirs(other)
         open(os.path.join(other, "UnityPlayer.dll"), "wb").write(b"")
         mw.ex_game.setText(other)
+        called = []
+        mw.unity_tab.scan_game = lambda: called.append(1)   # UnityPy 설치 없이: 자동으로 이어지는지만 본다
         mw._after_scan(gamescan.scan_game(other))
-        assert "🔴" in mw.ex_verdict.text() and mw._verdict_state == "red", mw.ex_verdict.text()
+        # 유니티 게임이면 빨강 판정 대신 같은 탭 안에서 유니티 추출로 이어진다 (별도 탭 없음)
+        assert "유니티" in mw.ex_verdict.text() and "🟢" in mw.ex_verdict.text(), mw.ex_verdict.text()
+        assert called == [1], "검사가 유니티로 판별하면 Unity 에셋 검사가 자동으로 이어진다"
         assert mw.ex_aes.text() == "", "다른 게임으로 바꾸면 이전 게임의 키가 남지 않음"
         mw.ex_game.setText(root)
         mw._after_scan(gamescan.scan_game(root))

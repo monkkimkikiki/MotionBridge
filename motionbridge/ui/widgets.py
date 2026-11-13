@@ -5,7 +5,7 @@ import threading
 import traceback
 
 from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import QAbstractSlider, QApplication, QMenu
+from PySide6.QtWidgets import QAbstractSlider, QApplication, QMenu, QPlainTextEdit
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QProgressBar, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -533,6 +533,21 @@ class BusyDialog(QDialog):
         self.bar = QProgressBar()
         self.bar.setRange(0, 0)  # 몇 개 중 몇 번째인지 모르면 움직이는 막대
         v.addWidget(self.bar)
+        # 로딩바 아래 '자세히' 화살표: 열면 지금까지의 추론/진행 현황이 줄줄이 쌓여 보인다
+        self.btn_log = QPushButton("▸ 자세히 — 어떻게 추론 중인지 보기")
+        self.btn_log.setFlat(True)
+        self.btn_log.setCheckable(True)
+        self.btn_log.setStyleSheet("QPushButton{text-align:left;border:none;color:#8a93a6;padding:0}QPushButton:checked{color:#aab3c8}")
+        self.btn_log.toggled.connect(self._toggle_log)
+        v.addWidget(self.btn_log)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(500)
+        self.log.setMinimumHeight(150)
+        self.log.setVisible(False)
+        self._last_log = ""
+        v.addWidget(self.log)
+        self._log_line(0, 1, "작업 시작 — " + title)   # 보고가 드문 작업이라도 비어 보이지 않게
         row = QHBoxLayout()
         self.hint = QLabel("오른쪽 위 ✕ 로도 취소할 수 있어요" if closable else "작업이 끝나면 자동으로 닫혀요")
         self.hint.setEnabled(False)
@@ -557,7 +572,27 @@ class BusyDialog(QDialog):
         if not self._done:
             self.show()
 
+    def _toggle_log(self, on: bool) -> None:
+        self.btn_log.setText(("▾" if on else "▸") + " 자세히 — 어떻게 추론 중인지 보기")
+        self.log.setVisible(bool(on))
+        self.adjustSize()
+
+    def _log_line(self, i: int, n: int, name: str) -> None:
+        """진행 메시지를 아래 로그에 쌓는다 — 접혀 있어도 쌓여서, 나중에 열면 지난 과정이 다 보인다."""
+        if not name or name == self._last_log:
+            return
+        self._last_log = name
+        try:
+            import time as _t
+            head = ("[%d/%d] " % (min(i + 1, n), n)) if n > 1 else ""
+            self.log.appendPlainText("%s  %s%s" % (_t.strftime("%H:%M:%S"), head, name))
+            sb = self.log.verticalScrollBar()
+            sb.setValue(sb.maximum())
+        except Exception:  # noqa: BLE001 - 로그는 보조
+            pass
+
     def set_progress(self, i: int, n: int, name: str, label: str = "") -> None:
+        self._log_line(i, n, name)
         if n > 1:
             self.bar.setRange(0, int(n))
             self.bar.setValue(int(min(max(i, 0), n)))

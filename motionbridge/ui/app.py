@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import helperupdate, quat as Q
-from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
+from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, keyweb, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core import guide as guide_mod
 from ..core.history import History
@@ -45,6 +45,7 @@ from .chrometabs import ChromeTabs
 from ..core import posik
 from .clip_panel import ClipPanel
 from . import theme as _theme
+from .unity_tab import UnityExtractTab
 from .uikit import HelpIcon, Resizable, ViewportOverlay, arrow_button, label_with_help, with_help
 from .help_text import EXTRACT_SEARCH_TIPS
 from .widgets import BusyDialog, CollapsibleBox, EditPanel, NumField, PathTree, WheelGuard, Worker, fit_widths, wrappable
@@ -572,7 +573,7 @@ class MainWindow(QMainWindow):
         b.clicked.connect(self._reframe)
         opts.addWidget(b)
         opts.addStretch(1)
-        rl.addLayout(opts)
+        # (opts 줄은 아래에서 뷰포트 겹침 도구 줄(vp_tools)에 넣는다 — 스크롤 영향을 받지 않게)
         # ---- 본 편집: 파츠를 목록에서 고르거나 뷰포트에서 클릭해 고르고, 끌어서 돌린다 (값은 '본별 회전 보정'에 그대로 기록)
         bl = QHBoxLayout()
         self.cb_bone_edit = QPushButton("🦴 본 편집  OFF")
@@ -640,6 +641,20 @@ class MainWindow(QMainWindow):
         self.btn_bone_reset.clicked.connect(self._bone_reset_selected)
         self.btn_bone_reset.setEnabled(False)
         bl2.addWidget(self.btn_bone_reset)
+        self.btn_virtual_end = QPushButton("가상 끝점")
+        self.btn_virtual_end.setToolTip("발끝(Toe) 본이 없는 모델용: 고른 본(보통 발) 아래에 '보이지 않는 끝점'을 정합니다.\n"
+                                        "소스의 발끝 애니메이션이 이 끝점을 움직이는 것처럼, 고른 본이 그 방향을 바라보며 따라 돕니다(룩앳을 계산에 구움).\n"
+                                        "씬에 더미 본을 만들지 않으므로 내보내기(FBX/바이페드)에는 아무것도 추가되지 않습니다.")
+        self.btn_virtual_end.clicked.connect(self._virtual_end_selected)
+        bl2.addWidget(self.btn_virtual_end)
+        self.ck_show_ve = QCheckBox("표시")
+        self.ck_show_ve.setChecked(True)
+        self.ck_show_ve.setToolTip("가상 끝점(초록 점선·고리)을 뷰포트에 보일지 — 계산에는 영향 없음")
+        self.ck_show_ve.toggled.connect(lambda v: (setattr(self.viewport, "show_virtual_ends", bool(v)), self.viewport.update()))
+        bl2.addWidget(self.ck_show_ve)
+        bl2.addWidget(self._chk("knee_up", "업노드=무릎",
+                                "발 방향을 맞출 때 '발등은 무릎 쪽'을 기준(업노드)으로 삼습니다 — 발을 수직으로 차올려도 안 뒤집힙니다.\n"
+                                "끄면 소스 발이 실제로 구른 만큼(바인드 대비 회전)을 기준으로 씁니다. 발이 비틀려 보이면 껐다 켜서 비교해 보세요."))
         self.btn_place_reset = QPushButton("배치 초기화")
         self.btn_place_reset.setToolTip("끌어서 옮긴 위치·회전을 0으로 되돌립니다 (모델이 서 있는 자리에 모션 시작을 맞춤)")
         self.btn_place_reset.clicked.connect(self._place_reset)
@@ -648,10 +663,23 @@ class MainWindow(QMainWindow):
                               "· 이 본 초기화: 고른 '본 하나'를 손본 것(회전·위치·크기, 레이어 키)을 되돌립니다.\n"
                               "· 배치 초기화: 모션 '전체'를 바닥에서 옮기거나 돌린 값(Shift+드래그 이동, Ctrl+드래그 회전, 루트 회전)을 0으로 되돌립니다.\n"
                               "본 수정은 그대로 두고 자리/방향만 처음으로 돌리고 싶을 때 씁니다."))
-        # 본 편집 도구(좌표계·포지션 분리·오토키·초기화)는 뷰포트 안 아래쪽에 겹쳐 둔다 — 뷰포트를 보면서 바로 누를 수 있게
+        # 보기 옵션·본 편집 도구·왼쪽 드래그 줄은 전부 뷰포트 안 아래쪽에 겹쳐 둔다 — 스크롤해도 늘 그 자리 (요청: 본 편집처럼 고정)
+        pl = QHBoxLayout()
+        pl.addWidget(QLabel("왼쪽 드래그"))
+        self.drag_combo = QComboBox()
+        for k, n in (("camera", "카메라 회전"), ("move", "애니메이션 이동"), ("rotate", "애니메이션 회전")):
+            self.drag_combo.addItem(n, k)
+        self.drag_combo.setToolTip("애니메이션 이동/회전: 바닥 위에서 모션 전체를 끌어 위치·방향을 맞춥니다.\n어느 모드든 Shift+드래그=이동, Ctrl+드래그=회전은 항상 됩니다.")
+        self.drag_combo.currentIndexChanged.connect(lambda *_a: setattr(self.viewport, "drag_mode", self.drag_combo.currentData() or "camera"))
+        pl.addWidget(self.drag_combo)
+        self.place_label = QLabel("")
+        self.place_label.setStyleSheet("color:#8a93a6")
+        pl.addWidget(self.place_label, 1)
         self.vp_tools = ViewportOverlay(self.viewport)
         self.vp_tools.add_row(bl)
         self.vp_tools.add_row(bl2)
+        self.vp_tools.add_row(opts)
+        self.vp_tools.add_row(pl)
         self.vp_tools.finish()
         self.bone_tree = QTreeWidget()
         self.bone_tree.setHeaderHidden(True)
@@ -679,18 +707,7 @@ class MainWindow(QMainWindow):
         self.viewport.bone_drag_started.connect(self._bone_drag_started)
         self.viewport.bone_moved.connect(self._bone_moved)
         self.viewport.bone_scaled.connect(self._bone_scaled)
-        pl = QHBoxLayout()
-        pl.addWidget(QLabel("왼쪽 드래그"))
-        self.drag_combo = QComboBox()
-        for k, n in (("camera", "카메라 회전"), ("move", "애니메이션 이동"), ("rotate", "애니메이션 회전")):
-            self.drag_combo.addItem(n, k)
-        self.drag_combo.setToolTip("애니메이션 이동/회전: 바닥 위에서 모션 전체를 끌어 위치·방향을 맞춥니다.\n어느 모드든 Shift+드래그=이동, Ctrl+드래그=회전은 항상 됩니다.")
-        self.drag_combo.currentIndexChanged.connect(lambda *_a: setattr(self.viewport, "drag_mode", self.drag_combo.currentData() or "camera"))
-        pl.addWidget(self.drag_combo)
-        self.place_label = QLabel("")
-        self.place_label.setStyleSheet("color:#8a93a6")
-        pl.addWidget(self.place_label, 1)
-        rl.addLayout(pl)
+        self.viewport.virtual_end_dragged.connect(self._virtual_end_dragged)
         self.viewport.placement_dragged.connect(self._placement_dragged)
         tl = QHBoxLayout()
         self.btn_play = QPushButton("▶ 재생")
@@ -868,6 +885,11 @@ class MainWindow(QMainWindow):
         v.addLayout(vh)
         lay.addWidget(g)
 
+        # 유니티 게임이면 [검사]가 알아보고 아래 언리얼 설정 대신 이 패널을 보여 준다 (별도 탭 없음)
+        self.unity_tab = UnityExtractTab(self, embedded=True)
+        self.unity_tab.setVisible(False)
+        lay.addWidget(self.unity_tab)
+
         g = CollapsibleBox("2) 추출 설정")
         self._scan_gated = [g]
         f = QFormLayout(g)
@@ -880,6 +902,19 @@ class MainWindow(QMainWindow):
         self.btn_keys.setToolTip("인터넷에서 찾은 글(키가 여러 개 섞여 있어도 됨)을 통째로 붙여 넣으면, 키처럼 생긴 것을 모두 뽑아 이 게임에 하나씩 넣어 보고 실제로 열리는 키만 채워 줍니다.")
         self.btn_keys.clicked.connect(lambda *_a: self._verify_key_candidates())
         ah.addWidget(self.btn_keys)
+        self.btn_key_auto = QPushButton("🌐 자동 찾기")
+        self.btn_key_auto.setToolTip("이 게임의 공개된 AES 키를 AI 에게 물어 후보를 모으고, 실제로 열리는 키만 자동으로 채웁니다.\n"
+                                     "못 찾으면 브라우저에 검색을 열어 드립니다 — 검색 결과 글을 복사해 [키 후보 검증…]에 붙여 넣으면 됩니다.")
+        self.btn_key_auto.clicked.connect(lambda *_a: self._auto_find_key())
+        ah.addWidget(self.btn_key_auto)
+        ah.addWidget(HelpIcon(
+            "AES 키란?  암호화된 게임의 .pak/.utoc 를 여는 열쇠(0x + 64자리 16진수)입니다. 게임마다 다릅니다.\n\n"
+            "구하는 법 (쉬운 순서):\n"
+            "① [🌐 자동 찾기] — AI 에게 물어 모은 후보를 실제로 넣어 보고 맞는 키만 채웁니다.\n"
+            "② 구글에서 \"게임이름 pak AES key\" 로 검색 — 커뮤니티(포럼·레딧·깃허브)에 공개된 글이 많습니다.\n"
+            "③ 찾은 글을 통째로 복사해 [키 후보 검증…]에 붙여 넣기 — 키처럼 생긴 것을 전부 뽑아 하나씩 검증합니다.\n"
+            "④ 모딩 커뮤니티(Nexus Mods 게시판, FModel 디스코드)의 그 게임 글타래에도 자주 올라옵니다.\n\n"
+            "키를 한 번 넣으면 게임 이름과 함께 기억되어, 다음에 같은 게임을 검사하면 자동으로 채워집니다."))
         self.ex_keylist = QComboBox()
         self.ex_keylist.setToolTip("한 번이라도 넣었던 AES 키를 게임 이름과 함께 기억해 둡니다. 고르면 AES 칸에 채워집니다.")
         self.ex_keylist.setMinimumWidth(170)
@@ -916,6 +951,18 @@ class MainWindow(QMainWindow):
         b = QPushButton("찾아보기…")
         b.clicked.connect(self._pick_usmap)
         h.addWidget(b)
+        b = QPushButton("🌐 구하는 법")
+        b.setToolTip("브라우저에 이 게임의 매핑 파일(.usmap) 검색을 열어 줍니다 (구글 + Nexus Mods). 옆의 ? 에 자세한 설명이 있습니다.")
+        b.clicked.connect(lambda *_a: self._usmap_search())
+        h.addWidget(b)
+        h.addWidget(HelpIcon(
+            "매핑 파일(.usmap)이란?  언리얼 5 게임의 에셋 구조(필드 이름표)를 담은 파일입니다. 대부분의 UE5 게임은 이 파일이 있어야 애니메이션·메시를 제대로 읽습니다.\n\n"
+            "구하는 법 (쉬운 순서):\n"
+            "① 게임 폴더 안 — 모드(UE4SS 등)를 깔았다면 ue4ss\\Mappings.usmap 처럼 이미 들어 있는 경우가 많습니다. [검사]가 게임 폴더에서 자동으로 찾아 채웁니다.\n"
+            "② Nexus Mods — nexusmods.com 에서 게임 이름으로 들어가 검색창에 usmap 또는 mappings 를 치면 모더가 올려 둔 파일이 자주 있습니다 ([🌐 구하는 법] 버튼이 열어 줍니다).\n"
+            "③ 구글 — \"게임이름 usmap\" 또는 \"게임이름 mappings file\" 로 검색합니다.\n"
+            "④ 직접 뽑기 — 모딩 커뮤니티의 'UE4SS dumper' 안내를 따라 게임에서 직접 뽑을 수도 있습니다 (고급).\n\n"
+            "받은 .usmap 을 [찾아보기…]로 지정하면 게임과 함께 기억됩니다. 게임 폴더나 공유 폴더에 넣어 두면 검사 때 자동으로 찾습니다."))
         wrap = QWidget()
         wrap.setLayout(h)
         f.addRow("mappings", wrap)
@@ -941,16 +988,19 @@ class MainWindow(QMainWindow):
         hh.addStretch(1)
         f.addRow("", hh)
         ph = QHBoxLayout()
-        b = QPushButton("게임 설정 내보내기…")
-        b.setToolTip("지금까지 기억한 게임별 설정(UE 버전·AES 키·링크·판정)을 파일 하나로 저장합니다. 다른 사람에게 건네 주면 그쪽에서 [불러오기]로 바로 씁니다.")
+        b = QPushButton("내 게임 설정을 파일로 저장 (팀원에게 주기)…")
+        b.setToolTip("게임마다 기억해 둔 UE 버전·AES 키·매핑 경로·참고 링크를 파일 하나(game_presets.json)로 저장합니다.\n팀원에게 건네 주면, 받은 쪽은 오른쪽 [가져오기]로 합친 뒤 그 게임을 검사할 때 전부 자동으로 채워집니다.")
         b.clicked.connect(lambda *_a: self.export_presets())
         ph.addWidget(b)
-        b = QPushButton("게임 설정 불러오기…")
-        b.setToolTip("다른 사람이 건네 준 게임 설정 파일을 내 기록에 합칩니다. 그 뒤 해당 게임 폴더를 검사하면 자동으로 채워집니다.")
+        b = QPushButton("받은 설정 파일 가져오기…")
+        b.setToolTip("팀원이 저장해 준 게임 설정 파일(game_presets.json)을 내 기록에 합칩니다. 그 뒤 해당 게임 폴더를 검사하면 AES 키·UE 버전·매핑이 자동으로 채워집니다.")
         b.clicked.connect(lambda *_a: self.import_presets())
         ph.addWidget(b)
+        ph.addWidget(HelpIcon("'게임 설정' = 게임마다 이 앱이 기억하는 것들(UE 버전, AES 키, 매핑 파일 경로, 참고 링크, 추출 가능 판정).\n"
+                              "평소에는 자동으로 저장·복원되므로 신경 쓸 일이 없고, 이 두 버튼은 '다른 사람과 주고받을 때'만 씁니다.\n"
+                              "위의 '공유 폴더'를 지정하면 파일을 주고받지 않아도 팀 전체가 자동으로 같은 설정을 씁니다."))
         ph.addStretch(1)
-        f.addRow("게임 설정", ph)
+        f.addRow("팀과 공유", ph)
         self._update_helper_label()
         lay.addWidget(g)
 
@@ -1059,7 +1109,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.btn_extract)
         lay.addWidget(g)
 
-        g = CollapsibleBox("3-2) 에셋 찾기 · 캐릭터/스켈레톤 보기 (재생 가능한 애니메이션만)")
+        g = CollapsibleBox("3-2) 캐릭터/스켈레톤 별로 묶어 정리하기 (재생 가능한 애니메이션만)")
         self._scan_gated.append(g)
         v = QVBoxLayout(g)
         self.char_panel = CharAssetPanel(self)
@@ -1369,6 +1419,13 @@ class MainWindow(QMainWindow):
     def _after_scan(self, sc) -> None:
         self.scan = sc
         self.ex_summary.setText(sc.summary())
+        # Black Myth: Wukong uses CUE4Parse's game-specific version profile.
+        # Select it automatically when the chosen install path identifies the game.
+        game_path = (sc.root or "").replace("\\\\", "/").replace("\\", "/").lower()
+        if "blackmythwukong" in game_path or "/b1/" in game_path or game_path.endswith("/b1"):
+            wukong_index = self.ex_ue.findData("GAME_BlackMythWukong")
+            if wukong_index >= 0:
+                self.ex_ue.setCurrentIndex(wukong_index)
         self.ex_aes.setEnabled(bool(sc.encrypted))
         self.ex_aes.setPlaceholderText("이 게임은 AES 키가 필요합니다 (0x + 64자리 16진수)" if sc.encrypted else "필요 없음 (암호화되지 않은 게임)")
         if sc.found:
@@ -1392,6 +1449,23 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001 - 자동 채우기 실패가 검사를 막지 않게
             self.statusBar().showMessage("게임 설정 자동 채우기 실패: %s" % e)
         self._update_scan_gate()
+        self._engine_switch(sc)
+
+    def _engine_switch(self, sc) -> None:
+        """검사로 알아낸 엔진에 맞는 추출 화면을 보여 준다: 언리얼 설정 <-> 유니티 패널 (같은 탭 안)."""
+        is_unity = getattr(sc, "engine", "") == "unity"
+        ut = self.__dict__.get("unity_tab")
+        if ut is None:
+            return
+        ut.setVisible(is_unity)
+        for box in self.__dict__.get("_scan_gated", []):
+            box.setVisible(not is_unity)
+        if is_unity:
+            self.ex_summary.setText("유니티 엔진 게임입니다 (pak/utoc 이 없는 것이 정상). 아래에서 에셋을 검사·추출하세요.")
+            self.ex_verdict.setText("🟢 유니티 게임 — 메시·텍스처·AnimationClip 원본을 추출할 수 있습니다.")
+            self.ex_verdict.setStyleSheet("color:#5ab0ff;font-weight:700")
+            self.btn_to_animref.setVisible(False)
+            ut.scan_game()   # 검사 버튼 한 번으로 유니티 에셋 검사까지 이어진다
 
     def _refill_keylist(self) -> None:
         cb = self.__dict__.get("ex_keylist")
@@ -1459,6 +1533,87 @@ class MainWindow(QMainWindow):
                                     "UE 버전(게임 전용 항목)이 틀려도 이렇게 나올 수 있습니다.\n\n마지막 결과: %s" % (len(cands), why))
 
         self.run_async(lambda w: extractor.pick_working_key(helper, game, ue, usmap, cands), done, "키 후보 %d개 확인 중" % len(cands))
+
+    def _game_display_name(self) -> str:
+        return self.ex_gname.text().strip() or os.path.basename(self.ex_game.text().strip().rstrip("\\/"))
+
+    def _usmap_search(self) -> None:
+        """브라우저에 매핑 파일 검색을 열어 준다 (구글 + Nexus Mods)."""
+        name = self._game_display_name()
+        if not name:
+            QMessageBox.information(self, "매핑 파일 찾기", "게임 폴더를 먼저 고르면 게임 이름으로 검색해 드립니다.")
+            return
+        from urllib.parse import quote_plus
+        QDesktopServices.openUrl(QUrl("https://www.google.com/search?q=" + quote_plus('%s usmap mappings' % name)))
+        QDesktopServices.openUrl(QUrl("https://www.google.com/search?q=" + quote_plus('site:nexusmods.com %s usmap OR mappings' % name)))
+        self.statusBar().showMessage("브라우저에 '%s' 매핑 파일 검색을 열었습니다 — 받은 .usmap 을 [찾아보기…]로 지정하세요." % name)
+
+    def _auto_find_key(self) -> None:
+        """AES 키 자동 찾기: AI 에게 공개된 키 후보를 물어 모으고, 실제로 이 게임이 열리는 키만 채운다. 못 찾으면 브라우저 검색을 연다."""
+        game = self.ex_game.text().strip()
+        helper = extractor.find_helper(self.cfg.get("helper"))
+        if not game or not helper:
+            QMessageBox.information(self, "AES 키 자동 찾기", "게임 폴더를 먼저 고르고 검사하세요." if helper else "추출 도우미(mbextract)를 찾지 못했습니다.")
+            return
+        name = self._game_display_name()
+        ue = self.ex_ue.currentData() or "GAME_UE5_4"
+        usmap = self.ex_usmap.text().strip() or None
+        try:
+            prov = self.vidfind.provider()
+        except Exception:  # noqa: BLE001 - AI 미설정이면 바로 브라우저 검색으로
+            prov = None
+
+        def job(w):
+            cands = list(gamepresets.known_keys_for(name, os.path.basename(game.rstrip("\\/")),
+                                                    share=self.cfg.get("preset_share_dir") or None))
+            if cands:
+                w.progress.emit(0, 4, "내장 키 목록에서 '%s' 후보 %d개 찾음" % (name, len(cands)))
+            # ① 웹 검색 (AI 불필요): 공개 모딩 포럼·깃허브 페이지를 열어 키처럼 생긴 것을 모은다
+            try:
+                w.progress.emit(1, 4, "웹에서 공개된 키 검색 중 (모딩 포럼·깃허브)")
+                web_c, _srcs = keyweb.find_keys(name, on_progress=lambda m: w.progress.emit(1, 4, m))
+                for k in web_c:
+                    if k not in cands:
+                        cands.append(k)
+                if web_c:
+                    w.progress.emit(1, 4, "웹에서 키 후보 %d개 수집" % len(web_c))
+            except Exception:  # noqa: BLE001 - 웹 검색 실패는 다음 단계로
+                pass
+            # ② AI 에게도 묻는다 (지식 속 키 — 틀려도 검증에서 걸러진다)
+            text = ""
+            if prov is not None:
+                try:
+                    w.progress.emit(2, 4, "AI 에게 '%s' 의 공개된 AES 키를 묻는 중" % name)
+                    text = prov.ask_text(
+                        "언리얼 엔진 게임 '%s' 의 커뮤니티에 공개된 pak/utoc AES-256 암호화 키를 아는 대로 알려줘.\n"
+                        "형식: 0x 로 시작하는 64자리 16진수. 키만 한 줄에 하나씩, 다른 설명 없이." % name) or ""
+                except Exception:  # noqa: BLE001 - AI 실패는 '후보 없음'으로 처리
+                    text = ""
+            for k in gamescan.extract_key_candidates(text):
+                if k not in cands:
+                    cands.append(k)
+            if not cands:
+                return (None, [], 0)
+            w.progress.emit(3, 4, "후보 %d개를 실제로 넣어 보며 여는지 확인 중" % len(cands))
+            key, tried = extractor.pick_working_key(helper, game, ue, usmap, cands)
+            return (key, tried, len(cands))
+
+        def done(res) -> None:
+            key, tried, n = res
+            if key:
+                self.ex_aes.setEnabled(True)
+                self.ex_aes.setText(key)
+                self._remember_key()
+                self.statusBar().showMessage("AI 가 모은 후보 %d개 중 실제로 열리는 키를 찾아 채웠습니다." % n)
+                return
+            from urllib.parse import quote_plus
+            QDesktopServices.openUrl(QUrl("https://www.google.com/search?q=" + quote_plus('%s pak AES key' % name)))
+            QMessageBox.information(self, "AES 키 자동 찾기",
+                                    ("AI 가 모은 후보 %d개를 모두 넣어 봤지만 맞는 키가 없었습니다.\n\n" % n if n else "AI 에게서 키 후보를 얻지 못했습니다.\n\n")
+                                    + "브라우저에 '%s pak AES key' 검색을 열어 두었습니다.\n"
+                                      "키가 보이는 글을 통째로 복사해 [키 후보 검증…]에 붙여 넣으면, 맞는 키만 골라서 채워 드립니다." % name)
+
+        self.run_async(job, done, "공개된 AES 키 후보를 모아 확인 중")
 
     def _sync_ue_list(self) -> list:
         """UE 버전 목록을 추출 도우미가 실제로 지원하는 전체 목록과 맞춘다 (고른 값은 유지)."""
@@ -1529,6 +1684,35 @@ class MainWindow(QMainWindow):
         self.ex_verdict.setStyleSheet("color:%s;font-weight:700" % color)
         self.btn_to_animref.setVisible(state == "red")
         self._verdict_state = state
+        # 암호화 게임인데 키가 비어 있으면: 내장 공개 키 목록에서 이름으로 매칭해 실제로 열리는지 검증 후 자동 입력
+        if sc.encrypted and not has_key:
+            folder = os.path.basename(os.path.normpath(sc.root or ""))
+            cands = gamepresets.known_keys_for(self.ex_gname.text(), folder, getattr(sc, "project", "") or "",
+                                               share=self.cfg.get("preset_share_dir") or None)
+            if cands:
+                QTimer.singleShot(0, lambda c=cands: self._try_known_keys(c))
+
+    def _try_known_keys(self, cands) -> None:
+        """내장 키 목록에서 매칭된 후보를 조용히 검증해 맞으면 채운다 (검사 직후 자동)."""
+        if self._worker is not None or self.ex_aes.text().strip():
+            return
+        helper = extractor.find_helper(self.cfg.get("helper"))
+        game = self.ex_game.text().strip()
+        if not helper or not game:
+            return
+        ue = self.ex_ue.currentData() or "GAME_UE5_4"
+        usmap = self.ex_usmap.text().strip() or None
+
+        def done(res) -> None:
+            key, _tried = res
+            if key and not self.ex_aes.text().strip():
+                self.ex_aes.setEnabled(True)
+                self.ex_aes.setText(key)
+                self._remember_key()
+                self.statusBar().showMessage("내장 키 목록에서 이 게임의 AES 키를 찾아 자동으로 채웠습니다 (실제로 열리는지 확인함).")
+
+        self.run_async(lambda w: extractor.pick_working_key(helper, game, ue, usmap, list(cands)), done,
+                       "내장 키 목록에서 AES 키 확인 중")
 
     def _remember_game(self, status: str = "ok", reason: str = "") -> None:
         """추출/검색이 실제로 성공한 설정을 게임과 함께 기억한다 (다음에 같은 게임 폴더를 고르면 자동으로 채움)."""
@@ -1958,12 +2142,25 @@ class MainWindow(QMainWindow):
             self.hip_fields.append(nf)
             f.addRow(lab, nf)
         self.place_fields = []
-        for i, lab in enumerate(("모션 놓을 자리 좌우(X)", "모션 놓을 자리 앞뒤(Z)")):
+        for i, lab in enumerate(("모션 놓을 자리 좌우(X)", "모션 놓을 자리 앞뒤(Z)", "모션 놓을 자리 높이(Y)")):
             nf = NumField(-100, 100, 0.1, 0.0, 2, slider=True)
-            nf.setToolTip("모션 전체(골반과 발)를 바닥 위에서 옮깁니다. 뷰포트에서 Shift+드래그로도 조절됩니다")
+            nf.setToolTip("모션 전체(골반과 발)를 바닥 위에서 옮깁니다. 뷰포트에서 Shift+드래그로도 조절됩니다" if i < 2 else
+                          "모션 전체(골반·발 목표·바닥선)를 통째로 올리거나 내립니다 — 루트/바닥 높이 지정용")
             nf.changed.connect(lambda v, ax=i: self._place_changed(ax, v))
             self.place_fields.append(nf)
-            f.addRow(lab, nf)
+            if i == 2:
+                hz = QHBoxLayout()
+                hz.addWidget(nf, 1)
+                bz = QPushButton("루트를 0으로 (발 안 뚫게)")
+                bz.setToolTip("지금 결과에서 발이 가장 낮게 닿는 지점을 재서 정확히 월드 0 에 오게 모션 전체를 맞춥니다.\n"
+                              "3ds Max 등으로 내보냈을 때 발이 그리드를 뚫지 않고 그 위에 서게 됩니다.")
+                bz.clicked.connect(self._place_floor_zero)
+                hz.addWidget(bz)
+                wz = QWidget()
+                wz.setLayout(hz)
+                f.addRow(lab, wz)
+            else:
+                f.addRow(lab, nf)
         f.addRow("모션 전체 회전 (루트 Yaw °)", self._num("root_yaw_deg", -180, 180, 1, 0, " °"))
         f.addRow(self._chk("transfer_root_motion", "제자리(인플레이스) — 수평 이동 제거", "체크하면 캐릭터가 앞으로 나아가지 않고 제자리에서 움직입니다", invert=True))
         f.addRow(self._chk("same_rig", "같은 스켈레톤이면 본 이름대로 그대로 적용 (사람 모양이 아닌 캐릭터)", "몬스터처럼 사람 본(골반·팔·다리)이 아닌 캐릭터는 사람 기준 매핑·좌표축 추정이 엉뚱하게 돌아갑니다. 소스 모션과 타깃 메시가 같은 스켈레톤(본 이름·계층·모양이 같음)이면 그 추정을 건너뛰고 본 이름대로 1:1 로 적용합니다. 꺼 두면 항상 사람 기준 리타겟을 씁니다."))
@@ -2351,7 +2548,9 @@ class MainWindow(QMainWindow):
         self.export_log.setMinimumHeight(140)
         lay.addWidget(self.export_log)
         b = QPushButton("출력 폴더 열기")
-        b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.out_edit.text())))
+        # 없는 경로를 그대로 넘기면 Windows 가 '위치를 사용할 수 없습니다' 창을 띄운다 -> 확인하고 가장 가까운 폴더를 연다
+        b.clicked.connect(lambda: osopen.open_in_explorer(self.out_edit.text().strip())
+                          or self.statusBar().showMessage("출력 폴더가 아직 없습니다: " + self.out_edit.text()))
         lay.addWidget(b)
         lay.addStretch(1)
         return sc
@@ -2753,14 +2952,59 @@ class MainWindow(QMainWindow):
         self.pr.settings.hip_offset = tuple(h)
         self.schedule()
 
+    def _virtual_end_dragged(self, j: int, d) -> None:
+        """뷰포트에서 가상 끝점(초록 고리)을 끌어 놓음 -> 그 본의 바인드 방향을 바꾸고 다시 계산."""
+        try:
+            self.pr.settings.virtual_ends[int(j)] = (float(d[0]), float(d[1]), float(d[2]))
+        except Exception:  # noqa: BLE001
+            return
+        self.schedule()
+        name = self.pr.tgt.skeleton.names[int(j)] if self.pr.tgt is not None and int(j) < len(self.pr.tgt.skeleton.names) else str(j)
+        self.statusBar().showMessage("가상 끝점 방향 수정: %s → (%.2f, %.2f, %.2f)  — [가상 끝점] 버튼의 '해제'로 되돌릴 수 있어요" % (name, float(d[0]), float(d[1]), float(d[2])))
+
     def _place_changed(self, axis: int, value: float) -> None:
         if self._syncing:
             return
-        p = list(self.pr.settings.place_offset)
-        p[axis] = value
-        self.pr.settings.place_offset = (p[0], p[1])
+        if axis == 2:            # 높이(Y): 모션 전체를 통째로 올리고 내린다
+            self.pr.settings.place_y = float(value)
+        else:
+            p = list(self.pr.settings.place_offset)
+            p[axis] = value
+            self.pr.settings.place_offset = (p[0], p[1])
         self._update_place_label()
         self.schedule()
+
+    def _place_floor_zero(self) -> None:
+        """루트를 높이 0으로: 지금 결과 애니메이션에서 발(없으면 가장 낮은 관절)의 '전체 프레임 최저 높이'를 재서,
+        그 지점이 정확히 월드 0 에 닿도록 모션 전체를 올리거나 내린다 — 발이 바닥을 뚫지 않는 위치."""
+        res = self.pr.result
+        if res is None or self.pr.tgt is None:
+            self.statusBar().showMessage("먼저 소스/타깃을 열어 리타겟 결과가 보여야 합니다.")
+            return
+        from ..core.model import fk as _fk
+        _, wp = _fk(self.pr.tgt.skeleton, res.anim.rot, res.anim.pos)
+        p = Q.rotate(res.frame_tgt[0], wp)                     # (T,J,3) 타깃 표준 프레임
+        slots = self.pr.tgt_slots or {}
+        feet = [slots[k] for k in ("L_Foot", "R_Foot", "L_Toe", "R_Toe") if k in slots]
+        # 발 '관절'(발목)은 바닥에서 발바닥 두께만큼 떠 있다 — 관절을 0 에 맞추면 메시가 그만큼 바닥을 뚫는다.
+        # 바인드 포즈에서 각 발 관절이 바닥(관절·메시 최저점)보다 얼마나 떠 있는지 재서 그만큼 빼 준다.
+        bp = Q.rotate(res.frame_tgt[0], self.pr.tgt.skeleton.bind_world()[1])   # (J,3) 바인드 표준 프레임
+        bind_ground = float(bp[:, 1].min())
+        try:
+            for m in self.pr.tgt.meshes or []:
+                bind_ground = min(bind_ground, float(Q.rotate(res.frame_tgt[0], np.asarray(m.vertices, dtype=float))[:, 1].min()))
+        except Exception:  # noqa: BLE001 - 메시가 없거나 형식이 다르면 관절 기준으로
+            pass
+        if feet:
+            low = min(float((p[:, j, 1] - max(float(bp[j, 1] - bind_ground), 0.0)).min()) for j in feet)
+        else:
+            joints = [t for _s, t in res.pairs] or list(range(p.shape[1]))
+            low = float(p[:, joints, 1].min())
+        st = self.pr.settings
+        st.place_y = float(st.place_y - low)                   # 현재 결과 기준 상대 보정: 발바닥 최저점 -> 정확히 0
+        self._sync_settings_ui()
+        self.schedule()
+        self.statusBar().showMessage("발바닥 최저점(%.4g)을 바닥 0 에 맞췄습니다 (모션 높이 %.4g)." % (low, st.place_y))
 
     def _placement_dragged(self, dx: float, dz: float, dyaw: float) -> None:
         """뷰포트에서 끌어 바꾼 애니메이션 배치를 설정에 더한다."""
@@ -2774,14 +3018,15 @@ class MainWindow(QMainWindow):
     def _place_reset(self) -> None:
         st = self.pr.settings
         st.place_offset = (0.0, 0.0)
+        st.place_y = 0.0
         st.root_yaw_deg = 0.0
         self._sync_settings_ui()
         self.schedule()
 
     def _update_place_label(self) -> None:
         st = self.pr.settings
-        moved = abs(st.place_offset[0]) > 1e-9 or abs(st.place_offset[1]) > 1e-9 or abs(st.root_yaw_deg) > 1e-9
-        self.place_label.setText(("배치: 좌우 %.3g · 앞뒤 %.3g · 회전 %.1f°" % (st.place_offset[0], st.place_offset[1], st.root_yaw_deg)) if moved else "")
+        moved = abs(st.place_offset[0]) > 1e-9 or abs(st.place_offset[1]) > 1e-9 or abs(st.root_yaw_deg) > 1e-9 or abs(st.place_y) > 1e-9
+        self.place_label.setText(("배치: 좌우 %.3g · 앞뒤 %.3g · 높이 %.3g · 회전 %.1f°" % (st.place_offset[0], st.place_offset[1], st.place_y, st.root_yaw_deg)) if moved else "")
 
     def _update_hip_ranges(self) -> None:
         if self.pr.tgt is None:
@@ -2816,7 +3061,7 @@ class MainWindow(QMainWindow):
         for i, nf in enumerate(self.hip_fields):
             nf.set_value(st.hip_offset[i])
         for i, nf in enumerate(self.place_fields):
-            nf.set_value(st.place_offset[i])
+            nf.set_value(st.place_offset[i] if i < 2 else st.place_y)
         self._update_place_label()
         self._fill_joint_combos()
         self._syncing = prev
@@ -3355,6 +3600,44 @@ class MainWindow(QMainWindow):
         if enable and not self.cb_bone_edit.isChecked():
             self.cb_bone_edit.setChecked(True)
         self.viewport.update()
+
+    _VE_PRESETS = [("전방 (+Z) — 보통 발끝", (0.0, 0.0, 1.0)), ("전방+아래 45°", (0.0, -0.7071, 0.7071)),
+                   ("아래 (-Y)", (0.0, -1.0, 0.0)), ("뒤 (-Z) — 뒤꿈치", (0.0, 0.0, -1.0)),
+                   ("직접 입력 (x,y,z)…", "custom"), ("가상 끝점 해제", None)]
+
+    def _virtual_end_selected(self) -> None:
+        """고른 본에 가상 끝점(보이지 않는 발끝) 방향을 정한다 — 더미+룩앳과 같은 결과를 내보내기 오염 없이."""
+        j = self.viewport.selected_joint
+        if j is None or self.pr.tgt is None:
+            QMessageBox.information(self, "가상 끝점", "뷰포트에서 본(보통 발)을 먼저 고르세요.")
+            return
+        names = [t for t, _v in self._VE_PRESETS]
+        cur = self.pr.settings.virtual_ends.get(int(j))
+        pick, ok = QInputDialog.getItem(self, "가상 끝점", "'%s' 의 끝점이 바인드 포즈에서 가리키는 방향:" % self.pr.tgt.skeleton.names[int(j)],
+                                        names, 0 if cur is None else min(range(len(self._VE_PRESETS)), key=lambda i: 0 if self._VE_PRESETS[i][1] == tuple(cur) else 1), False)
+        if not ok:
+            return
+        v = dict(self._VE_PRESETS)[pick]
+        if v == "custom":
+            cur_txt = ("%.3g, %.3g, %.3g" % tuple(cur)) if cur is not None else "0, -0.3, 1"
+            txt, ok2 = QInputDialog.getText(self, "가상 끝점 — 직접 입력",
+                                            "끝점 방향 x, y, z (화면 기준: X=왼쪽+, Y=위, Z=앞):", text=cur_txt)
+            if not ok2:
+                return
+            try:
+                nums = [float(x) for x in txt.replace(",", " ").split()]
+                assert len(nums) == 3 and any(abs(x) > 1e-9 for x in nums)
+                v = (nums[0], nums[1], nums[2])
+            except Exception:  # noqa: BLE001
+                QMessageBox.warning(self, "가상 끝점", "숫자 세 개를 쉼표/공백으로 적어 주세요 (예: 0, -0.3, 1).")
+                return
+        if v is None:
+            self.pr.settings.virtual_ends.pop(int(j), None)
+            self.statusBar().showMessage("가상 끝점을 해제했습니다.")
+        else:
+            self.pr.settings.virtual_ends[int(j)] = v
+            self.statusBar().showMessage("가상 끝점: %s → %s (소스 발끝이 자동으로 이 끝점에 매핑됩니다)" % (self.pr.tgt.skeleton.names[int(j)], pick))
+        self.schedule()
 
     def _bone_reset_selected(self) -> None:
         j = self.viewport.selected_joint

@@ -146,7 +146,13 @@ def test_maxrun():
         def boom(cmd, **kw):
             raise OSError("없음")
 
-        assert "없음" in maxrun.run("x", "s.ms", log, 5, boom)["error"]
+        assert "없음" in maxrun.run("x.exe", "s.ms", log, 5, boom)["error"]
+        # .max 장면 파일을 실행 파일로 잘못 지정한 경우(WinError 193 의 원인): 실행 전에 또렷한 안내
+        assert "실행 파일이 아닙니다" in maxrun.run("D:\\scene\\PC_Test.max", "s.ms", log, 5, boom)["error"]
+        # find_max: 장면 파일을 지정해도 그대로 돌려주지 않고 그 폴더/자동 탐색으로 넘어간다
+        have2 = {os.path.join("D:\\scene", "3dsmax.exe")}
+        assert maxrun.find_max("D:\\scene\\PC_Test.max", {}, lambda p: [], lambda p: p in have2).endswith("3dsmax.exe")
+        assert maxrun.find_max("D:\\scene\\PC_Test.max", {}, lambda p: [], lambda p: p == "D:\\scene\\PC_Test.max") == ""
     print("maxrun OK")
 
 

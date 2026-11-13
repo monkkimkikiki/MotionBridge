@@ -122,7 +122,8 @@ def main():
         check("취소" in vt.status.text(), "취소 안내: %s" % vt.status.text())
         vt.status.setText(prev_status)
         check("Dwarf" in prompts[0] and "StoneGolem" in prompts[0], "AI에게 게임 이름 목록을 알림")
-        check(len(prompts) == 2, "장면마다 호출: %d" % len(prompts))
+        # 장면 2장 + '모르는 캐릭터' 줄에 외형(종족·들고 있는 것) 확장 1회 = 3회
+        check(len(prompts) == 3 and "regular enemy" in prompts[2], "장면 2회 + 외형 확장 1회: %d" % len(prompts))
         r0, r1 = vt.rows
         check(r0.group.name == "Dwarf" and r0.chosen() == MESHES[0], "Dwarf 는 자동으로 맞는 메시: %s" % r0.chosen())
         check(r1.chosen() is None and r1.combo.currentData() is None, "모르는 캐릭터는 후보 없음")
@@ -204,57 +205,11 @@ def main():
         vt.index = assetidx.AssetIndex(MESHES + [pris], ANIMS)
         vt.cfg["game_dir"] = "G:/game"
         V.NAMES_CACHE = os.path.join(d, "names.json")
-        vt.rows = []
-        vt.table.setRowCount(0)
-        vt.add_blank_row()
-        vt.table.selectRow(0)
-        vt.ingame.setText("The Nameless Captive")
-        vt.ingame_ai.setChecked(False)
-        vt.find_by_ingame_name()
-        check(vt.rows[0].chosen() == pris, "비슷한 말(captive~prisoner)로 찾아 선택: %s" % vt.rows[0].chosen())
-        check(vt.rows[0].group.name == "The Nameless Captive", "빈 줄에 게임 속 이름이 들어감")
-        check("글자 사전" in vt.ingame_note.text(), "사전이 없다는 안내: %s" % vt.ingame_note.text())
-        # 글자 사전이 있으면 그쪽이 우선
-        book = gamenames.NameBook([("en", "E", "Enemy_Dwarf_Name", "The Nameless Captive")])
-        book.save(V.NAMES_CACHE, "G:/game")
-        vt.find_by_ingame_name()
-        check(vt.rows[0].chosen() == MESHES[0] and "게임 글자" in vt.rows[0].combo.currentText() + vt.rows[0].base[0].why, "글자 사전 결과가 1순위: %s" % vt.rows[0].chosen())
-        # AI 를 켜면 이름 목록 안에서만 고른다
-        ai = TL.FakeAI('{"matches":[{"name":"StoneGolem","confidence":0.9,"reason":"x"}]}')
-        vt.provider = lambda: ai
-        vt.ingame.setText("Rock Titan")
-        vt.ingame_ai.setChecked(True)
-        vt.find_by_ingame_name()
-        check(vt.rows[0].chosen() == MESHES[2] and ai.prompts, "AI 추천이 후보로: %s" % vt.rows[0].chosen())
-        QMessageBox.calls.clear()
-        vt.ingame.setText("")
-        vt.find_by_ingame_name()
-        check(QMessageBox.calls, "이름 없이 누르면 안내")
-        del vt.provider  # 시험용으로 바꾼 것을 되돌림
-        # ---------------- 특징·패턴으로 캐릭터 찾기: 이름이 다 틀려도 '스핀 공격' 애니메이션이 있는 캐릭터를 거꾸로 찾는다
+        # ('게임 속 이름으로 찾기' 칸은 '아는 정보' + AI 확장 검색으로 흡수되어 UI 에서 빠졌다)
+        # ('특징·패턴으로 찾기' 줄은 AI 확장 검색(이름+동작 통합)으로 흡수되어 UI 에서 빠졌다 — 엔진은 test_motionsearch 가 검증)
         spin = "Sparta/Content/Characters/Bosses/Swordman/Animation/Attacks/AS_Swordman_SpinAttack_01"
         sword = "Sparta/Content/Characters/Bosses/Swordman/Art/Mesh/SK_Swordman"
         vt.index = assetidx.AssetIndex(MESHES + [pris, sword], ANIMS + [spin, "Sparta/Content/Characters/Bosses/Swordman/Animation/AS_Swordman_Idle"])
-        vt.rows = []
-        vt.table.setRowCount(0)
-        vt.add_blank_row()
-        vt.table.selectRow(0)
-        vt.motion_text.setText("7연속 스핀 공격")
-        vt.motion_ai.setChecked(False)
-        vt.find_by_motion()
-        check(vt.rows[0].chosen() == sword, "스핀 애니메이션이 있는 Swordman 이 1순위: %s" % vt.rows[0].chosen())
-        check("spin" in vt.motion_note.text() and "Swordman" in vt.motion_note.text(), "안내: %s" % vt.motion_note.text())
-        kw = TL.FakeAI('{"keywords":["whirlwind","spin"]}')
-        vt.provider = lambda: kw
-        vt.motion_text.setText("빙글빙글 도는 공격")
-        vt.motion_ai.setChecked(True)
-        vt.find_by_motion()
-        check(kw.prompts and vt.rows[0].chosen() == sword and "AI" in vt.motion_note.text(), "AI 영어 낱말 보조: %s" % vt.motion_note.text())
-        del vt.provider
-        QMessageBox.calls.clear()
-        vt.motion_text.setText("")
-        vt.find_by_motion()
-        check(QMessageBox.calls, "빈 설명 안내")
         # 애니메이션 설명 검색: 고른 캐릭터 안 / 모든 캐릭터
         vt.confirmed = [sword]
         vt.mesh_list.clear()
@@ -523,13 +478,24 @@ def main():
             open(f, "wb").write(TL.write_locres(3, TL.DATA))
             return [f]
         V.extractor.export_locres = fake_el
+
+        class _W:   # 가짜 작업자 (진행 신호만 받는다)
+            class progress:
+                @staticmethod
+                def emit(*_a):
+                    pass
+
+        fake_args = ("helper.exe", "G:/game", "GAME_UE5_4", None, None)
         try:
-            vt.build_name_book()
+            vt._ensure_names(fake_args, _W())   # 글자 사전이 없으면 자동으로 만든다 (예전 버튼을 흡수)
             nb = vt.name_book()
-            check(nb is not None and len(nb) == 7 and "글자 사전 완성" in vt.ingame_note.text(), "글자 사전 저장: %s" % vt.ingame_note.text())
-            V.extractor.export_locres = lambda *a, **k: []
-            vt.build_name_book()
-            check("찾지 못했습니다" in vt.ingame_note.text(), "locres 가 없으면 안내: %s" % vt.ingame_note.text())
+            check(nb is not None and len(nb) == 7, "글자 사전 자동 저장: %s" % (len(nb) if nb else None))
+            V.extractor.export_locres = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("없음"))
+            vt._ensure_names(fake_args, _W())   # 이미 있으면 다시 만들지 않는다 (추출이 실패해도 터지지 않음)
+            check(vt.name_book() is not None, "있으면 그대로 둠")
+            os.remove(V.NAMES_CACHE)
+            vt._ensure_names(fake_args, _W())   # 추출 실패는 조용히 건너뛴다
+            check(vt.name_book() is None, "실패해도 추측은 계속")
         finally:
             V.extractor.export_locres = real_el
 
@@ -832,7 +798,7 @@ def main():
         check(seen_start == [clips], "클립 폴더 대화상자 시작 위치: %s" % seen_start)
 
         # 탭: 크롬식 탭 줄 (번호 = 처음 추가된 순서)
-        check(mw.tabs.count() == 8 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AI모캡", "탭 8개 (AnimRef 는 최상단 선택으로 이동)")
+        check(mw.tabs.count() == 8 and mw.tabs.tabText(5) == "영상찾기" and mw.tabs.indexOf(vt) == 5 and mw.tabs.tabText(7) == "AI모캡", "탭 8개 (Unity 는 추출 탭 안의 패널, AnimRef 는 최상단 선택으로 이동)")
         mw.tabs.setCurrentIndex(5)
         check(mw.tabs.currentIndex() == 5 and mw.tabs.current_page() is vt, "탭 이동/표시")
         check(mw.tabs.pages[1] is vt and mw.tabs.pages[0] is mw.tabs.widget(0), "탭 줄 둘째 칸은 영상찾기 (번호는 5 그대로)")

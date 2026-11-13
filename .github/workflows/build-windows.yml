@@ -36,8 +36,7 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - name: Build extraction helper (CUE4Parse)
-        # CUE4Parse API 변동으로 실패할 수 있다. 실패해도 나머지 빌드는 계속한다(추출 기능만 빠짐).
-        continue-on-error: true
+        # 추출 도우미가 없으면 설치 파일을 만들지 않는다. 성공한 빌드만 배포한다.
         run: |
           git clone --depth 1 --recursive https://github.com/FabianFG/CUE4Parse third_party/CUE4Parse
           dotnet publish tools/mbextract -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o tools/mbextract/out

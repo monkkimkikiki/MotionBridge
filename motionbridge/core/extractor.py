@@ -390,6 +390,28 @@ def export_meshes(helper: str, game: str, ue: str, aes: Optional[str], usmap: Op
             _drop_stage(stage)
 
 
+def export_json(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], paths: List[str], out_dir: str, on_event=None) -> List[str]:
+    """에셋 속성을 통째로 JSON 파일로 덤프한다 (유닛 데이터 등 '게임이 적어 둔 연결 정보' 읽기용).
+
+    옛 추출기(json 명령 없음)면 오류 이벤트가 나고 빈 목록 — 부르는 쪽이 조용히 건너뛰면 된다."""
+    os.makedirs(out_dir, exist_ok=True)
+    out: List[str] = []
+    fd, plist = tempfile.mkstemp(prefix="mb_json_", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(paths))
+        args = ["json"] + _base_args(game, ue, aes, usmap) + ["--paths-file", plist, "--out", out_dir]
+        for e in run_helper(helper, args, on_event):
+            if e.get("type") == "exported" and e.get("file"):
+                out.append(e["file"])
+    finally:
+        try:
+            os.remove(plist)
+        except OSError:
+            pass
+    return out
+
+
 def export_locres(helper: str, game: str, ue: str, aes: Optional[str], usmap: Optional[str], out_dir: str, on_event=None) -> List[str]:
     """게임 안 글자 사전(.locres)을 out_dir 에 꺼낸다. 만든 파일 경로 목록."""
     os.makedirs(out_dir, exist_ok=True)

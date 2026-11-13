@@ -252,6 +252,47 @@ def spine_blend(src_map: Dict[str, int], tgt_map: Dict[str, int]) -> Dict[str, L
     return out
 
 
+_FINGER_T = {"Thumb": 0.0, "Index": 0.25, "Middle": 0.5, "Ring": 0.75, "Pinky": 1.0}   # 손등 가로축에서의 통념적 위치
+
+
+def finger_blend(src_map: Dict[str, int], tgt_map: Dict[str, int]) -> Dict[str, List[Tuple[str, float]]]:
+    """타깃 손가락이 소스보다 적을 때(5지 -> 3지, 벙어리장갑 등), 빠진 소스 손가락의 회전을
+    가장 가까운 타깃 손가락에 가중 평균으로 섞을 비율. {타깃 슬롯 이름: [(소스 슬롯 이름, 비율)]}.
+
+    같은 이름 손가락은 비중 1.0 을 갖고, '빠진' 이웃 손가락만 거리(손등 가로 위치) 반비례로 끌어온다.
+    손가락 구성이 같으면 빈 dict (기존 1:1 그대로). 마디 번호(1~3)는 소스에 같은 마디가 없으면 가장 가까운 마디를 쓴다."""
+    out: Dict[str, List[Tuple[str, float]]] = {}
+    for side in ("L", "R"):
+        sf = [f for f in FINGERS if (side + "_" + f + "1") in src_map]
+        tf = [f for f in FINGERS if (side + "_" + f + "1") in tgt_map]
+        missing = [f for f in sf if f not in tf]
+        if not missing or not tf:
+            continue
+        for f in tf:
+            t = _FINGER_T[f]
+            base = [(f, 1.0)] if f in sf else []
+            near = [(s, max(0.0, 1.0 - abs(_FINGER_T[s] - t) / 0.3)) for s in missing]
+            near = [(s, w) for s, w in near if w > 1e-6]
+            parts = base + near
+            if not parts or (len(parts) == 1 and parts[0][0] == f):
+                continue                       # 끌어올 이웃이 없으면 기존 1:1
+            tot = sum(w for _s, w in parts)
+            for m in (1, 2, 3):
+                tkey = "%s_%s%d" % (side, f, m)
+                if tkey not in tgt_map:
+                    continue
+                row: List[Tuple[str, float]] = []
+                for s, w in parts:
+                    for mm in (m, m - 1, m + 1, 1):          # 같은 마디 > 한 마디 아래/위 > 첫 마디
+                        skey = "%s_%s%d" % (side, s, mm)
+                        if skey in src_map:
+                            row.append((skey, w / tot))
+                            break
+                if len(row) >= 2:
+                    out[tkey] = row
+    return out
+
+
 def spine_path(skel, slots: Dict[str, int]) -> Optional[Tuple[List[int], int]]:
     """골반(Hips)과 목(Neck) 사이에 실제로 있는 본 전부 (아래 -> 위, 매핑 여부와 상관없이)와 목 본 번호.
     골반이 목의 조상이 아니거나 척추 본이 하나도 없으면 None."""

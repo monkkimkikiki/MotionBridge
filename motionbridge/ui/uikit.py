@@ -7,14 +7,33 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QToolButton, QTo
 BIG = 16777215
 
 
+class _HelpPop(QLabel):
+    """클릭해서 열어 두는 도움말 말풍선 — 다시 누르거나 말풍선을 누르면 닫힌다."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWordWrap(True)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.setOpenExternalLinks(True)
+        self.setMaximumWidth(520)
+        self.setMargin(10)
+        self.setStyleSheet("QLabel{background:#20242e;color:#dde3f0;border:1px solid #5a6480;border-radius:8px;font-size:12px}")
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        self.hide()
+
+
 class HelpIcon(QLabel):
-    """작은 '?' 동그라미. 마우스를 올리거나 누르면 설명이 뜬다 (긴 설명을 화면에 늘어놓지 않기 위한 것)."""
+    """작은 '?' 동그라미. 마우스를 올리면 짧게, '누르면' 말풍선이 떠서 유지되고 다시 누르면 닫힌다."""
 
     STYLE = "QLabel{border:1px solid #8a93a6;border-radius:8px;color:#8a93a6;font-weight:700;font-size:11px}"
+    _open_pop: "_HelpPop" = None     # 한 번에 하나만 떠 있게
 
     def __init__(self, text: str = "", parent=None) -> None:
         super().__init__("?", parent)
         self._help = text
+        self._pop = None
         self.setFixedSize(16, 16)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(self.STYLE)
@@ -27,11 +46,29 @@ class HelpIcon(QLabel):
     def help_text(self) -> str:
         return self._help
 
+    def set_help(self, text: str) -> None:
+        self._help = text
+        self.setToolTip(text)
+
     def mousePressEvent(self, ev) -> None:  # noqa: N802
         try:
-            QToolTip.showText(ev.globalPosition().toPoint(), self._help, self)
-        except Exception:  # noqa: BLE001
-            pass
+            if self._pop is not None and self._pop.isVisible():     # 다시 누르면 끄기
+                self._pop.hide()
+                return
+            if HelpIcon._open_pop is not None and HelpIcon._open_pop.isVisible():
+                HelpIcon._open_pop.hide()                            # 다른 곳에 떠 있던 도움말은 닫는다
+            if self._pop is None:
+                self._pop = _HelpPop(self._help)
+            self._pop.setText(self._help)
+            self._pop.adjustSize()
+            self._pop.move(ev.globalPosition().toPoint())
+            self._pop.show()
+            HelpIcon._open_pop = self._pop
+        except Exception:  # noqa: BLE001 - 어떤 환경에서든 도움말 때문에 앱이 멈추지 않게
+            try:
+                QToolTip.showText(ev.globalPosition().toPoint(), self._help, self)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def with_help(widget, text: str) -> QWidget:

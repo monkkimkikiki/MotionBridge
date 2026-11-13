@@ -19,6 +19,8 @@ ZERO_GUID = "0" * 32
 
 # CUE4Parse 의 EGame 이름 (FModel 의 'UE 버전' 목록과 같은 이름). 최신부터.
 UE_VERSIONS = [
+    # Black Myth: Wukong uses a game-specific UE5.0 version profile in CUE4Parse.
+    "GAME_BlackMythWukong",
     "GAME_UE5_6", "GAME_UE5_5", "GAME_UE5_4", "GAME_UE5_3", "GAME_UE5_2", "GAME_UE5_1", "GAME_UE5_0",
     "GAME_UE4_27", "GAME_UE4_26", "GAME_UE4_25",
     # 커스텀 엔진 게임 전용 프리셋 (도우미에서 전체 목록을 못 받았을 때도 고를 수 있게 대표적인 것만)

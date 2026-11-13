@@ -127,11 +127,24 @@ try
     if (nAll == 0) FailC("ERR_NO_CONTAINERS", "이 폴더에서 .pak / .utoc 컨테이너를 찾지 못했습니다: " + root);
     // 암호화 안 된 컨테이너는 Mount() 로, 키가 있으면 SubmitKey 로 연다.
     int mounted = provider.Mount();
+    // CUE4Parse exposes encryption GUIDs discovered from PAK/IoStore headers after Initialize().
+    // Register the supplied AES key against each GUID; FGuid() alone misses non-zero IoStore GUIDs.
+    var requiredKeys = provider.RequiredKeys.ToArray();
+    Emit(new { type = "log", message = "필요한 암호화 키 GUID: " +
+        (requiredKeys.Length == 0 ? "(없음 또는 기본 GUID)" : string.Join(", ", requiredKeys)) });
     bool keyGiven = !string.IsNullOrEmpty(aes);
     string keyErr = "";
     if (keyGiven)
     {
-        try { mounted += provider.SubmitKey(new FGuid(), new FAesKey(aes!)); }
+        try
+        {
+            var aesKey = new FAesKey(aes!);
+            if (requiredKeys.Length == 0)
+                mounted += provider.SubmitKey(new FGuid(), aesKey);
+            else
+                foreach (var guid in requiredKeys)
+                    mounted += provider.SubmitKey(guid, aesKey);
+        }
         catch (Exception e) { keyErr = e.GetType().Name + ": " + e.Message; }
     }
     provider.PostMount();
@@ -200,6 +213,39 @@ try
             if (++n >= limit) break;
         }
         Emit(new { type = "done", count = n });
+    }
+    else if (cmd == "json")
+    {
+        // 에셋의 속성을 통째로 JSON 으로 덤프한다 — 게임이 데이터로 적어 둔 연결(유닛 ID ↔ 표시 이름 키 ↔ 캐릭터 경로)을
+        // 추측 없이 그대로 읽기 위한 범용 창구. CUE4Parse 의 Newtonsoft 변환기를 그대로 쓴다.
+        var listFileJ = Opt("--paths-file");
+        var outDirJ = Opt("--out") ?? ".";
+        Directory.CreateDirectory(outDirJ);
+        var targetsJ = string.IsNullOrEmpty(listFileJ)
+            ? new List<string>()
+            : File.ReadAllLines(listFileJ).Where(x => x.Trim().Length > 0).Select(x => x.Trim()).ToList();
+        if (targetsJ.Count == 0) Fail("json: --paths-file 로 덤프할 에셋 목록을 주세요.");
+        int nJ = 0;
+        foreach (var p in targetsJ)
+        {
+            try
+            {
+                if (!provider.TryLoadPackage(p, out var pkgJ) || pkgJ is null)
+                {
+                    Emit(new { type = "skip", path = p, reason = "unreadable" });
+                    continue;
+                }
+                var txt = Newtonsoft.Json.JsonConvert.SerializeObject(pkgJ.GetExports().ToArray());
+                var safe = Regex.Replace(Path.GetFileNameWithoutExtension(p), @"[^\w-]+", "_");
+                var outPath = Path.Combine(outDirJ, safe + ".json");
+                for (int d = 1; File.Exists(outPath); d++) outPath = Path.Combine(outDirJ, safe + "_" + d + ".json");
+                File.WriteAllText(outPath, txt);
+                Emit(new { type = "exported", path = p, file = outPath });
+                nJ++;
+            }
+            catch (Exception e) { Emit(new { type = "skip", path = p, reason = e.Message }); }
+        }
+        Emit(new { type = "done", count = nJ });
     }
     else if (cmd == "inspect")
     {

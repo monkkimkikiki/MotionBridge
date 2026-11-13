@@ -199,6 +199,59 @@ def cmd_blender(args) -> int:
     return 0 if p else 1
 
 
+
+def cmd_adapters(args) -> int:
+    from .core.universal_extract import list_adapters
+    for item in list_adapters():
+        _p("%-12s %-20s %s" % (item["name"], item["status"], item["description"]))
+    return 0
+
+
+def cmd_universal(args) -> int:
+    from .core.universal_extract import adapter_for
+    engine, adapter = adapter_for(args.engine, args.game)
+    if engine == "unreal":
+        return cmd_extract(args)
+    def on_event(ev):
+        if ev.get("type") == "skip":
+            _p("  건너뜀:", ev.get("path_id", ""), ev.get("reason", ""))
+    if args.action == "scan":
+        _p("감지된 엔진:", engine)
+        if hasattr(adapter, "scan"):
+            records = (adapter.scan(args.game, on_event=on_event, bundle_key=args.bundle_key) if engine == "unity"
+                       else adapter.scan(args.game, aes=args.aes, mapping=args.mapping, bundle_key=args.bundle_key, on_event=on_event))
+            _p("에셋 %d개" % len(records))
+        else:
+            _p("어댑터가 scan 기능을 제공하지 않습니다.")
+            return 2
+        return 0
+    if not hasattr(adapter, "scan"):
+        _p("이 어댑터는 scan 기능을 제공하지 않습니다.")
+        return 2
+    records = (adapter.scan(args.game, bundle_key=args.bundle_key) if engine == "unity"
+               else adapter.scan(args.game, aes=args.aes, mapping=args.mapping, bundle_key=args.bundle_key))
+    import re
+    rx = re.compile(args.filter, re.I)
+    records = [r for r in records if rx.search(str(r.get("name", "")) + " " + str(r.get("type", "")))]
+    if args.action == "list":
+        for r in records[:args.limit]:
+            _p("%-10s %-24s %s" % (r.get("path_id", ""), r.get("type", ""), r.get("name", "")))
+        _p("%d개 표시 / %d개 일치" % (min(len(records), args.limit), len(records)))
+        return 0
+    if not hasattr(adapter, "export"):
+        _p("이 어댑터는 export 기능을 제공하지 않습니다.")
+        return 2
+    ids = set(args.ids) if args.ids else {int(r["path_id"]) for r in records[:args.limit] if "path_id" in r}
+    export_ids = ids if engine == "unity" or ids else None
+    if engine == "unity":
+        made = adapter.export(args.game, args.out, path_ids=export_ids, on_event=on_event, bundle_key=args.bundle_key)
+    else:
+        made = adapter.export(args.game, args.out, path_ids=export_ids, aes=args.aes, mapping=args.mapping, bundle_key=args.bundle_key,
+                              on_event=on_event)
+    _p("완료: 파일 %d개 -> %s" % (len(made), args.out))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="motionbridge", description="MotionBridge %s — 모션 리타겟/내보내기" % __version__)
     sub = ap.add_subparsers(dest="cmd")
@@ -277,6 +330,33 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--set")
     b.set_defaults(fn=cmd_blender)
 
+
+    u = sub.add_parser("universal", help="엔진 자동 판별 후 Unity 또는 설치된 커스텀 어댑터로 검사/목록/추출")
+    u.add_argument("action", choices=["scan", "list", "export"])
+    u.add_argument("--game", required=True, help="게임 설치 폴더")
+    u.add_argument("--engine", default="auto", help="auto, unity, unreal 또는 플러그인 어댑터 이름")
+    u.add_argument("--filter", default=".", help="에셋 이름/종류 정규식")
+    u.add_argument("--limit", type=int, default=5000)
+    u.add_argument("--ids", nargs="*", type=int, help="추출할 에셋 path_id (생략하면 필터/limit 적용)")
+    u.add_argument("--out", default="extracted")
+    u.add_argument("--ue", default="GAME_UE5_4")
+    u.add_argument("--aes", help="사용 권한이 있는 파일의 AES 키 (Unreal/어댑터별)")
+    u.add_argument("--usmap", help="Unreal mappings 파일")
+    u.add_argument("--mapping", help="커스텀 어댑터 전용 매핑 파일")
+    u.add_argument("--bundle-key", help="Unity가 지원하는 AssetBundle 사용자 제공 키 (게임별)")
+    u.add_argument("--helper", help="Unreal mbextract 경로")
+    u.add_argument("--kind", choices=["anim", "mesh"], default="anim")
+    u.add_argument("--format", choices=["glb", "psk"], default="glb")
+    u.add_argument("--textures", action="store_true")
+    u.add_argument("--to", nargs="+", choices=["fbx", "obj", "glb"])
+    u.add_argument("--rig", choices=["both", "rigged", "static"], default="both")
+    u.add_argument("--target", choices=sorted(PRESETS), default="max")
+    u.add_argument("--blender")
+    u.set_defaults(fn=cmd_universal)
+
+    ad = sub.add_parser("adapters", help="설치된 게임 추출 어댑터 목록")
+    ad.set_defaults(fn=cmd_adapters)
+
     g = sub.add_parser("gui", help="GUI 실행")
     g.set_defaults(fn=None)
     return ap
@@ -308,7 +388,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_gui(handoff)
     try:
         return args.fn(args)
-    except (ValueError, bridge.BlenderError, extractor.ExtractError, OSError) as e:
+    except (ValueError, RuntimeError, bridge.BlenderError, extractor.ExtractError, OSError) as e:
         _p("오류:", e)
         return 1
 

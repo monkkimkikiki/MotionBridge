@@ -42,7 +42,18 @@ def restyle(w, name):
 
 
 def open_path(path):
-    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    """경로를 기본 프로그램/탐색기로 연다. 지워졌으면 가장 가까운 상위 폴더를 연다.
+    (없는 경로를 그대로 넘기면 Windows 가 '위치를 사용할 수 없습니다' 오류 창을 띄운다)"""
+    s = str(path or "").strip()
+    if not s:
+        return False
+    p = Path(s)
+    while not p.exists():
+        if p.parent == p:
+            return False
+        p = p.parent
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+    return True
 
 
 def reveal(path):
