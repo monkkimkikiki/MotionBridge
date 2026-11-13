@@ -1242,6 +1242,36 @@ class VidFindTab(QWidget):
                         notes.append("엔티티 사전으로 %d개 이름을 교정했습니다" % n_fix)
                 except Exception as e:  # noqa: BLE001 - 사전 교정은 보조 기능
                     errors.append("엔티티 사전: %s" % str(e)[:120])
+                # 영상에서 추측한 이름도 '아는 정보'처럼 AI 확장 검색(원어 정식명·음차·지역 머리글자 코드명)으로 잇는다
+                # — 이름 글자로 메시를 못 찾은 줄만, 최대 4줄. 찾은 후보는 전부 검수 칸에 들어간다.
+                try:
+                    asked_x = 0
+                    for g_ in groups_:
+                        if asked_x >= 4:
+                            break
+                        nm_ = (g_.name or "").strip()
+                        if not nm_ or nm_.lower() in assetidx.UNKNOWN_WORDS or idx.rank_meshes(nm_, "", 1, None):
+                            continue
+                        stop_check(w)
+                        w.progress.emit(asked_x, 4, "AI 확장 검색 (원어·음차·지역 코드명) " + nm_)
+                        asked_x += 1
+                        nf_ = identify_namefind.find(prov.ask_text, nm_, hint, [m.path for m in idx.meshes], idx.anims, self._entities(idx, hint))
+                        ex_ = []
+                        for cand_ in (nf_.get("candidates") or [])[:4]:
+                            if cand_["score"] < 0.35 or not cand_["meshes"]:
+                                continue
+                            p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
+                            ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
+                        if ex_:
+                            try:
+                                g_.ex_cands = ex_
+                            except Exception:  # noqa: BLE001
+                                pass
+                            notes.append("영상 추측 '%s' → AI 확장 후보 %d개 (검수 칸에서 고르세요)" % (nm_, len(ex_)))
+                except _Stopped:
+                    raise
+                except Exception as e:  # noqa: BLE001 - 확장은 보조
+                    errors.append("AI 확장 검색: %s" % str(e)[:120])
                 return groups_
 
             if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
@@ -1361,6 +1391,10 @@ class VidFindTab(QWidget):
         base = idx.rank_meshes(g.name, g.description, 8, self.memory)
         if g.alts or self.ck_fast.isChecked():   # 후보군: AI 가 꼽은 다른 이름들도 합쳐 5개
             base = self._merge_cands(idx, base, g.alts, 5)
+        ex_ = list(getattr(g, "ex_cands", None) or [])
+        if ex_:                                  # AI 확장 검색으로 찾은 후보는 '전부' 앞에 넣는다
+            have_ = {c.path for c in ex_}
+            base = ex_ + [c for c in base if c.path not in have_]
         if not base:      # 이름 글자로는 못 찾음 -> 뜻 풀이 사전(한국어/영어/한자 뜻)으로 후보를 낸다
             base = self._gloss_cands(" ".join(x for x in (g.name, g.description) if x))
         remembered = bool(base) and base[0].why.startswith("이전에 확정")

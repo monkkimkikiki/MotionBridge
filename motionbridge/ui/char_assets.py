@@ -80,9 +80,13 @@ class CharAssetPanel(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.addWidget(QLabel("<b>캐릭터·스켈레톤으로 찾기</b> — 파일 안을 실제로 읽어서, 같은 스켈레톤을 쓰는 메쉬와 '재생 가능한' 애니메이션만 캐릭터별로 묶습니다 "
-                           "(폴더 위치·이름은 보지 않습니다)."))
-        self.btn_auto = QPushButton("🔍  자동으로 캐릭터 찾기 (게임 전체)")
-        self.btn_auto.setMinimumHeight(38)
+                           "(폴더 위치·이름은 보지 않습니다).<br>"
+                           "<span style='color:#7ff0a0'>👇 먼저 아래 초록 버튼을 한 번 눌러야 목록이 생깁니다 — 처음 한 번만 오래 걸립니다.</span>"))
+        self.btn_auto = QPushButton("🔍  자동으로 캐릭터 찾기 (게임 전체) — 먼저 이걸 누르세요")
+        self.btn_auto.setMinimumHeight(40)
+        self.btn_auto.setStyleSheet(
+            "QPushButton{font-size:13px;font-weight:700;border:2px solid #2f7d4a;border-radius:8px;background:#245c3a;color:#dff5e6}"
+            "QPushButton:hover{background:#2f7d4a;color:#ffffff}")
         self.btn_auto.setToolTip("검색어 없이, 게임의 메쉬·스켈레톤·애니메이션 파일 안을 읽어서 캐릭터별로 자동으로 묶습니다. 처음 한 번만 오래 걸리고, 이어서 하거나 취소해도 읽은 만큼은 남습니다.")
         self.btn_auto.clicked.connect(lambda *_a: self.index_all())
         v.addWidget(self.btn_auto)

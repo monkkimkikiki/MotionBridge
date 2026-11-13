@@ -52,6 +52,7 @@ class Viewport(QWidget):
     bone_drag_started = Signal()
     bone_moved = Signal(int, object)   # 본을 끌어 옮김: (타깃 본 번호, 월드 이동 벡터 — 표준 프레임, 타깃 단위)
     bone_scaled = Signal(int, float)   # 본을 끌어 키움/줄임: (타깃 본 번호, 이번 이동의 배율 곱)
+    virtual_end_dragged = Signal(int, object)  # 가상 끝점을 끌어 옮김: (타깃 본 번호, 새 바인드 방향 (x,y,z) — 표준 프레임, 정규화됨)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,6 +88,8 @@ class Viewport(QWidget):
         self.setAcceptDrops(True)
         self._last = None
         self._base_target = None  # follow 모드에서 카메라 높이 기준
+        self.show_virtual_ends = True
+        self._ve_drag = None      # 가상 끝점을 끄는 중: (virtual_pts 의 n 번째, 지금 끝점 위치(표준 프레임))
 
     # --------------------------------------------------------------- 에셋 끌어다 놓기
     def dragEnterEvent(self, e) -> None:  # noqa: N802
@@ -333,11 +336,41 @@ class Viewport(QWidget):
         except Exception:  # noqa: BLE001 - 표시용이라 오류가 앱을 멈추지 않게
             pass
 
+    def _virtual_disp(self):
+        """지금 프레임의 가상 끝점 (n,2,3): [본 위치, 표시 끝점(길이는 키에 비례)] — 표준 프레임."""
+        vd = self.vd
+        vp = getattr(vd, "virtual_pts", None) if vd is not None else None
+        if vp is None or not getattr(self, "show_virtual_ends", True):
+            return None
+        f = min(self.frame, vp.shape[0] - 1)
+        out = np.array(vp[f], dtype=float)
+        d = out[:, 1] - out[:, 0]
+        ln = np.maximum(np.linalg.norm(d, axis=-1, keepdims=True), 1e-9)
+        out[:, 1] = out[:, 0] + d / ln * (vd.height * 0.18)
+        return out
+
+    def _pick_virtual(self, x: float, y: float, radius: float = 12.0):
+        """화면 (x,y) 근처의 가상 끝점 번호 (virtual_pts 의 n 순서) — 없으면 None."""
+        disp = self._virtual_disp()
+        if disp is None or len(disp) == 0:
+            return None
+        try:
+            xy, z = self.cam.project(disp[:, 1], float(self.width()), float(self.height()))
+            d = np.hypot(xy[:, 0] - x, xy[:, 1] - y)
+            d[~((z > 0) & np.isfinite(xy).all(axis=1))] = 1e9
+            i = int(np.argmin(d))
+            return i if d[i] <= radius else None
+        except Exception:  # noqa: BLE001
+            return None
+
     def _draw_virtual_ends(self, p: QPainter, w: float, h: float, sc, cam) -> None:
-        """가상 끝점(보이지 않는 발끝): 본에서 끝점까지 초록 선 + 끝에 초록 고리. 본을 따라 돈다."""
+        """가상 끝점(보이지 않는 발끝): 본에서 끝점까지 초록 선 + 끝에 초록 고리. 본을 따라 돌고, 고리를 끌면 방향을 바꾼다."""
         seg = sc.get("seg_virtual")
         if seg is None or len(seg) == 0:
             return
+        if self._ve_drag is not None and int(self._ve_drag[0]) < len(seg):   # 끄는 중이면 그 끝점은 마우스를 따라 그린다
+            seg = np.array(seg, dtype=float)
+            seg[int(self._ve_drag[0]), 1] = self._ve_drag[1]
         try:
             for a, b in seg:
                 xy, z = cam.project(np.stack([a, b]), w, h)
@@ -351,7 +384,7 @@ class Viewport(QWidget):
             xy0, z0 = cam.project(seg[0, 1][None], w, h)
             if z0[0] > 0 and np.isfinite(xy0).all():
                 p.setFont(QFont("", 8))
-                p.drawText(QPointF(float(xy0[0, 0]) + 8, float(xy0[0, 1]) - 5), "가상 끝점")
+                p.drawText(QPointF(float(xy0[0, 0]) + 8, float(xy0[0, 1]) - 5), "가상 끝점 (고리를 끌면 방향 수정)")
         except Exception:  # noqa: BLE001 - 표시용
             pass
 
@@ -469,6 +502,14 @@ class Viewport(QWidget):
         self.setFocus()
         self._last = ev.position()
         self._drag = self._left_mode(ev.button(), ev.modifiers())
+        if ev.button() == Qt.MouseButton.LeftButton and not (ev.modifiers() & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)):
+            vi = self._pick_virtual(ev.position().x(), ev.position().y())    # 가상 끝점(초록 고리)을 잡으면 그걸 끈다
+            if vi is not None:
+                disp = self._virtual_disp()
+                self._drag = "virtual_end"
+                self._ve_drag = (int(vi), np.array(disp[int(vi), 1], dtype=float))
+                self.update()
+                return
         if (self.bone_edit and ev.button() == Qt.MouseButton.LeftButton and (ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
                 and self.vd is not None and self.vd.tgt_pos is not None):
             jc = self.pick_joint(ev.position().x(), ev.position().y())      # Ctrl+클릭한 본에 키만 찍는다 (선택·카메라는 그대로)
@@ -518,6 +559,22 @@ class Viewport(QWidget):
         return self.drag_mode if self.drag_mode in ("move", "rotate") else "camera"
 
     def mouseReleaseEvent(self, ev):
+        if self._ve_drag is not None and getattr(self, "_drag", "") == "virtual_end":
+            try:     # 끌어 놓은 위치 -> 새 바인드 방향 (표시 변환의 역변환): 놓는 순간에만 리타겟을 다시 계산한다
+                i, p3 = int(self._ve_drag[0]), np.asarray(self._ve_drag[1], dtype=float)
+                vd = self.vd
+                ids = getattr(vd, "virtual_ids", None) or []
+                if vd is not None and i < len(ids) and getattr(vd, "virtual_delta", None) is not None and vd.Ft is not None:
+                    f = min(self.frame, vd.virtual_pts.shape[0] - 1)
+                    dir_std = p3 - np.asarray(vd.virtual_pts[f, i, 0], dtype=float)
+                    n_ = float(np.linalg.norm(dir_std))
+                    if n_ > 1e-9:
+                        df = Q.rotate(Q.conj(vd.Ft), dir_std / n_)                       # 표준 -> 파일 프레임
+                        dc = Q.rotate(vd.Ft, Q.rotate(Q.conj(vd.virtual_delta[f, i]), df))
+                        self.virtual_end_dragged.emit(int(ids[i]), tuple(float(v) for v in np.asarray(dc).reshape(-1)[:3]))
+            except Exception:  # noqa: BLE001 - 표시/편집 보조 기능이 앱을 멈추지 않게
+                pass
+            self._ve_drag = None
         self._last = None
         self._drag = "camera"
         self._drag_axis = -1
@@ -532,6 +589,12 @@ class Viewport(QWidget):
         self._last = pos
         btn = ev.buttons()
         mode = getattr(self, "_drag", "camera")
+        if mode == "virtual_end" and (btn & Qt.MouseButton.LeftButton) and self._ve_drag is not None:
+            i, p3 = self._ve_drag
+            d3 = np.asarray(GZ.plane_move_delta(self.cam, p3, dx, dy, float(self.width()), float(self.height())), dtype=float)
+            self._ve_drag = (i, p3 + d3)
+            self.update()
+            return
         if mode.startswith("bone") and (btn & Qt.MouseButton.LeftButton) and self.selected_joint is not None:
             if not (dx or dy):
                 return

@@ -43,6 +43,8 @@ class RetargetSettings:
     root_yaw_deg: float = 0.0  # 모션 전체를 시작 위치 기준으로 돌린다
     place_offset: Tuple[float, float] = (0.0, 0.0)  # 모션 전체의 바닥면 이동 (좌우 X, 앞뒤 Z; 타깃 단위). 몸 전체(골반+발 IK)가 같이 움직인다
     place_y: float = 0.0                # 모션 전체의 높이 이동 (타깃 단위): 골반·발 목표·바닥·고스트가 통째로 오르내린다 ('바닥을 0으로' 기능이 쓴다)
+    knee_up: bool = True                # 발등 업노드 = 무릎: 발 방향을 맞출 때 '발등은 무릎 쪽'을 기준으로 삼는다 (룩앳의 Up-Node).
+                                        # 끄면 소스 발의 실제 구름(바인드 대비 회전)을 기준으로 쓴다 — 발이 이상하게 비틀리면 꺼서 비교.
     finger_follow: bool = True          # 매핑 안 된 손가락·발가락 아래 마디가 상단 마디의 굽힘(로컬 회전 변화)을 그대로 물려받는다
                                         # (손가락은 비틀리지 않고 굽기만 하므로, 마디 수가 모자라도 자연스럽게 말린다)
     virtual_ends: Dict[int, Tuple[float, float, float]] = field(default_factory=dict)
@@ -577,9 +579,9 @@ def retarget(
                 # 발등(업벡터) 인식 — 업노드 방식: '발등은 항상 무릎(정강이) 쪽을 향한다'를 기준으로 쓴다.
                 # 월드 상방을 쓰면 발을 수직으로 차올릴 때 모호해지지만, 무릎 방향은 어떤 자세에서도 정의된다 (룩앳의 Up-Node 와 같은 원리).
                 s_knee = src_slots.get(side + "_LowLeg", -1)
-                if s_knee >= 0:
+                if st.knee_up and s_knee >= 0:
                     up_cur = ps[:, s_knee] - ps[:, sf]
-                else:   # 무릎이 없으면 소스 발의 실제 구름(바인드 대비 회전)을 기준으로
+                else:   # 업노드를 껐거나 무릎이 없으면: 소스 발의 실제 구름(바인드 대비 회전)을 기준으로
                     up_cur = Q.rotate(Q.mul(rs[:, sf], Q.conj(brs[sf])), _UP)
                 foot_follow[tf] = Q.mul(_frame_seq(dcur, up_cur), Q.mul(Q.conj(_bone_frame(dbind_t)), brt[tf]))
         if foot_follow:

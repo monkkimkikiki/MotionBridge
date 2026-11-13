@@ -216,6 +216,8 @@ class ViewData:
     center: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ground_y: float = 0.0
     virtual_pts: Optional[np.ndarray] = None  # (T,n,2,3) 가상 끝점 [본 위치, 끝점 위치] (표준 프레임) — 본을 따라 돈다
+    virtual_ids: Optional[list] = None        # 가상 끝점의 타깃 본 번호 (virtual_pts 의 n 순서와 같음)
+    virtual_delta: Optional[np.ndarray] = None  # (T,n,4) 본의 바인드 대비 회전(파일 프레임) — 끌어서 수정할 때 역변환용
     _pt_cache: Dict[Tuple[int, int], Mesh] = field(default_factory=dict, repr=False)  # (메시 id, 최대 점 수) -> 간추린 정점 부분집합
 
     @staticmethod
@@ -254,7 +256,7 @@ class ViewData:
             if ves:   # 가상 끝점: 본의 바인드 대비 회전을 따라 도는 '보이지 않는 발끝' 표식 (내보내기에는 없음)
                 try:
                     bwr, _bw = tk.bind_world()
-                    rows = []
+                    rows, ids, deltas = [], [], []
                     for j, d in sorted(ves.items()):
                         dc = np.asarray(d, dtype=float)
                         n_ = float(np.linalg.norm(dc))
@@ -264,9 +266,15 @@ class ViewData:
                         df = Q.rotate(Q.conj(Ft), dc / n_)                            # 표준 -> 파일 프레임 방향
                         e = vd.tgt_pos[:, int(j)] + Q.rotate(Ft, Q.rotate(delta, df))
                         rows.append(np.stack([vd.tgt_pos[:, int(j)], e], axis=1))
+                        ids.append(int(j))
+                        deltas.append(delta)
                     vd.virtual_pts = np.stack(rows, axis=1) if rows else None
+                    vd.virtual_ids = ids or None
+                    vd.virtual_delta = np.stack(deltas, axis=1) if deltas else None
                 except Exception:  # noqa: BLE001 - 표시용
                     vd.virtual_pts = None
+                    vd.virtual_ids = None
+                    vd.virtual_delta = None
         elif pr.src is not None:
             sk = pr.src.skeleton
             from ..core.retarget import _resolve_frame
@@ -288,6 +296,11 @@ class ViewData:
             b = main[0]
             vd.ground_y = float(main[..., 1].min())
             vd.height = float(max(np.ptp(b[:, 1]), np.ptp(b, axis=0).max(), 1e-6))
+            # 리타겟 결과가 있을 때는 바닥선을 월드 0 에 '고정'한다 (3ds Max 의 바닥과 같은 기준).
+            # 모션 높이(place_y)를 올리고 내리면 캐릭터가 이 고정 바닥 기준으로 움직인다.
+            # 단, 0 이 캐릭터에서 키의 2배 넘게 떨어져 있으면(바닥 개념이 없는 데이터) 기존처럼 최저점을 쓴다.
+            if pr.result is not None and abs(vd.ground_y) <= vd.height * 2.0:
+                vd.ground_y = 0.0
             vd.center = np.array([b[:, 0].mean(), vd.ground_y + vd.height * 0.5, b[:, 2].mean()])
         return vd
 
@@ -327,10 +340,11 @@ def build_scene(vd: ViewData, pr, frame: int, show_ghost=True, show_mesh=True, s
         ft = min(f, vd.tgt_pos.shape[0] - 1)
         sc["seg_target"] = bone_segments(vd.tgt_parents, vd.tgt_pos[ft])
         sc["pt_target_joints"] = vd.tgt_pos[ft]
-        try:      # 루트(스켈레톤 맨 위 본) — 모션이 이 점을 기준으로 이동·회전한다. 뷰포트에 따로 표시한다
+        try:      # 루트(모션 기준점) — 캐릭터(골반) 바로 아래 바닥에 표시한다. 모션의 이동·회전·높이는 이 점 기준.
             roots = [i for i, pa in enumerate(vd.tgt_parents) if int(pa) < 0]
-            if roots:
-                r0 = np.asarray(vd.tgt_pos[ft][roots[0]], dtype=float)
+            j_ref = (getattr(pr, "tgt_slots", None) or {}).get("Hips", roots[0] if roots else -1)
+            if 0 <= int(j_ref) < vd.tgt_pos.shape[1]:
+                r0 = np.asarray(vd.tgt_pos[ft][int(j_ref)], dtype=float)
                 sc["pt_root"] = r0[None, :]
                 sc["pt_root_ground"] = np.array([[r0[0], vd.ground_y, r0[2]]])
         except Exception:  # noqa: BLE001
