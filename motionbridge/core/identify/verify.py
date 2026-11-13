@@ -166,3 +166,24 @@ def verify_one(ask: Callable[[str, str], str], game: str, frame: str, box,
                        cols=len(pairs) + 1, cell_w=384, max_frames=len(pairs) + 1)
     idx, conf, why = parse_verdict(ask(sheet, build_prompt(len(pairs))), len(pairs))
     return {"path": pairs[idx][0] if idx is not None else None, "confidence": conf, "why": why, "sheet": sheet}
+
+
+def verify_rounds(ask: Callable[[str, str], str], game: str, frame: str, box,
+                  cand_paths: Sequence[str], thumbs: Dict[str, Optional[str]],
+                  workdir: str, make_sheet: Callable, round_size: int = MAX_CANDS) -> Optional[dict]:
+    """후보가 시트 한 장(기본 4개)보다 많을 때: 4개씩 조별 비교 -> 조 승자들끼리 결승 (토너먼트).
+
+    같은 종족 변형이 8종씩 나오는 잡몹(늑대 Lang_01~08 등)에서 정답이 첫 시트에 못 들어가 떨어지는 문제를 막는다."""
+    cands = [p for p in dict.fromkeys(cand_paths) if thumbs.get(p)]
+    if len(cands) <= round_size:
+        return verify_one(ask, game, frame, box, cands, thumbs, workdir, make_sheet)
+    winners: List[Tuple[str, dict]] = []
+    for i in range(0, len(cands), round_size):
+        r = verify_one(ask, game, frame, box, cands[i:i + round_size], thumbs, workdir, make_sheet)
+        if r and r.get("path"):
+            winners.append((r["path"], r))
+    if not winners:
+        return None
+    if len(winners) == 1:
+        return winners[0][1]
+    return verify_one(ask, game, frame, box, [p for p, _r in winners], thumbs, workdir, make_sheet)

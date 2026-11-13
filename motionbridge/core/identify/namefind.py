@@ -206,9 +206,34 @@ def parse_mob(text: str) -> Dict:
     return {"species": sp, "attributes": attrs, "why": str(obj.get("why") or "")[:160]}
 
 
-def score_mob(exp: Dict, stats: Dict[str, dict], mesh_paths: Sequence[str] = (), limit: int = 8) -> List[dict]:
-    """종족 어간으로 변형 폴더를 모으고, 부속 파일 이름의 특징 낱말로 변형을 구분해 점수 매긴다."""
-    species = [norm(s) for s in exp.get("species", []) if len(norm(s)) >= 3]
+# 서로 자주 헷갈리는 종족 묶음 — AI 가 '여우'라고 봐도 실제 폴더는 늑대(Lang)인 경우가 흔하다 (어둡고 흐린 장면).
+# 한 묶음의 어간이 하나라도 나오면 묶음 전체로 넓혀 변형 폴더를 찾는다 (AI 호출 추가 없음 = 공짜 확장).
+_SPECIES_GROUPS = [
+    ["wolf", "fox", "dog", "jackal", "hound", "lang", "huli", "gou", "chai", "quan"],          # 개과 (狼/狐/狗/豺/犬)
+    ["tiger", "cat", "lion", "leopard", "panther", "mao", "shi", "bao", "laohu"],              # 고양이과 (虎/猫/狮/豹)
+    ["rat", "mouse", "weasel", "ferret", "marten", "shu", "huangshulang", "diao"],             # 쥐·족제비 (鼠/黄鼠狼/貂)
+    ["snake", "serpent", "viper", "she", "mang"],                                              # 뱀 (蛇/蟒)
+    ["monkey", "ape", "gorilla", "hou", "yuan"],                                               # 원숭이 (猴/猿)
+    ["bear", "xiong"],
+    ["boar", "pig", "hog", "zhu"],
+    ["bird", "eagle", "hawk", "crow", "crane", "niao", "ying", "que", "he"],
+    ["frog", "toad", "wa", "chan"],
+    ["deer", "elk", "lu"],
+]
+
+
+def _expand_species(stems: Sequence[str]) -> List[str]:
+    out = [s for s in stems if s]
+    low = {norm(s) for s in out}
+    for grp in _SPECIES_GROUPS:
+        if low & {norm(g) for g in grp}:
+            out += [g for g in grp if norm(g) not in low]
+    return list(dict.fromkeys(out))
+
+
+def score_mob(exp: Dict, stats: Dict[str, dict], mesh_paths: Sequence[str] = (), limit: int = 12) -> List[dict]:
+    """종족 어간(혼동 묶음으로 확장)으로 변형 폴더를 모으고, 부속 파일 이름의 특징 낱말로 변형을 구분해 점수 매긴다."""
+    species = [norm(s) for s in _expand_species(list(exp.get("species", []))) if len(norm(s)) >= 3]
     attrs = [[norm(a) for a in grp if len(norm(a)) >= 3] for grp in exp.get("attributes", [])]
     attrs = [g for g in attrs if g]
     if not species:
@@ -217,10 +242,12 @@ def score_mob(exp: Dict, stats: Dict[str, dict], mesh_paths: Sequence[str] = (),
     out = []
     for folder, s in stats.items():
         core, whole = _core_name(folder), norm(folder)
-        sp_hit = next((sp for sp in species if sp == core or (sp in whole and len(sp) >= 3)), "")
-        if not sp_hit:
+        toks = {norm(t) for t in re.split(r"[_\-\s]+", folder or "") if t}
+        sp_tok = next((sp for sp in species if sp == core or sp in toks), "")                 # 'GYCY_Lang_03' 의 토큰 'lang'
+        sp_sub = sp_tok or next((sp for sp in species if sp in whole and len(sp) >= 4), "")   # 'HuangPaoLang' 속 'lang' (덜 확실)
+        if not sp_sub:
             continue
-        sc, why = 0.45, ["종족 '%s'" % sp_hit]
+        sc, why = (0.45, ["종족 '%s'" % sp_tok]) if sp_tok else (0.36, ["종족 '%s'(이름 일부)" % sp_sub])
         # 이 변형에 딸린 파일 이름들: 폴더 안 메시 + (다른 곳에 있어도) 파일 이름에 이 폴더명이 든 것 (예: VFX 의 ..._Lang_07_Shield_VFX)
         fl = norm(folder)
         hay = " ".join((p or "").replace("\\", "/").rsplit("/", 1)[-1].lower() for p in s["meshes"])

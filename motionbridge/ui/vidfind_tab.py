@@ -1692,7 +1692,7 @@ class VidFindTab(QWidget):
                             desc_x = " ".join(x for x in (nm_ if not unknown_ else "", g_.description or "") if x).strip()
                             if desc_x:
                                 mob_ = identify_namefind.find_mob(prov.ask_text, desc_x, hint, mesh_paths_, idx.anims)
-                                for cand_ in (mob_.get("candidates") or [])[:5]:
+                                for cand_ in (mob_.get("candidates") or [])[:8]:   # 같은 종족 변형이 많으면 생김새 토너먼트가 가린다
                                     if cand_["score"] < 0.35 or not cand_["meshes"]:
                                         continue
                                     p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
@@ -1735,7 +1735,7 @@ class VidFindTab(QWidget):
                                 mi_ = idx.mesh(p_)
                                 if mi_ is not None and mi_.rigged and cls_ok_j(p_):   # 찾을 종류 체크 안의 후보만 렌더
                                     ok_v.append(p_)
-                            ok_v = ok_v[:identify_verify.MAX_CANDS]
+                            ok_v = ok_v[:identify_verify.MAX_CANDS * 2]   # 변형이 많으면 토너먼트(4개씩 조별 -> 결승)로 가린다
                             if len(ok_v) >= 2:
                                 rows_v.append((g_, ok_v))
                         # 썸네일이 아직 없는 후보만 모아 '한 번에' 추출 — 추출기가 호출마다 pak 전체를 다시 마운트해서
@@ -1767,9 +1767,9 @@ class VidFindTab(QWidget):
                             thumbs_ = identify_verify.ensure_thumbs(
                                 gname_v, ok_v, lambda p_: glb_map.get(p_),
                                 progress=lambda i_, nn2, nm_: w.progress.emit(i_, nn2, "후보 렌더 %s" % nm_))
-                            r_v = identify_verify.verify_one(prov.ask, gname_v,
-                                                             g_.frame, getattr(g_, "box", None), ok_v, thumbs_,
-                                                             FRAME_DIR, panel.make_sheet)
+                            r_v = identify_verify.verify_rounds(prov.ask, gname_v,
+                                                                g_.frame, getattr(g_, "box", None), ok_v, thumbs_,
+                                                                FRAME_DIR, panel.make_sheet)
                             if r_v and r_v.get("path") and float(r_v.get("confidence") or 0) >= 0.45:
                                 try:
                                     g_.ver_pick = r_v["path"]

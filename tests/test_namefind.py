@@ -77,6 +77,17 @@ check(mr[0]["score"] > mr[1]["score"], "특징 맞는 변형이 점수 우위")
 mfail = nf.find_mob(lambda p: (_ for _ in ()).throw(RuntimeError("안 됨")), "늑대", "오공", MOBS, ANIMS)
 check("실패" in mfail["note"] and mfail["candidates"] == [], "LLM 실패 시 조용한 빈 결과: %s" % mfail["note"])
 
+# ---- 종족 혼동 묶음: AI 가 '여우(fox)'라고 봐도 늑대(Lang) 변형이 나온다 (어두운 장면 오인식 실사례)
+fox = nf.score_mob({"species": ["fox"], "attributes": [], "why": ""}, nf.folder_stats(MOBS, ANIMS), MOBS)
+check(any(c["folder"] == "GYCY_Lang_03" for c in fox), "fox -> Lang 변형 확장: %s" % [c["folder"] for c in fox[:4]])
+check(nf._expand_species(["tiger"]) != ["tiger"] and "mao" in nf._expand_species(["tiger"]), "고양이과 묶음 확장")
+check(nf._expand_species(["golem"]) == ["golem"], "모르는 종족은 그대로")
+tok = nf.score_mob({"species": ["lang"], "attributes": [], "why": ""},
+                   nf.folder_stats(MOBS + [C + "HFM/BoLangGu/Mesh/SK_BoLangGu.uasset"], ANIMS), MOBS)
+bolang = next((c for c in tok if c["folder"] == "BoLangGu"), None)
+lang3 = next(c for c in tok if c["folder"] == "GYCY_Lang_03")
+check(bolang is None or bolang["score"] < lang3["score"], "토큰 일치(Lang_03)가 이름 일부(BoLangGu)보다 위")
+
 if fails:
     print("\n실패 %d개" % len(fails))
     sys.exit(1)
