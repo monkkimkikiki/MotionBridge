@@ -56,6 +56,17 @@ PICK_FILTER = "영상/이미지 (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.png *.jp
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
 
+FIND_TIPS = (
+    "잘 찾는 법 — 무엇을 주면 쉽게 찾나:\n"
+    "① 이름(가장 빠름·정확): 게임 화면/도감의 '인게임 표기 그대로'를 아는 정보에 적으세요 (한국어든 영어든 그대로).\n"
+    "   게임 데이터 정답표·글자 사전에서 바로 이어집니다. 별명/줄임말/오타는 AI 확장으로 넘어가 느리고 빗나갈 수 있어요.\n"
+    "② 이미지(이름을 모를 때): 몬스터 '전신'이 또렷한 장면에서, 몬스터만 꽉 차게 박스를 지정하세요.\n"
+    "   · 이펙트/타격 섬광/모션 블러가 심한 순간, 몸이 반쯤 가린 장면, 너무 어두운 장면은 피하기\n"
+    "   · 특징이 보이게: 꼬리·무기·방패·갑옷이 박스 안에 들어가게 (이런 게 변형 구분의 결정타)\n"
+    "   · 같은 몬스터를 다른 각도로 2~3장 담으면([＋ 이 몬스터도]) 생김새 대조가 더 정확해집니다\n"
+    "③ 설명: 종족(늑대/쥐/호랑이…) + 들고 있는 것(방패/횃불/활…) + 옷 색을 적으면 외형 검색이 변형까지 좁혀 줍니다.\n"
+    "④ 종류 체크: 잡몹을 찾을 땐 '일반 몬스터'만 체크 — 보스가 후보를 차지하는 걸 막고 속도도 빨라집니다.")
+
 
 class _PickLabel(QLabel):
     """크롭 대화상자의 그림: 마우스로 끌어 박스를 지정한다."""
@@ -104,8 +115,8 @@ class _GrabDialog(QDialog):
         self._full = ""            # 지금 장면의 원본 해상도 프레임 파일
         self._scale = 1.0
         v = QVBoxLayout(self)
-        tip = QLabel("① 타임바를 움직여 몬스터가 잘 보이는 장면에 놓고 → ② 화면에서 몬스터를 마우스로 끌어 박스 지정 → ③ [완료]를 누르면 1) 목록에 이미지로 들어갑니다.\n"
-                     "찾기는 그 다음에 — '아는 정보'에 보스 이름을 적고 [영역 지정한 이미지로 찾기]를 누르세요.")
+        tip = QLabel("① 타임바를 움직여 몬스터 '전신'이 또렷한 장면에 놓고 (이펙트·가림·블러가 적은 순간) → ② 몬스터만 꽉 차게, 꼬리·무기 같은 특징까지 박스에 담아 지정 → ③ [완료]로 1) 목록에 추가.\n"
+                     "찾기는 그 다음에 — '아는 정보'에 보스 이름을 적고 [영역 지정한 이미지로 찾기]를 누르세요. 같은 몬스터를 다른 각도로 2~3장 담으면 더 정확합니다.")
         tip.setWordWrap(True)
         v.addWidget(tip)
         self.view = _PickLabel(self)
@@ -522,7 +533,7 @@ class VidFindTab(QWidget):
         v.addLayout(kl)
         self.known = QPlainTextEdit()
         self.known.setPlainText(self.cfg.get("vf_known", ""))
-        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\n금지장로 — 보스, 불탄 노승, 석장\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\n(비워도 됩니다. 보스 이름을 적으면 정확도가 크게 올라갑니다 — 한국어 이름이어도 AI 확장 검색(원어·음차·지역·모티프 코드명)으로 리소스를 먼저 찾아 AI에게 알려 줍니다)")
+        self.known.setPlaceholderText("한 줄에 하나씩 적으세요.  이름 — 외형 / 인간형·4족·크리처 / 무기 / 공격 방식\n예)\n금지장로 — 보스, 불탄 노승, 석장\nThe Nameless Captive — 보스, 쇠사슬에 묶인 인간형, 맨손, 내려찍기\n(비워도 됩니다)\n\n💡 가장 빠른 방법: 게임 화면·도감에 나오는 '인게임 표기 그대로' 적으세요 (한국어든 영어든 그대로).\n   게임 데이터(유닛 ↔ 이름 정답표)와 글자 사전에서 바로 이어져 AI 확장 없이 즉시 맞습니다.\n   별명·줄임말·오타는 AI 확장 검색(원어·음차·지역·모티프 코드명)으로 넘어가서 시간이 더 걸립니다.")
         self.known.setMinimumHeight(50)
         v.addWidget(Resizable(self.known, "vf_known_h", 50))
         self.engine_note = QLabel("")
@@ -558,6 +569,7 @@ class VidFindTab(QWidget):
         r.addWidget(self.rb_mode_monster)
         r.addWidget(self.rb_mode_img)
         r.addWidget(self.rb_mode_char)
+        r.addWidget(HelpIcon(FIND_TIPS))   # ❓ 잘 찾는 법: 어떤 정보/이미지를 주면 쉽게 찾는지
         r.addStretch(1)
         v.addLayout(r)
         # 찾을 종류: 에셋 신호(애니 수·전용 연출·경로 표시)로 자동 분류해, 고른 종류 안에서만 후보를 찾는다
@@ -1124,11 +1136,63 @@ class VidFindTab(QWidget):
         st = entstore.EntityStore.load(game)
         try:
             st.from_catalog(self._catalog(idx))
+            self._ensure_unitlinks(st, game)   # 게임 유닛 데이터(이름 ↔ 코드명 정답표)를 게임마다 한 번 읽어 넣는다
             st.save()
         except Exception:  # noqa: BLE001 - 사전은 보조 기능: 채우기 실패가 추측을 막지 않게
             pass
         self._entstore_memo = ((id(idx), game), st)
         return st
+
+    def _ensure_unitlinks(self, st: "entstore.EntityStore", game: str) -> None:
+        """게임이 데이터로 적어 둔 '유닛 ↔ 표시 이름' 연결(CardDesc ID)을 읽어 엔티티 사전에 넣는다 — 게임마다 한 번.
+
+        이게 있으면 '아는 정보'에 인게임 이름(금지장로/Elder Jinchi …)을 그대로 적었을 때
+        AI 확장 없이 완전 일치로 즉시 코드명이 나온다. 옛 추출기(json 명령 없음)·테이블 없는 게임은 조용히 건너뛴다."""
+        from ..core.identify import unitlink
+        marker = os.path.join(bridge.CONFIG_DIR, "entities", entstore._safe(game) + "_unitlink.json")
+        stamp = []
+        for p in (NAMES_CACHE,):
+            try:
+                stamp.append(round(os.path.getmtime(p), 2) if os.path.isfile(p) else 0)
+            except OSError:
+                stamp.append(0)
+        try:
+            with open(marker, "r", encoding="utf-8") as f:
+                if (json.load(f) or {}).get("stamp") == stamp:
+                    return
+        except (OSError, ValueError):
+            pass
+        a = self.__dict__.get("_last_args")      # 워커 스레드에서 대화상자(_extract_args)를 띄우지 않게, 시작할 때 담아 둔 값
+        if a is None or not os.path.isfile(NAMES_CACHE):
+            return
+        helper, gdir, ue, aes, usmap = a
+        units = [p for p in extractor.list_assets(helper, gdir, ue, aes, usmap, r"(?i)/units?/[^/]*\.uasset", 4000)
+                 if os.path.basename(p).lower().startswith("unit") and "preview" not in os.path.basename(p).lower()]
+        n_link = 0
+        if units:
+            import tempfile as _tf
+            with _tf.TemporaryDirectory(prefix="mb_unit_") as td:
+                files = extractor.export_json(helper, gdir, ue, aes, usmap, units[:2000], td)
+                texts = {}
+                by_stem = {os.path.splitext(os.path.basename(f))[0].lower(): f for f in files}
+                for p in units:
+                    f = by_stem.get(re.sub(r"[^\w-]+", "_", os.path.splitext(os.path.basename(p))[0]).lower())
+                    if not f:
+                        continue
+                    try:
+                        with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                            texts[p] = fh.read(2_000_000)
+                    except OSError:
+                        continue
+                with open(NAMES_CACHE, "r", encoding="utf-8") as fh:
+                    entries = (json.load(fh) or {}).get("entries") or []
+                n_link = unitlink.apply_to_store(st, unitlink.build_links(texts, entries))
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w", encoding="utf-8") as f:
+                json.dump({"stamp": stamp, "linked": n_link}, f)
+        except OSError:
+            pass
 
     def _owned_anims(self, idx: assetidx.AssetIndex, mesh_path: str):
         """캐릭터 카탈로그에서 이 메시가 어느 캐릭터인지 알면, 그 캐릭터 폴더의 애니메이션 경로들 (모르면 None -> 예전처럼 이름 유사도만)."""
@@ -1276,6 +1340,7 @@ class VidFindTab(QWidget):
         a = self.win._extract_args()
         if a is None:
             return
+        self._last_args = a
         prov = self.provider()
         hint = self.hint.text().strip() or (self.win.ex_gname.text().strip() if hasattr(self.win, "ex_gname") else "")
 
@@ -1408,6 +1473,7 @@ class VidFindTab(QWidget):
         a = self.win._extract_args()
         if a is None:
             return
+        self._last_args = a      # 워커 스레드(유닛 데이터 읽기 등)가 대화상자 없이 쓰게 담아 둔다
         prov = self.provider()
         if not prov.supports_images:
             QMessageBox.warning(self, "인식 방식", "%s 는 글 전용이라 영상 장면 인식에는 쓸 수 없습니다.\n장면 인식은 Ollama(비전 모델)·Claude·다른 AI 로 바꿔 주세요.\n(이름·설명으로 찾기 / AI 낱말 변환에는 그대로 쓸 수 있어요.)" % prov.label)
@@ -1916,7 +1982,8 @@ class VidFindTab(QWidget):
         for c in cands:      # 확신이 낮아도 가장 유력한 후보를 골라 둔다 (틀리면 검수자가 바꿈). 낮은 확신은 표에 ⚠ 로만 알린다
             combo.addItem(self._cand_text(c), c.path)
         if not cands:
-            combo.addItem("(이름이 비슷한 메시를 못 찾았어요 — 아래 칸에 이름 일부를 적어 검색하세요)", None)
+            combo.addItem("(후보를 못 찾았어요 — 아래 검색 칸, 또는 ❓ 잘 찾는 법 참고)", None)
+            combo.setToolTip(FIND_TIPS)
 
     def fill_table(self, groups: List[vision.Group]) -> None:
         # 검수자가 메시를 바꾸면 group.name 이 메시 이름으로 덮이므로, 학습용으로 원래 추측을 남겨 둔다
