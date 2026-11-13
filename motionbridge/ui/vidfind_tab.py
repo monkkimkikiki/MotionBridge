@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QMimeData, QRect, QSize, Qt
+from PySide6.QtCore import QMimeData, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QInputDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QListWidget, QRadioButton,
@@ -621,6 +621,7 @@ class VidFindTab(QWidget):
         self.known_tip.setVisible(False)
         v.addWidget(self.known_tip)
         self._update_known_tip()
+        self._warm_lore_bg()       # 글자 사전이 이미 있으면 도감을 뒤에서 조용히 읽어 [📖 도감] 버튼·팁을 켠다
         self.engine_note = QLabel("")
         self.engine_note.setWordWrap(True)
         v.addWidget(self.engine_note)
@@ -668,12 +669,11 @@ class VidFindTab(QWidget):
             cb_.toggled.connect(self._cls_changed)
             r2.addWidget(cb_)
             self.cls_checks[key_] = cb_
-        r2.addWidget(HelpIcon("프로그램이 에셋 신호만으로 캐릭터를 네 종류로 자동 분류합니다 (웹·AI 불필요):\n"
-                              "· 보스 = 전용 애니메이션이 많고(120개↑) 전용 연출(처형·사망 시퀀스)이 있는 캐릭터\n"
-                              "· 일반 몬스터 = 그 외의 적 (애니 수십 개)\n"
-                              "· 플레이어블 = 경로/이름에 player·hero 표시\n"
-                              "· NPC = NPC 폴더/이름\n"
-                              "체크한 종류 안에서만 후보를 찾습니다 — 잡몹을 찾는데 보스가 후보에 올라오는 것을 막아 줘요. 전부 체크하면 필터 없음."))
+        r2.addWidget(HelpIcon("체크한 종류 안에서만 후보를 찾습니다. 분류 근거는 '게임이 데이터로 적어 둔 것'만 씁니다:\n"
+                              "· 보스/일반 몬스터 = 게임 도감의 공식 분류(요왕·두목 = 보스, 잡요괴 = 일반) — [추출기 업데이트] 후 이름 연결이 되면 정확해집니다\n"
+                              "· 플레이어블 = 경로/이름에 player·hero 표시 · NPC = NPC 폴더/이름\n"
+                              "⚠ 분류를 아직 모르는 캐릭터는 어떤 체크든 '걸러지지 않습니다' — 추정으로 잘못 숨기는 일을 막기 위해서예요.\n"
+                              "(예전의 '애니 개수로 보스 추정'은 잡몹이 보스로 숨는 오분류가 있어 뺐습니다.)"))
         r2.addStretch(1)
         v.addLayout(r2)
         eng_line = QLabel("어느 모드든 같은 검색 엔진을 차례로 씁니다: ① 정답표(게임 데이터의 이름↔코드명) → ② 도감 일화 글 검색 → ③ 글자 사전·뜻 풀이 → ④ AI 확장(원어·음차·지역 코드) → ⑤ 외형(종족·들고 있는 것)."
@@ -1182,6 +1182,11 @@ class VidFindTab(QWidget):
         if not force:
             idx = self.index or assetidx.load_index(INDEX_CACHE, game)
             if idx:
+                try:
+                    self._lore_cards()     # 캐시된 목록으로 시작해도 도감·분류는 워밍해 둔다 (여긴 작업 스레드)
+                    self._cls_map(idx)
+                except Exception:  # noqa: BLE001
+                    pass
                 return idx
         w.progress.emit(0, 1, "게임 파일에서 이름 목록 읽는 중 (처음 한 번은 오래 걸립니다)")
         paths = extractor.list_assets(helper, game, ue, aes, usmap, LIST_PATTERN, 200000)
@@ -1254,6 +1259,30 @@ class VidFindTab(QWidget):
             cards = {}
         self._lore_memo = (mt, cards)
         return cards
+
+    def _warm_lore_bg(self) -> None:
+        """도감(27MB 사전)을 UI 를 막지 않고 뒤에서 읽는다 — 끝나면 팁과 [📖 도감] 버튼이 켜진다."""
+        if self.__dict__.get("_lore_warming") or not os.path.isfile(NAMES_CACHE) or self._lore_cards(build=False):
+            return
+        self._lore_warming = True
+        import threading
+
+        def run() -> None:
+            try:
+                self._lore_cards()
+            except Exception:  # noqa: BLE001 - 워밍 실패는 조용히
+                pass
+            finally:
+                self._lore_warming = False
+
+        threading.Thread(target=run, daemon=True).start()
+        self._poll_lore()
+
+    def _poll_lore(self) -> None:
+        if self._lore_cards(build=False) or not self.__dict__.get("_lore_warming"):
+            self._update_known_tip()
+            return
+        QTimer.singleShot(700, self._poll_lore)
 
     def _update_known_tip(self) -> None:
         """게임별 맞춤 팁: 이 게임의 도감(일화)·정답표를 확인해서, 실제 예시를 들어 '어떻게 적으면 바로 찾는지'를 보여 준다."""
@@ -1809,8 +1838,8 @@ class VidFindTab(QWidget):
             cls_map_j = self._cls_map(idx) if want_cls else {}
 
             def cls_ok_j(p_):
-                """찾을 종류 체크: 비싼 단계(확장 검색·생김새 비교)도 체크한 종류의 캐릭터만 다룬다."""
-                return not want_cls or cls_map_j.get(classify.folder_of(p_), "mob") in want_cls
+                """찾을 종류 체크: 비싼 단계(확장 검색·생김새 비교)도 체크한 종류만 — 단, 분류를 모르는 캐릭터는 거르지 않는다."""
+                return classify.passes(cls_map_j.get(classify.folder_of(p_)), want_cls)
 
             if pre_frames is not None:        # 이미지로 찾기: 유저가 지정한 영역(크롭)을 그대로 장면으로 쓴다 — 장면 뽑기 생략
                 from types import SimpleNamespace
@@ -2211,7 +2240,7 @@ class VidFindTab(QWidget):
         try:
             with open(cache_p, "r", encoding="utf-8") as f:
                 d = json.load(f)
-            if isinstance(d, dict) and d.get("stamp") == stamp and isinstance(d.get("map"), dict):
+            if isinstance(d, dict) and d.get("ver") == 2 and d.get("stamp") == stamp and isinstance(d.get("map"), dict):
                 self._cls_memo = (idx, d["map"])
                 return d["map"]
         except (OSError, ValueError):
@@ -2251,7 +2280,7 @@ class VidFindTab(QWidget):
             pass
         try:
             with open(cache_p, "w", encoding="utf-8") as f:
-                json.dump({"stamp": stamp, "map": m}, f, ensure_ascii=False)
+                json.dump({"ver": 2, "stamp": stamp, "map": m}, f, ensure_ascii=False)
         except OSError:
             pass
         self._cls_memo = (idx, m)
@@ -2269,9 +2298,7 @@ class VidFindTab(QWidget):
         idx = self.index or self._load_index_cached()
         from ..core import classify
         m = self._cls_map(idx, build=False)      # UI 스레드: 계산된 표가 없으면 거르지 않는다 (화면이 얼지 않게)
-        if not m:
-            return True
-        return m.get(classify.folder_of(path), "mob") in want
+        return classify.passes(m.get(classify.folder_of(path)) if m else None, want)
 
     def _cls_tag(self, path: str) -> str:
         """후보 글머리에 붙일 [보스]/[일반 몬스터] 같은 표시."""
@@ -2279,8 +2306,8 @@ class VidFindTab(QWidget):
         if idx is None or not path:
             return ""
         from ..core import classify
-        k = self._cls_map(idx, build=False).get(classify.folder_of(path))
-        return ("[%s] " % classify.LABEL[k]) if k else ""
+        k = classify.LABEL.get(self._cls_map(idx, build=False).get(classify.folder_of(path)) or "")
+        return ("[%s] " % k) if k else ""
 
     # ================================================================== 검수 표
     def _merge_cands(self, idx, base, alts, n: int = 5):

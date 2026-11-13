@@ -27,11 +27,15 @@ ANIMS = (["G/Content/Anim/AA_Boss_01/AS_AA_Boss_01_Atk_%03d.uasset" % i for i in
          + ["G/Content/Anim/AA_Mob_01/AS_AA_Mob_01_Atk_%02d.uasset" % i for i in range(20)])
 
 m = classify.classify(MESHES, ANIMS)
-check(m.get("AA_Boss_01") == "boss", "애니 많고 전용 연출 -> 보스: %s" % m.get("AA_Boss_01"))
-check(m.get("AA_Mob_01") == "mob", "애니 적음 -> 일반 몬스터: %s" % m.get("AA_Mob_01"))
+# 보스/일반은 '게임 데이터(도감·사전)'가 덮어쓸 때만 — 추정(애니 수)으로는 매기지 않는다 (잡몹이 보스로 숨던 오분류 방지)
+check(m.get("AA_Boss_01") == "unknown" and m.get("AA_Mob_01") == "unknown", "적은 기본 '미분류': %s/%s" % (m.get("AA_Boss_01"), m.get("AA_Mob_01")))
 check(m.get("Hero") == "player", "player 경로 -> 플레이어블: %s" % m.get("Hero"))
 check(m.get("AA_Villager") == "npc", "NPC 폴더 -> NPC: %s" % m.get("AA_Villager"))
 check(classify.folder_of(MESHES[0]) == "AA_Boss_01", "Mesh 하위 폴더 건너뛰고 캐릭터 폴더")
+# 필터: 미분류는 어떤 체크에도 걸러지지 않는다
+check(classify.passes("unknown", {"mob"}) and classify.passes(None, {"boss"}), "미분류는 항상 통과")
+check(classify.passes("mob", {"mob"}) and not classify.passes("boss", {"mob"}), "확실한 분류만 거른다")
+check(classify.passes("boss", None), "필터 없음(None)은 전부 통과")
 
 # 도감(오공 CardDesc.<장><분류><번호>.UnitName): 01 잡요괴 / 02 두목·03 요왕 -> 보스 / 04 인물 -> NPC
 ENTRIES = [

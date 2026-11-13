@@ -53,7 +53,11 @@ def journal_types(entries: Sequence[Sequence[str]]) -> Dict[str, str]:
 
 
 def classify(mesh_paths: Sequence[str], anim_paths: Sequence[str] = ()) -> Dict[str, str]:
-    """캐릭터 폴더 -> 종류(boss|mob|player|npc). 애니 수·전용 연출·경로 표시로 판정."""
+    """캐릭터 폴더 -> 종류(boss|mob|player|npc|unknown). 경로 표시(플레이어·NPC)만 스스로 판정한다.
+
+    보스/일반 몬스터 구분은 '게임이 데이터로 적어 둔 것'(도감 공식 분류, 뜻 풀이 사전)이 덮어쓸 때만 붙는다.
+    애니 수로 추정하던 방식은 뺐다 — 오공 실측에서 잡몹도 애니 100~300개라 늑대가 보스로 숨는 오분류가 났다.
+    'unknown' 은 어떤 종류 체크에도 걸러지지 않는다 (틀리게 숨기는 것보다 보여 주는 게 낫다)."""
     stats = namefind.folder_stats(mesh_paths, anim_paths)
     out: Dict[str, str] = {}
     for folder, s in stats.items():
@@ -63,8 +67,11 @@ def classify(mesh_paths: Sequence[str], anim_paths: Sequence[str] = ()) -> Dict[
             out[folder] = "player"
         elif _NPC.search(joined) or _NPC.search("_" + folder.lower() + "_"):
             out[folder] = "npc"
-        elif s["anims"] >= 120 or (s["anims"] >= 60 and s["cine"]):
-            out[folder] = "boss"
         else:
-            out[folder] = "mob"
+            out[folder] = "unknown"
     return out
+
+
+def passes(kind, want) -> bool:
+    """종류 체크 필터: 모르는(unknown/빈) 종류는 항상 통과 — 확실할 때만 거른다."""
+    return not want or kind in (None, "", "unknown") or kind in want
