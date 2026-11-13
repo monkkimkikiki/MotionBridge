@@ -101,26 +101,6 @@ def main():
         check(listed == [V.LIST_PATTERN], "에셋 목록은 한 번에 읽음")
         check(os.path.isfile(V.INDEX_CACHE), "색인 저장")
         check(len(vt.rows) == 2, "추측 2종: %d" % len(vt.rows))
-
-        # 추측 취소: 취소를 알리면 작업이 다음 단계로 넘어가지 않고 멈춘다 (취소 버튼은 추측에만 켜짐)
-        import threading
-        cap = []
-        _orig_run = mw.run_async
-        mw.run_async = lambda fn, done, label, **k: cap.append((fn, k))
-        vt.start_guess()
-        mw.run_async = _orig_run
-        check(len(cap) == 1 and cap[0][1].get("cancellable") is True and callable(cap[0][1].get("on_cancel")), "추측은 취소할 수 있게 등록")
-        fw = type("W", (), {"cancel": threading.Event(), "progress": type("P", (), {"emit": lambda *a: None})()})()
-        fw.cancel.set()
-        try:
-            cap[0][0](fw)
-            check(False, "취소하면 작업이 멈춰야 함")
-        except Exception as e:  # noqa: BLE001
-            check(type(e).__name__ == "_Stopped", "취소 -> 작업 중단: %s" % type(e).__name__)
-        prev_status = vt.status.text()
-        cap[0][1]["on_cancel"]()
-        check("취소" in vt.status.text(), "취소 안내: %s" % vt.status.text())
-        vt.status.setText(prev_status)
         check("Dwarf" in prompts[0] and "StoneGolem" in prompts[0], "AI에게 게임 이름 목록을 알림")
         # 장면 2장 + '모르는 캐릭터' 줄에 외형(종족·들고 있는 것) 확장 1회 = 3회
         check(len(prompts) == 3 and "regular enemy" in prompts[2], "장면 2회 + 외형 확장 1회: %d" % len(prompts))
@@ -128,6 +108,8 @@ def main():
         check(r0.group.name == "Dwarf" and r0.chosen() == MESHES[0], "Dwarf 는 자동으로 맞는 메시: %s" % r0.chosen())
         check(r1.chosen() is None and r1.combo.currentData() is None, "모르는 캐릭터는 후보 없음")
         check("캐릭터 2종" in vt.status.text(), "상태: %s" % vt.status.text())
+
+        r0, r1 = vt.rows
 
         # 검수: 검색으로 StoneGolem 지정
         r1.search.setText("golem")

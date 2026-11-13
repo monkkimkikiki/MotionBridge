@@ -1469,27 +1469,36 @@ class VidFindTab(QWidget):
         if a is None or not os.path.isfile(NAMES_CACHE):
             return
         helper, gdir, ue, aes, usmap = a
-        units = [p for p in extractor.list_assets(helper, gdir, ue, aes, usmap, r"(?i)/units?/[^/]*\.uasset", 4000)
+        units = [p for p in extractor.list_assets(helper, gdir, ue, aes, usmap, r"(?i)/units?/(?:.*/)?unit[^/]*\.uasset", 4000)
                  if os.path.basename(p).lower().startswith("unit") and "preview" not in os.path.basename(p).lower()]
         n_link = 0
         if units:
             import tempfile as _tf
-            with _tf.TemporaryDirectory(prefix="mb_unit_") as td:
-                files = extractor.export_json(helper, gdir, ue, aes, usmap, units[:2000], td)
-                texts = {}
+            units = list(dict.fromkeys(units))
+            with open(NAMES_CACHE, "r", encoding="utf-8") as fh:
+                entries = (json.load(fh) or {}).get("entries") or []
+
+            def _links_of(batch, td):
+                files = extractor.export_json(helper, gdir, ue, aes, usmap, batch, td)
                 by_stem = {os.path.splitext(os.path.basename(f))[0].lower(): f for f in files}
-                for p in units:
+                texts = {}
+                for p in batch:
                     f = by_stem.get(re.sub(r"[^\w-]+", "_", os.path.splitext(os.path.basename(p))[0]).lower())
                     if not f:
                         continue
                     try:
-                        with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                            texts[p] = fh.read(2_000_000)
+                        with open(f, "r", encoding="utf-8", errors="replace") as fh2:
+                            texts[p] = fh2.read(2_000_000)
                     except OSError:
                         continue
-                with open(NAMES_CACHE, "r", encoding="utf-8") as fh:
-                    entries = (json.load(fh) or {}).get("entries") or []
-                n_link = unitlink.apply_to_store(st, unitlink.build_links(texts, entries))
+                return unitlink.build_links(texts, entries)
+
+            with _tf.TemporaryDirectory(prefix="mb_unit_") as td:
+                # 표본(60개)에서 연결이 하나도 안 나오면 이 게임은 유닛 에셋에 도감 ID 가 없는 구조 — 수천 개를 덤프하지 않고 멈춘다
+                links = _links_of(units[:60], td)
+                if links and len(units) > 60:
+                    links += _links_of(units[60:2000], td)
+                n_link = unitlink.apply_to_store(st, links)
         try:
             os.makedirs(os.path.dirname(marker), exist_ok=True)
             with open(marker, "w", encoding="utf-8") as f:
@@ -1674,6 +1683,28 @@ class VidFindTab(QWidget):
                 w.progress.emit(2, 3, "게임 데이터(정답표/사전)에서 즉시 일치 — AI 확장 생략")
                 return {"candidates": direct, "expansion": {}, "idx": idx, "clue": clue,
                         "note": "게임 데이터 정답표로 즉시 일치 (AI 확장 생략 — 0.1초 미만)"}
+            # ⓪-2 도감 교차 이름: 도감 카드가 '저팔계(ko) ↔ Zhu Bajie(en)' 처럼 여러 언어 표기를 들고 있으니,
+            #     한국어로 적어도 다른 언어 표기를 폴더 이름과 퍼지 매칭해 AI 없이 잇는다 (~1초).
+            try:
+                cards_n = self._lore_cards()
+                alts = []
+                for c_ in cards_n.values():
+                    if any(entstore.norm(nm_) == entstore.norm(clue) for nm_ in c_["names"].values()):
+                        alts += list(c_["names"].values())
+                alts = [x for x in dict.fromkeys(alts) if entstore.norm(x) != entstore.norm(clue)]
+                if alts:
+                    w.progress.emit(1, 3, "도감 교차 이름(%s)으로 폴더 매칭 중 — AI 없이" % alts[0])
+                    exp0 = {"official": {}, "romanized": alts, "initials": [], "keywords": [], "codenames": [], "why": ""}
+                    st0 = identify_namefind.folder_stats([m.path for m in idx.meshes], idx.anims)
+                    cands0 = identify_namefind.score_folders(exp0, st0, clue=clue, store=store)
+                    if cands0 and cands0[0]["score"] >= 0.5:
+                        for c0 in cands0:
+                            c0["why"] = "도감 교차 이름 '%s' — %s" % (alts[0], c0["why"])
+                        w.progress.emit(2, 3, "도감 교차 이름으로 즉시 일치 — AI 확장 생략")
+                        return {"candidates": cands0, "expansion": exp0, "idx": idx, "clue": clue,
+                                "note": "도감의 다른 언어 표기('%s')로 바로 이었습니다 (AI 확장 생략)" % alts[0]}
+            except Exception:  # noqa: BLE001 - 교차 이름은 보조, 실패하면 AI 확장으로
+                pass
             w.progress.emit(1, 3, "AI 에게 '%s' 확장 요청 중 (원어 정식명·병음 음차·지역 이니셜·모티프 코드명)" % clue)
             res = identify_namefind.find(prov.ask_text, clue, hint, [m.path for m in idx.meshes], idx.anims, store)
             exp_ = res.get("expansion") or {}
@@ -1721,6 +1752,7 @@ class VidFindTab(QWidget):
             res["idx"], res["clue"] = idx, clue
             return res
 
+        self._clear_review()
         self.win.run_async(job, self._after_namefind, "AI 확장 검색 중", cancellable=True)
 
     def _after_namefind(self, res) -> None:
@@ -2264,6 +2296,7 @@ class VidFindTab(QWidget):
             groups_ = finish(dets)
             return {"idx": idx, "groups": groups_, "errors": errors, "notes": notes, "frames": len(fr), "vocab": len(vocab)}
 
+        self._clear_review()
         self.win.run_async(job, self._after_guess, "캐릭터 추측 중", cancellable=True,
                            on_cancel=lambda: self.status.setText("캐릭터 추측을 취소했습니다. 인식 방식을 바꾸고 다시 시작할 수 있어요."))
 
@@ -2412,6 +2445,14 @@ class VidFindTab(QWidget):
         if not cands:
             combo.addItem("(후보를 못 찾았어요 — 아래 검색 칸, 또는 ❓ 잘 찾는 법 참고)", None)
             combo.setToolTip(FIND_TIPS)
+
+    def _clear_review(self) -> None:
+        """새 검색을 시작하면 이전 검수 표·후보 목록을 비운다 — 옛 결과와 섞여 보이지 않게."""
+        self.rows = []
+        self.table.setRowCount(0)
+        self.mesh_list.clear()
+        self.anim_list.clear()
+        self.confirmed = []
 
     def fill_table(self, groups: List[vision.Group]) -> None:
         # 검수자가 메시를 바꾸면 group.name 이 메시 이름으로 덮이므로, 학습용으로 원래 추측을 남겨 둔다
