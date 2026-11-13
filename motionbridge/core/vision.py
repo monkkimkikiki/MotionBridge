@@ -240,6 +240,29 @@ def _http(url: str, payload: Optional[dict], headers: Dict[str, str], timeout: f
         raise VisionError("응답이 없습니다: %s" % e)
 
 
+_RETRY_CODES = ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504")
+GEMINI_FALLBACK = {"gemini-flash-latest": "gemini-flash-lite-latest", "gemini-2.5-flash": "gemini-2.5-flash-lite"}
+RETRY_DELAYS = (3.0, 8.0, 15.0)    # 서버 과부하(503 'model is currently experiencing high demand')·일시 한도(429)는 잠깐 뒤 다시
+
+
+def _post_retry(post: Callable, url: str, payload: dict, headers: Dict[str, str], timeout: float,
+                delays: Sequence[float] = None, sleep: Callable = None) -> dict:
+    """일시적인 서버 오류(429/5xx)는 조금 기다렸다 다시 보낸다. 그래도 안 되면 마지막 오류를 그대로 올린다."""
+    import time as _t
+    delays = RETRY_DELAYS if delays is None else delays
+    sleep = sleep or _t.sleep
+    last = None
+    for i in range(len(delays) + 1):
+        try:
+            return post(url, payload, headers, timeout)
+        except VisionError as e:
+            last = e
+            if i >= len(delays) or not any(c in str(e) for c in _RETRY_CODES):
+                raise
+            sleep(delays[i])
+    raise last  # pragma: no cover
+
+
 def _http_stream(url: str, payload: dict, timeout: float):
     """줄 단위 JSON 을 흘려주는 응답을 하나씩 돌려준다 (Ollama 모델 내려받기 진행 상황)."""
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
@@ -414,7 +437,7 @@ class ClaudeProvider(Provider):
         payload = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": content}]}
         headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         try:
-            d = self.post(ANTHROPIC_URL, payload, headers, self.timeout)
+            d = _post_retry(self.post, ANTHROPIC_URL, payload, headers, self.timeout)
         except VisionError as e:
             s = str(e)
             if "HTTP 401" in s:
@@ -493,16 +516,28 @@ class OpenAICompatProvider(Provider):
             content.append({"type": "image_url", "image_url": {"url": "data:%s;base64,%s" % (mt, b64)}})
         payload = {"model": self.model, "temperature": 0, "messages": [{"role": "user", "content": content}]}
         try:
-            d = self.post(self.base_url + "/chat/completions", payload, self._headers(), self.timeout)
+            d = _post_retry(self.post, self.base_url + "/chat/completions", payload, self._headers(), self.timeout)
         except VisionError as e:
             s = str(e)
-            if "HTTP 401" in s or "HTTP 403" in s:
-                raise VisionError("API 키가 거부됐습니다. 키를 확인하세요.")
-            if "HTTP 404" in s:
-                raise VisionError("모델 '%s' 을(를) 쓸 수 없거나 서버 주소가 틀렸습니다." % self.model)
-            if "HTTP 429" in s:
-                raise VisionError("호출 한도에 걸렸습니다. 잠시 뒤 다시 시도하세요.")
-            raise
+            # Gemini 무료 모델이 계속 과부하면, 같은 키로 쓸 수 있는 가벼운 모델로 한 번 더 (사용자 설정은 그대로)
+            alt = GEMINI_FALLBACK.get(self.model) if "generativelanguage" in self.base_url else None
+            if alt and any(c in s for c in ("HTTP 503", "HTTP 429", "HTTP 500")):
+                payload["model"] = alt
+                try:
+                    d = _post_retry(self.post, self.base_url + "/chat/completions", payload, self._headers(), self.timeout)
+                    s = ""
+                except VisionError as e2:
+                    s = str(e2)
+            if s:
+                if "HTTP 401" in s or "HTTP 403" in s:
+                    raise VisionError("API 키가 거부됐습니다. 키를 확인하세요.")
+                if "HTTP 404" in s:
+                    raise VisionError("모델 '%s' 을(를) 쓸 수 없거나 서버 주소가 틀렸습니다." % self.model)
+                if "HTTP 429" in s:
+                    raise VisionError("호출 한도에 걸렸습니다. 잠시 뒤 다시 시도하세요.")
+                if "HTTP 503" in s or "HTTP 500" in s:
+                    raise VisionError("AI 서버가 지금 붐빕니다(여러 번 다시 시도했지만 실패). 1~2분 뒤 다시 하거나 다른 서비스를 고르세요.")
+                raise VisionError(s)
         ch = (d.get("choices") or [{}])[0] if isinstance(d, dict) else {}
         c = (ch.get("message") or {}).get("content")
         if isinstance(c, list):  # 일부 서버는 조각 목록으로 준다

@@ -1725,8 +1725,11 @@ class VidFindTab(QWidget):
             try:
                 # 도감 일화 검색: 적은 글('흰 옷 늑대' 같은 특징 문구)이 게임 도감의 설명과 겹치면 그 몬스터를 후보에 더한다
                 cards_n = self._lore_cards()
-                for h_ in (identify_unitlink.search_lore(clue, cards_n) if cards_n else [])[:3]:
-                    if h_["score"] < 0.5:
+                # 적은 글이 도감 '이름' 그대로면 일화 검색은 하지 않는다 — 일화 속 흔한 낱말('사령관' 등)로
+                # 다른 몬스터가 끼어드는 오탐(독 사령관 → 둘째 언니)을 막는다. 일화 검색은 '설명 문구'일 때만.
+                is_name = any(entstore.norm(v) == entstore.norm(clue) for c_ in cards_n.values() for v in c_["names"].values())
+                for h_ in ([] if is_name else (identify_unitlink.search_lore(clue, cards_n) if cards_n else []))[:3]:
+                    if h_["score"] < 0.5 or len(h_["words"]) < 2:   # 낱말 하나만 겹친 건 근거가 약하다
                         continue
                     for hh_ in store.find(h_["name"], limit=1):
                         if hh_.score < 0.9:
@@ -1737,7 +1740,7 @@ class VidFindTab(QWidget):
                                 hit_["score"] = round(min(hit_["score"] + 0.2, 1.0), 3)
                                 hit_["why"] += " + 도감 일화 '%s'" % h_["name"]
                             else:
-                                res["candidates"].append({"folder": code_, "score": 0.9,
+                                res["candidates"].append({"folder": code_, "score": 0.6,
                                                           "why": "도감 일화 — '%s' (%s)" % (h_["name"], ",".join(h_["words"])[:40]),
                                                           "meshes": [], "anims": 0})
                     res.setdefault("note", "")
@@ -2110,7 +2113,7 @@ class VidFindTab(QWidget):
                         if lore_cards and desc_full:
                             try:
                                 hits_l = _ul.search_lore(desc_full, lore_cards)
-                                lore_names = [h["name"] for h in hits_l if h["score"] >= 0.5][:3]
+                                lore_names = [h["name"] for h in hits_l if h["score"] >= 0.5 and len(h["words"]) >= 2][:3]
                                 if lore_names and store_ is not None:
                                     for nm2 in lore_names:
                                         for hh in store_.find(nm2, limit=1):
@@ -2122,7 +2125,7 @@ class VidFindTab(QWidget):
                                                 if ms2:
                                                     p2 = min(ms2, key=lambda x: ("base" not in x.lower(), len(x)))
                                                     if not any(c.path == p2 for c in ex_):
-                                                        ex_.append(assetidx.MeshCandidate(p2, assetidx.mesh_name(p2), 0.9, "도감 일화 — '%s'" % nm2))
+                                                        ex_.append(assetidx.MeshCandidate(p2, assetidx.mesh_name(p2), 0.7, "도감 일화 — '%s'" % nm2))
                                     if ex_:
                                         why_ = "도감 일화(정답표)"
                             except Exception:  # noqa: BLE001 - 도감 검색은 보조
