@@ -170,3 +170,85 @@ def find(ask_text: Optional[Callable[[str], str]], clue: str, game_hint: str,
             note = "AI 확장 실패(%s) — 이름 유사로만 찾습니다" % str(e)[:80]
     stats = folder_stats(mesh_paths, anim_paths)
     return {"candidates": score_folders(exp, stats, clue=clue, store=store), "expansion": exp, "note": note}
+
+
+# ---------------------------------------------------------------------- 잡몹(이름 없는 몬스터): 외형 -> 종족 변형 찾기
+# 실례(방패 든 늑대): 늑대 -> 狼 -> 병음 'Lang' 으로 변형 폴더(GYCY_Lang_01~08)를 모으고,
+# '방패' 는 각 변형의 부속 파일 이름(weapon/Shield/huoba 횃불)에서 찾아 변형을 구분했다 -> GYCY_Lang_07.
+
+def build_mob_prompt(desc: str, game_hint: str = "") -> str:
+    game = (" in the game '%s'" % game_hint) if game_hint else ""
+    return (
+        "A user is looking for a regular enemy (mob)%s. They don't know its name, only how it looks: \"%s\".\n"
+        "Game resources use the developer's native language romanization (e.g. pinyin for Chinese games) for the creature type, "
+        "and attachment files are named after what the mob holds/wears (shield, bow, torch, lantern...).\n"
+        "Answer ONLY JSON:\n"
+        '{"species": ["creature-type word stems that could appear in folder names: origin-language romanization first (e.g. wolf -> lang), then english"],\n'
+        ' "attributes": [["synonym stems for one held/worn item, origin romanization + english, e.g. shield -> dun, dunpai, shield, pai"], ["next item..."]],\n'
+        ' "why": "one short sentence"}' % (game, (desc or "")[:400])
+    )
+
+
+def parse_mob(text: str) -> Dict:
+    obj = _extract_json(text or "")
+    if not isinstance(obj, dict):
+        obj = {}
+    sp = [str(x).strip() for x in (obj.get("species") or []) if str(x).strip()][:8] if isinstance(obj.get("species"), (list, tuple)) else []
+    attrs: List[List[str]] = []
+    if isinstance(obj.get("attributes"), (list, tuple)):
+        for grp in obj["attributes"][:6]:
+            if isinstance(grp, (list, tuple)):
+                g = [str(x).strip() for x in grp if str(x).strip()][:8]
+            else:
+                g = [str(grp).strip()] if str(grp).strip() else []
+            if g:
+                attrs.append(g)
+    return {"species": sp, "attributes": attrs, "why": str(obj.get("why") or "")[:160]}
+
+
+def score_mob(exp: Dict, stats: Dict[str, dict], mesh_paths: Sequence[str] = (), limit: int = 8) -> List[dict]:
+    """종족 어간으로 변형 폴더를 모으고, 부속 파일 이름의 특징 낱말로 변형을 구분해 점수 매긴다."""
+    species = [norm(s) for s in exp.get("species", []) if len(norm(s)) >= 3]
+    attrs = [[norm(a) for a in grp if len(norm(a)) >= 3] for grp in exp.get("attributes", [])]
+    attrs = [g for g in attrs if g]
+    if not species:
+        return []
+    base_names = [(p, (p or "").replace("\\", "/").rsplit("/", 1)[-1].lower()) for p in mesh_paths]
+    out = []
+    for folder, s in stats.items():
+        core, whole = _core_name(folder), norm(folder)
+        sp_hit = next((sp for sp in species if sp == core or (sp in whole and len(sp) >= 3)), "")
+        if not sp_hit:
+            continue
+        sc, why = 0.45, ["종족 '%s'" % sp_hit]
+        # 이 변형에 딸린 파일 이름들: 폴더 안 메시 + (다른 곳에 있어도) 파일 이름에 이 폴더명이 든 것 (예: VFX 의 ..._Lang_07_Shield_VFX)
+        fl = norm(folder)
+        hay = " ".join((p or "").replace("\\", "/").rsplit("/", 1)[-1].lower() for p in s["meshes"])
+        hay += " " + " ".join(b for _p, b in base_names if fl and fl in norm(b))
+        n_attr = 0
+        for grp in attrs:
+            word = next((a for a in grp if a in norm(hay)), "")
+            if word:
+                n_attr += 1
+                why.append("들고/걸친 것 '%s'" % word)
+        sc += min(n_attr * 0.25, 0.5)
+        if attrs and not n_attr:
+            sc -= 0.1          # 특징을 아는데 하나도 안 맞는 변형은 뒤로
+        out.append({"folder": folder, "score": round(max(min(sc, 1.0), 0.0), 3), "why": " + ".join(why),
+                    "meshes": list(s["meshes"]), "anims": s["anims"]})
+    out.sort(key=lambda d: (-d["score"], d["folder"].lower()))
+    return out[:limit]
+
+
+def find_mob(ask_text: Optional[Callable[[str], str]], desc: str, game_hint: str,
+             mesh_paths: Sequence[str], anim_paths: Sequence[str] = ()) -> Dict:
+    """외형 설명만으로 잡몹 변형 후보를 찾는다 -> {"candidates": [...], "expansion": {...}, "note": str}."""
+    exp, note = {"species": [], "attributes": [], "why": ""}, ""
+    if ask_text is not None:
+        try:
+            exp = parse_mob(ask_text(build_mob_prompt(desc, game_hint)))
+            note = exp.get("why") or ""
+        except Exception as e:  # noqa: BLE001
+            note = "AI 외형 확장 실패(%s)" % str(e)[:80]
+    stats = folder_stats(mesh_paths, anim_paths)
+    return {"candidates": score_mob(exp, stats, mesh_paths), "expansion": exp, "note": note}

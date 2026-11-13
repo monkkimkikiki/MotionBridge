@@ -61,6 +61,22 @@ check("실패" in r["note"] and r["candidates"] and r["candidates"][0]["folder"]
 r2 = nf.find(None, "ganshi", "", MESHES, ANIMS)
 check(r2["candidates"] and r2["candidates"][0]["folder"] == "HFM_GanShi_01A", "ask 없이 직접 유사 검색")
 
+# ---- 잡몹(이름 없음): 외형 -> 종족 변형 + 부속 파일 특징 (방패 든 늑대 실사례 재현: GYCY_Lang_07)
+MOBS = ([C + "GYCY/GYCY_Lang_%02d/Meshes/SK_GYCY_Lang_%02d.uasset" % (i, i) for i in range(1, 9)]
+        + [C + "GYCY/GYCY_Lang_07/Meshes/SK_GYCY_Lang_07_weapon_l.uasset",
+           C + "GYCY/GYCY_Lang_03/Meshes/SK_GYCY_Lang_03_huoba.uasset",
+           "b1/Content/00Main/VFX/Characters/HYS/HYS_TeChuShi_01/Mesh/SK_GYCY_Lang_07_Shield_VFX.uasset"]
+        + MESHES)
+mexp = nf.parse_mob('{"species":["lang","wolf"],"attributes":[["dun","dunpai","shield","pai"]],"why":"회색 늑대 + 사자 방패"}')
+check(mexp["species"] == ["lang", "wolf"] and mexp["attributes"] == [["dun", "dunpai", "shield", "pai"]], "잡몹 확장 해석: %s" % mexp)
+check(nf.parse_mob("깨진 답")["species"] == [], "깨진 잡몹 답은 빈 확장")
+mr = nf.score_mob(mexp, nf.folder_stats(MOBS, ANIMS), MOBS)
+check(mr and mr[0]["folder"] == "GYCY_Lang_07", "잡몹 1위 = 방패 변형: %s" % (mr and mr[0]["folder"]))
+check("들고" in mr[0]["why"] and all(r["folder"].startswith("GYCY_Lang") for r in mr), "변형만 모임 + 특징 근거: %s" % mr[0]["why"])
+check(mr[0]["score"] > mr[1]["score"], "특징 맞는 변형이 점수 우위")
+mfail = nf.find_mob(lambda p: (_ for _ in ()).throw(RuntimeError("안 됨")), "늑대", "오공", MOBS, ANIMS)
+check("실패" in mfail["note"] and mfail["candidates"] == [], "LLM 실패 시 조용한 빈 결과: %s" % mfail["note"])
+
 if fails:
     print("\n실패 %d개" % len(fails))
     sys.exit(1)

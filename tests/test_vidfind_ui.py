@@ -122,7 +122,8 @@ def main():
         check("취소" in vt.status.text(), "취소 안내: %s" % vt.status.text())
         vt.status.setText(prev_status)
         check("Dwarf" in prompts[0] and "StoneGolem" in prompts[0], "AI에게 게임 이름 목록을 알림")
-        check(len(prompts) == 2, "장면마다 호출: %d" % len(prompts))
+        # 장면 2장 + '모르는 캐릭터' 줄에 외형(종족·들고 있는 것) 확장 1회 = 3회
+        check(len(prompts) == 3 and "regular enemy" in prompts[2], "장면 2회 + 외형 확장 1회: %d" % len(prompts))
         r0, r1 = vt.rows
         check(r0.group.name == "Dwarf" and r0.chosen() == MESHES[0], "Dwarf 는 자동으로 맞는 메시: %s" % r0.chosen())
         check(r1.chosen() is None and r1.combo.currentData() is None, "모르는 캐릭터는 후보 없음")

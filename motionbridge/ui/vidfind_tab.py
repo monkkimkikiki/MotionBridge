@@ -52,6 +52,98 @@ LABEL_CHOICES = ["타격", "피격", "스킬", "연출", "회피", "사망", "�
 PICK_FILTER = "영상/이미지 (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.png *.jpg *.jpeg *.webp);;모든 파일 (*)"
 
 
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+
+
+class _PickLabel(QLabel):
+    """크롭 대화상자의 그림: 마우스로 끌어 박스를 지정한다."""
+
+    def __init__(self, owner) -> None:
+        super().__init__()
+        self.owner = owner
+        self._p0 = None
+        from PySide6.QtWidgets import QRubberBand
+        self.band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+        self.rect_sel = None     # QRect (표시 좌표)
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        self._p0 = ev.position().toPoint()
+        self.band.setGeometry(QRect(self._p0, QSize(1, 1)))
+        self.band.show()
+
+    def mouseMoveEvent(self, ev) -> None:  # noqa: N802
+        if self._p0 is not None:
+            self.band.setGeometry(QRect(self._p0, ev.position().toPoint()).normalized())
+
+    def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
+        if self._p0 is None:
+            return
+        r = QRect(self._p0, ev.position().toPoint()).normalized()
+        self._p0 = None
+        if r.width() >= 10 and r.height() >= 10:
+            self.rect_sel = r
+            self.owner._picked()
+        else:
+            self.band.hide()
+            self.rect_sel = None
+            self.owner._picked()
+
+
+class _CropDialog(QDialog):
+    """스크린샷에서 '찾을 몬스터'를 마우스로 박스 지정 — 그 영역만 AI 에게 보여 줘서 빠르고, 어떤 몬스터인지 헷갈리지 않는다."""
+
+    def __init__(self, parent, img_path: str, save_path: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("찾을 몬스터 영역 지정 — " + os.path.basename(img_path))
+        self.out_path: Optional[str] = None
+        self._save = save_path
+        self.pm = QPixmap(img_path)
+        v = QVBoxLayout(self)
+        tip = QLabel("찾고 싶은 몬스터를 마우스로 끌어 박스로 지정하세요. 몬스터만 꽉 차게 잡을수록 정확합니다.")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        self.view = _PickLabel(self)
+        if not self.pm.isNull():
+            shown = self.pm.scaled(960, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self._scale = shown.width() / max(self.pm.width(), 1)
+            self.view.setPixmap(shown)
+            self.view.setFixedSize(shown.size())
+        else:
+            self._scale = 1.0
+            self.view.setText("(이미지를 읽지 못했습니다)")
+        v.addWidget(self.view, 0, Qt.AlignmentFlag.AlignHCenter)
+        h = QHBoxLayout()
+        self.btn_ok = QPushButton("✂ 이 영역으로 찾기")
+        self.btn_ok.setEnabled(False)
+        self.btn_ok.clicked.connect(self._accept_crop)
+        h.addWidget(self.btn_ok)
+        b = QPushButton("영역 없이 전체 이미지로")
+        b.clicked.connect(self.accept)      # out_path 없음 = 원본 전체
+        h.addWidget(b)
+        b = QPushButton("이 이미지는 건너뛰기")
+        b.clicked.connect(self.reject)
+        h.addWidget(b)
+        v.addLayout(h)
+
+    def _picked(self) -> None:
+        self.btn_ok.setEnabled(self.view.rect_sel is not None)
+
+    def _accept_crop(self) -> None:
+        r = self.view.rect_sel
+        if r is None or self.pm.isNull():
+            self.accept()
+            return
+        s = max(self._scale, 1e-9)
+        orig = QRect(int(r.x() / s), int(r.y() / s), int(r.width() / s), int(r.height() / s)).intersected(self.pm.rect())
+        try:
+            os.makedirs(os.path.dirname(self._save), exist_ok=True)
+            if self.pm.copy(orig).save(self._save, "PNG"):
+                self.out_path = self._save
+        except Exception:  # noqa: BLE001 - 크롭 실패 시 원본 전체로
+            self.out_path = None
+        self.accept()
+
+
 class _Row:
     """검수 표의 한 줄."""
 
@@ -314,16 +406,22 @@ class VidFindTab(QWidget):
         self.min_conf.setValue(int(self.cfg.get("vf_min_conf", 60)))
         self.min_conf.setToolTip("AI 확신이 이 값보다 낮은 줄에는 검수 표에 '⚠ 확신 낮음' 표시를 붙여 한 번 더 보게 합니다 (메시는 가장 유력한 후보가 그래도 골라져 있습니다).")
         r = QHBoxLayout()
-        self.rb_mode_monster = QRadioButton("영상으로 찾기 — AI 가 장면을 보고 추측")
+        self.rb_mode_monster = QRadioButton("영상으로 찾기 — AI 가 장면을 보고 추측 (오래 걸림)")
+        self.rb_mode_img = QRadioButton("이미지로 찾기 — 스크린샷에서 몬스터 영역 지정 (빠름)")
         self.rb_mode_char = QRadioButton("이름으로 찾기 — 검색·AI 확장 (영상 없이)")
-        self.rb_mode_monster.setToolTip("영상/이미지를 분석해 몬스터를 추측합니다. 결과는 4) 검수 표로 — '아는 정보'에 보스 이름을 적으면 정확도가 올라갑니다.\n"
-                                        "입구만 다를 뿐 두 모드 모두 같은 후보(메시·애니메이션) 목록으로 이어집니다.")
+        self.rb_mode_monster.setToolTip("영상 전체를 분석해 몬스터를 추측합니다 — 장면을 수십 장 뽑아 AI 에게 여러 번 물어서 가장 오래 걸립니다.\n"
+                                        "찾는 몬스터가 정해져 있으면 '이미지로 찾기'가 훨씬 빠릅니다. 결과는 어느 모드든 4) 검수 표로 이어집니다.")
+        self.rb_mode_img.setToolTip("게임 영상을 일시정지하고 찍은 스크린샷을 1)에 넣고, 찾을 몬스터를 마우스로 박스 지정합니다.\n"
+                                    "그 영역만 AI 에게 한 번 보여 주므로 몇 초 만에 끝나고, 어떤 몬스터인지 헷갈리지도 않습니다.\n"
+                                    "이 모드는 이미지 파일만 쓰고 1) 목록의 영상은 건드리지 않습니다.")
         self.rb_mode_char.setToolTip("영상 없이 이름으로 찾습니다: 파일 이름 검색 + [🌐 AI 확장 검색](금지장로 같은 한국어 보스 이름·동작 설명도 원어/음차/지역 코드로 확장).\n"
                                      "찾은 캐릭터의 메시가 후보 목록에 바로 올라가고, 해당 애니메이션 클립도 같이 나옵니다.")
-        on_char = bool(self.cfg.get("vf_mode_char", False))
-        self.rb_mode_char.setChecked(on_char)
-        self.rb_mode_monster.setChecked(not on_char)
+        mode0 = str(self.cfg.get("vf_mode") or ("char" if self.cfg.get("vf_mode_char") else "video"))
+        self.rb_mode_char.setChecked(mode0 == "char")
+        self.rb_mode_img.setChecked(mode0 == "image")
+        self.rb_mode_monster.setChecked(mode0 not in ("char", "image"))
         r.addWidget(self.rb_mode_monster)
+        r.addWidget(self.rb_mode_img)
         r.addWidget(self.rb_mode_char)
         r.addStretch(1)
         v.addLayout(r)
@@ -360,8 +458,9 @@ class VidFindTab(QWidget):
         self.char_note.setWordWrap(True)
         cp.addWidget(self.char_note)
         v.addWidget(self.char_panel)
-        self.char_panel.setVisible(on_char)
+        self.char_panel.setVisible(mode0 == "char")
         self.rb_mode_char.toggled.connect(self._mode_changed)
+        self.rb_mode_img.toggled.connect(self._mode_changed)
         self.ck_fast = QCheckBox("빠르게 (후보 5개)")
         self.ck_fast.setChecked(bool(self.cfg.get("vf_fast", True)))
         self.ck_fast.setToolTip("켜면 시간을 크게 줄입니다: ① 영상마다 장면 시트 한 장으로 AI 에게 한 번만 묻고(장면마다 묻지 않음), ② AI 에게 알리는 이름 목록을 %d개로 줄이고, "
@@ -371,6 +470,8 @@ class VidFindTab(QWidget):
         self.btn_guess.setMinimumHeight(32)
         if self.rb_mode_char.isChecked():
             self.btn_guess.setText("캐릭터 메쉬 목록 열기")
+        elif self.rb_mode_img.isChecked():
+            self.btn_guess.setText("이미지에서 영역 지정해서 찾기")
         self.btn_guess.clicked.connect(lambda *_a: self.start_guess(False))
         h.addWidget(self.ck_fast)
         h.addWidget(self.btn_guess, 1)
@@ -960,10 +1061,12 @@ class VidFindTab(QWidget):
 
     def _mode_changed(self, *_a) -> None:
         on = bool(self.rb_mode_char.isChecked())
+        img = bool(self.rb_mode_img.isChecked())
         self.cfg["vf_mode_char"] = on
+        self.cfg["vf_mode"] = "char" if on else ("image" if img else "video")
         self.char_panel.setVisible(on)
-        self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else "캐릭터 추측 시작")
-        self.btn_guess_panel.setVisible(not on)
+        self.btn_guess.setText("캐릭터 메쉬 목록 열기" if on else ("이미지에서 영역 지정해서 찾기" if img else "캐릭터 추측 시작"))
+        self.btn_guess_panel.setVisible(not on and not img)
         if on:
             if self._load_index_cached():
                 self.show_char_meshes()
@@ -1091,6 +1194,23 @@ class VidFindTab(QWidget):
         if not srcs:
             QMessageBox.warning(self, "캐릭터 추측", "영상/이미지를 먼저 추가하세요.")
             return
+        pre_frames = None
+        if self.rb_mode_img.isChecked():   # 이미지로 찾기: 이미지 파일만 쓰고(영상은 건드리지 않음), 유저가 몬스터 영역을 박스로 지정
+            imgs = [s for s in srcs if os.path.splitext(s)[1].lower() in IMAGE_EXTS]
+            if not imgs:
+                QMessageBox.information(self, "이미지로 찾기",
+                                        "1) 목록에 이미지(스크린샷)가 없습니다 — 이 모드는 이미지 파일만 쓰고 영상은 건드리지 않습니다.\n"
+                                        "게임 영상을 일시정지하고 스크린샷을 찍어 1) 에 넣어 주세요 (끌어다 놓기 가능).")
+                return
+            crop_dir = os.path.join(bridge.CONFIG_DIR, "vf_crops")
+            shutil.rmtree(crop_dir, ignore_errors=True)
+            pre_frames = []
+            for ci, p in enumerate(imgs[:4]):
+                dlg = _CropDialog(self, p, os.path.join(crop_dir, "crop_%02d.png" % ci))
+                if dlg.exec():
+                    pre_frames.append(dlg.out_path or p)     # 영역 지정 → 크롭, '전체 이미지로' → 원본
+            if not pre_frames:
+                return
         a = self.win._extract_args()
         if a is None:
             return
@@ -1124,16 +1244,22 @@ class VidFindTab(QWidget):
                     raise RuntimeError(msg2)
             idx = self._ensure_index(a, w, force_index)
             stop_check(w)
-            try:
-                shutil.rmtree(FRAME_DIR, ignore_errors=True)
-            except OSError:
-                pass
+            if pre_frames is not None:        # 이미지로 찾기: 유저가 지정한 영역(크롭)을 그대로 장면으로 쓴다 — 장면 뽑기 생략
+                from types import SimpleNamespace
+                os.makedirs(FRAME_DIR, exist_ok=True)      # 빠르게 모드의 장면 시트 저장용
+                fr = [SimpleNamespace(path=p, source=p) for p in pre_frames]
+                w.progress.emit(0, 1, "지정한 이미지 %d장으로 바로 인식합니다 (장면 뽑기 생략)" % len(fr))
+            else:
+                try:
+                    shutil.rmtree(FRAME_DIR, ignore_errors=True)
+                except OSError:
+                    pass
 
-            def sampling(i, n, name):
-                stop_check(w)
-                w.progress.emit(i, n, "장면 뽑는 중 " + name)
+                def sampling(i, n, name):
+                    stop_check(w)
+                    w.progress.emit(i, n, "장면 뽑는 중 " + name)
 
-            fr = framepick.sample_sources_best(ff, srcs, FRAME_DIR, max(per, 6) if fast else per, w_cap, sampling)   # 검은/정지(메뉴) 화면 제외, 서로 다른 장면 위주
+                fr = framepick.sample_sources_best(ff, srcs, FRAME_DIR, max(per, 6) if fast else per, w_cap, sampling)   # 검은/정지(메뉴) 화면 제외, 서로 다른 장면 위주
             stop_check(w)
             vocab, notes = self._vocab(idx, prov.vocab_limit(), pat, style="lines")   # 카탈로그면 자르지 않고 전부 (잘리면 보스 > 미니보스 > 일반 > NPC 순으로 남김)
             ids = bool(getattr(vocab, "ids", False))
@@ -1250,24 +1376,41 @@ class VidFindTab(QWidget):
                         if asked_x >= 4:
                             break
                         nm_ = (g_.name or "").strip()
-                        if not nm_ or nm_.lower() in assetidx.UNKNOWN_WORDS or idx.rank_meshes(nm_, "", 1, None):
+                        unknown_ = not nm_ or nm_.lower() in assetidx.UNKNOWN_WORDS
+                        if not unknown_ and idx.rank_meshes(nm_, "", 1, None):
+                            continue
+                        if unknown_ and not (g_.description or "").strip():
                             continue
                         stop_check(w)
-                        w.progress.emit(asked_x, 4, "AI 확장 검색 (원어·음차·지역 코드명) " + nm_)
                         asked_x += 1
-                        nf_ = identify_namefind.find(prov.ask_text, nm_, hint, [m.path for m in idx.meshes], idx.anims, self._entities(idx, hint))
-                        ex_ = []
-                        for cand_ in (nf_.get("candidates") or [])[:4]:
-                            if cand_["score"] < 0.35 or not cand_["meshes"]:
-                                continue
-                            p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
-                            ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
+                        ex_, added_why = [], ""
+                        if not unknown_:   # 이름이 있으면: 원어·음차·지역 코드명 확장 (금지장로 방식)
+                            w.progress.emit(asked_x, 4, "AI 확장 검색 (원어·음차·지역 코드명) " + nm_)
+                            nf_ = identify_namefind.find(prov.ask_text, nm_, hint, [m.path for m in idx.meshes], idx.anims, self._entities(idx, hint))
+                            for cand_ in (nf_.get("candidates") or [])[:4]:
+                                if cand_["score"] < 0.35 or not cand_["meshes"]:
+                                    continue
+                                p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
+                                ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
+                            added_why = "AI 확장"
+                        if not ex_:        # 이름이 없거나(잡몹) 이름 확장이 비면: 외형 설명으로 종족 변형 + 부속 파일 특징 (방패 든 늑대 방식)
+                            desc_x = " ".join(x for x in (nm_ if not unknown_ else "", g_.description or "") if x).strip()
+                            if desc_x:
+                                stop_check(w)
+                                w.progress.emit(asked_x, 4, "외형으로 변형 찾는 중 (종족·들고 있는 것) " + desc_x[:40])
+                                mob_ = identify_namefind.find_mob(prov.ask_text, desc_x, hint, [m.path for m in idx.meshes], idx.anims)
+                                for cand_ in (mob_.get("candidates") or [])[:5]:
+                                    if cand_["score"] < 0.35 or not cand_["meshes"]:
+                                        continue
+                                    p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
+                                    ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.9), "외형 — " + cand_["why"]))
+                                added_why = "외형(종족·들고 있는 것)"
                         if ex_:
                             try:
                                 g_.ex_cands = ex_
                             except Exception:  # noqa: BLE001
                                 pass
-                            notes.append("영상 추측 '%s' → AI 확장 후보 %d개 (검수 칸에서 고르세요)" % (nm_, len(ex_)))
+                            notes.append("'%s' → %s 후보 %d개 (검수 칸에서 고르세요)" % (nm_ or (g_.description or "")[:30], added_why, len(ex_)))
                 except _Stopped:
                     raise
                 except Exception as e:  # noqa: BLE001 - 확장은 보조
