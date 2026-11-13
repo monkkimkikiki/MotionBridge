@@ -15,9 +15,14 @@ import time
 from typing import Dict, List, Optional
 
 from . import bridge
-from .knownkeys import keys_for as known_keys_for  # noqa: F401 - 내장(배포용) 공개 키 목록 매칭
+from . import knownkeys as _kk
 
 FILE_NAME = "game_presets.json"
+
+
+def known_keys_for(*names: str, share: Optional[str] = None) -> List[str]:
+    """공개 키 목록(로컬 known_keys.json + 팀 공유 폴더) 매칭 — 코드에는 키가 없다."""
+    return _kk.keys_for(*names, extra_dirs=[share] if share else ())
 FIELDS = ("name", "ue", "aes", "usmap", "links", "note", "status", "reason", "appid", "project", "exe", "folder", "updated")
 
 

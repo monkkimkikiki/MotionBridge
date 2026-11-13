@@ -1564,7 +1564,8 @@ class MainWindow(QMainWindow):
             prov = None
 
         def job(w):
-            cands = list(gamepresets.known_keys_for(name, os.path.basename(game.rstrip("\\/"))))
+            cands = list(gamepresets.known_keys_for(name, os.path.basename(game.rstrip("\\/")),
+                                                    share=self.cfg.get("preset_share_dir") or None))
             if cands:
                 w.progress.emit(0, 4, "내장 키 목록에서 '%s' 후보 %d개 찾음" % (name, len(cands)))
             # ① 웹 검색 (AI 불필요): 공개 모딩 포럼·깃허브 페이지를 열어 키처럼 생긴 것을 모은다
@@ -1686,7 +1687,8 @@ class MainWindow(QMainWindow):
         # 암호화 게임인데 키가 비어 있으면: 내장 공개 키 목록에서 이름으로 매칭해 실제로 열리는지 검증 후 자동 입력
         if sc.encrypted and not has_key:
             folder = os.path.basename(os.path.normpath(sc.root or ""))
-            cands = gamepresets.known_keys_for(self.ex_gname.text(), folder, getattr(sc, "project", "") or "")
+            cands = gamepresets.known_keys_for(self.ex_gname.text(), folder, getattr(sc, "project", "") or "",
+                                               share=self.cfg.get("preset_share_dir") or None)
             if cands:
                 QTimer.singleShot(0, lambda c=cands: self._try_known_keys(c))
 
