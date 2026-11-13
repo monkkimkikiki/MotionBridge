@@ -2082,7 +2082,10 @@ class VidFindTab(QWidget):
                                 mi_ = idx.mesh(p_)
                                 if mi_ is not None and mi_.rigged and cls_ok_j(p_):   # 찾을 종류 체크 안의 후보만 렌더
                                     ok_v.append(p_)
-                            ok_v = ok_v[:identify_verify.MAX_CANDS * 2]   # 변형이 많으면 토너먼트(4개씩 조별 -> 결승)로 가린다
+                            # 변형이 많으면 토너먼트(4개씩 조별 -> 결승). 단 로컬 AI(Ollama 등)는 호출당 수십 초라
+                            # 시트 1장(상위 4개)으로 제한한다 — 생김새 비교가 수 분을 먹지 않게.
+                            cap_v = identify_verify.MAX_CANDS * (2 if prov.key in ("claude", "openai") else 1)
+                            ok_v = ok_v[:cap_v]
                             if len(ok_v) >= 2:
                                 rows_v.append((g_, ok_v))
                         # 썸네일이 아직 없는 후보만 모아 '한 번에' 추출 — 추출기가 호출마다 pak 전체를 다시 마운트해서
