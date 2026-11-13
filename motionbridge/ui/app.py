@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import helperupdate, quat as Q
-from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
+from ..core import animlink, animops, bridge, extractor, gamepresets, gamescan, keyweb, layout, meshconv, motionlib, osopen, safesave, scalefit, textmatch
 from ..core.export import PRESETS
 from ..core import guide as guide_mod
 from ..core.history import History
@@ -1564,13 +1564,25 @@ class MainWindow(QMainWindow):
             prov = None
 
         def job(w):
-            text = ""
             cands = list(gamepresets.known_keys_for(name, os.path.basename(game.rstrip("\\/"))))
             if cands:
-                w.progress.emit(0, 3, "내장 키 목록에서 '%s' 후보 %d개 찾음" % (name, len(cands)))
+                w.progress.emit(0, 4, "내장 키 목록에서 '%s' 후보 %d개 찾음" % (name, len(cands)))
+            # ① 웹 검색 (AI 불필요): 공개 모딩 포럼·깃허브 페이지를 열어 키처럼 생긴 것을 모은다
+            try:
+                w.progress.emit(1, 4, "웹에서 공개된 키 검색 중 (모딩 포럼·깃허브)")
+                web_c, _srcs = keyweb.find_keys(name, on_progress=lambda m: w.progress.emit(1, 4, m))
+                for k in web_c:
+                    if k not in cands:
+                        cands.append(k)
+                if web_c:
+                    w.progress.emit(1, 4, "웹에서 키 후보 %d개 수집" % len(web_c))
+            except Exception:  # noqa: BLE001 - 웹 검색 실패는 다음 단계로
+                pass
+            # ② AI 에게도 묻는다 (지식 속 키 — 틀려도 검증에서 걸러진다)
+            text = ""
             if prov is not None:
                 try:
-                    w.progress.emit(1, 3, "AI 에게 '%s' 의 공개된 AES 키를 묻는 중" % name)
+                    w.progress.emit(2, 4, "AI 에게 '%s' 의 공개된 AES 키를 묻는 중" % name)
                     text = prov.ask_text(
                         "언리얼 엔진 게임 '%s' 의 커뮤니티에 공개된 pak/utoc AES-256 암호화 키를 아는 대로 알려줘.\n"
                         "형식: 0x 로 시작하는 64자리 16진수. 키만 한 줄에 하나씩, 다른 설명 없이." % name) or ""
@@ -1581,7 +1593,7 @@ class MainWindow(QMainWindow):
                     cands.append(k)
             if not cands:
                 return (None, [], 0)
-            w.progress.emit(2, 3, "후보 %d개를 실제로 넣어 보며 여는지 확인 중" % len(cands))
+            w.progress.emit(3, 4, "후보 %d개를 실제로 넣어 보며 여는지 확인 중" % len(cands))
             key, tried = extractor.pick_working_key(helper, game, ue, usmap, cands)
             return (key, tried, len(cands))
 

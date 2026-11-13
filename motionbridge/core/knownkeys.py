@@ -22,6 +22,10 @@ KNOWN = {
         "match": ["battlecorearena"],
         "keys": ["0x8A75AFDF1C74AB55B79DC1DD4ABE4B01360A059D77F243EF4EFADA41A59D71A0"],
     },
+    "Tower of Fantasy": {   # Gildor 포럼 공개 글 (UE4.26, 2020 초기 버전 기준 — 업데이트로 바뀌었으면 검증에서 걸러짐)
+        "match": ["toweroffantasy", "hotta"],
+        "keys": ["0xA16F419DD3E55493653AC5CDBA71963296E46792E54900C05A1BA5B50C3BC2B0"],
+    },
 }
 
 
