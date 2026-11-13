@@ -1406,6 +1406,34 @@ class VidFindTab(QWidget):
                 raise _Stopped()
 
         def job(w):
+            def _pmap(items, fn, label):
+                """항목별 AI 질의를 클라우드 AI 면 동시에 보낸다 — 질문·답은 순차와 똑같고 기다리는 시간만 줄어든다 (정확도 동일)."""
+                if not items:
+                    return []
+                workers = min(4, len(items)) if prov.key in ("claude", "openai") else 1
+                out = [None] * len(items)
+                if workers <= 1:
+                    for i_, it_ in enumerate(items):
+                        stop_check(w)
+                        w.progress.emit(i_, len(items), label)
+                        try:
+                            out[i_] = fn(it_)
+                        except Exception as e_:  # noqa: BLE001
+                            out[i_] = e_
+                    return out
+                from concurrent.futures import ThreadPoolExecutor
+                stop_check(w)
+                w.progress.emit(0, len(items), "%s — %d건을 동시에 보냄" % (label, len(items)))
+                with ThreadPoolExecutor(max_workers=workers) as pool_:
+                    futs_ = [pool_.submit(fn, it_) for it_ in items]
+                    for i_, fu_ in enumerate(futs_):
+                        w.progress.emit(i_, len(items), label)
+                        try:
+                            out[i_] = fu_.result()
+                        except Exception as e_:  # noqa: BLE001
+                            out[i_] = e_
+                return out
+
             if isinstance(prov, vision.OllamaProvider):  # 모델이 없으면 긴 작업(목록 읽기, 장면 뽑기) 전에 바로 알린다
                 ok2, msg2, _n = prov.check()
                 if not ok2:
@@ -1463,27 +1491,25 @@ class VidFindTab(QWidget):
                 vocab = vocab[:vision.FAST_VOCAB]
             if known:  # 알려 준 이름을 리소스 이름으로 바꿔 두고, 이름 목록에 꼭 들어가게 한다
                 gamenames.resolve_known(known, idx, book)
-                for k in known:
-                    if k.top is not None:
+                # 표시 이름으로 못 이은 보스 이름(금지장로 등): AI 확장 검색(원어·음차·지역·모티프 코드명)으로 잇고,
+                # 유력 후보 보스들을 전부 검수 후보에 넣어 검수자가 고르게 한다 (여러 개면 동시에 질의)
+                ks_ = [k for k in known if k.top is None]
+                store_k = self._entities(idx, hint) if ks_ else None
+                mp_k = [m.path for m in idx.meshes]
+                for k, nf_ in zip(ks_, _pmap(ks_, lambda k_: identify_namefind.find(prov.ask_text, k_.name, hint, mp_k, idx.anims, store_k),
+                                             "아는 정보 AI 확장 검색 (원어·음차·지역 코드명)")):
+                    if isinstance(nf_, Exception):
+                        notes.append("아는 정보 '%s' 확장 검색 실패: %s" % (k.name, str(nf_)[:80]))
                         continue
-                    # 표시 이름으로 못 이은 보스 이름(금지장로 등): AI 확장 검색(원어·음차·지역·모티프 코드명)으로 잇고,
-                    # 유력 후보 보스들을 전부 검수 후보에 넣어 검수자가 고르게 한다
-                    try:
-                        stop_check(w)
-                        nf_ = identify_namefind.find(prov.ask_text, k.name, hint, [m.path for m in idx.meshes], idx.anims, self._entities(idx, hint))
-                        added_ = []
-                        for ci_, cand_ in enumerate((nf_.get("candidates") or [])[:4]):
-                            if cand_["score"] < 0.35 or not cand_["meshes"]:
-                                continue
-                            p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
-                            k.cands.insert(len(added_), assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
-                            added_.append("%s(%d%%)" % (cand_["folder"], round(cand_["score"] * 100)))
-                        if added_:
-                            notes.append("아는 정보 '%s' → 후보 %s (AI 확장 — 검수 칸에서 고르세요)" % (k.name, ", ".join(added_)))
-                    except _Stopped:
-                        raise
-                    except Exception as e:  # noqa: BLE001 - 확장은 보조
-                        notes.append("아는 정보 '%s' 확장 검색 실패: %s" % (k.name, str(e)[:80]))
+                    added_ = []
+                    for ci_, cand_ in enumerate((nf_.get("candidates") or [])[:4]):
+                        if cand_["score"] < 0.35 or not cand_["meshes"]:
+                            continue
+                        p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
+                        k.cands.insert(len(added_), assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
+                        added_.append("%s(%d%%)" % (cand_["folder"], round(cand_["score"] * 100)))
+                    if added_:
+                        notes.append("아는 정보 '%s' → 후보 %s (AI 확장 — 검수 칸에서 고르세요)" % (k.name, ", ".join(added_)))
                 for k in known:
                     if k.top and not any(v == k.top.name or v.startswith(k.top.name + " ") for v in vocab):
                         vocab = [k.top.name] + list(vocab)
@@ -1502,23 +1528,22 @@ class VidFindTab(QWidget):
                 if gl is not None and gl.entries:
                     # 이름을 못 댔거나(모름) 이름과 맞는 메시가 없는 줄: 외형 설명·게임 속 이름으로, 뜻이 붙은 전체 목록에서 AI 가 다시 고른다
                     all_names = self._gloss_names(idx)
-                    asked = 0
+                    rows_g = []
                     for g_ in groups_:
-                        if asked >= 8:
+                        if len(rows_g) >= 8:
                             break
                         unknown_ = (g_.name or "").strip().lower() in assetidx.UNKNOWN_WORDS
                         if not unknown_ and idx.rank_meshes(g_.name, "", 1, None):
                             continue
-                        stop_check(w)
-                        w.progress.emit(asked, 8, "뜻 풀이로 캐릭터 다시 찾는 중")
                         m_ = re.search(r"게임 속 이름: ([^.]+)", g_.description or "")
                         ingame = (m_.group(1).strip() if m_ else "") or ("" if unknown_ else g_.name)
                         desc_ = re.sub(r"게임 속 이름: [^.]+\.?", "", g_.description or "").strip()
-                        asked += 1
-                        try:
-                            picks = nameglossary.pick(prov.ask_text, desc_, ingame, all_names, gl, hint)
-                        except Exception as e:  # noqa: BLE001
-                            errors.append("뜻 풀이로 찾기: %s" % str(e)[:160])
+                        rows_g.append((g_, unknown_, ingame, desc_))
+                    res_g = _pmap(rows_g, lambda t: nameglossary.pick(prov.ask_text, t[3], t[2], all_names, gl, hint),
+                                  "뜻 풀이로 캐릭터 다시 찾는 중")
+                    for (g_, unknown_, ingame, desc_), picks in zip(rows_g, res_g):
+                        if isinstance(picks, Exception):
+                            errors.append("뜻 풀이로 찾기: %s" % str(picks)[:160])
                             continue
                         if not picks:
                             picks = [(n, s, why) for n, s, why in gl.search(ingame or desc_, all_names, 5)]
@@ -1539,9 +1564,9 @@ class VidFindTab(QWidget):
                 # 영상에서 추측한 이름도 '아는 정보'처럼 AI 확장 검색(원어 정식명·음차·지역 머리글자 코드명)으로 잇는다
                 # — 이름 글자로 메시를 못 찾은 줄만, 최대 4줄. 찾은 후보는 전부 검수 칸에 들어간다.
                 try:
-                    asked_x = 0
+                    rows_x = []
                     for g_ in groups_:
-                        if asked_x >= 4:
+                        if len(rows_x) >= 4:
                             break
                         nm_ = (g_.name or "").strip()
                         unknown_ = not nm_ or nm_.lower() in assetidx.UNKNOWN_WORDS
@@ -1549,36 +1574,44 @@ class VidFindTab(QWidget):
                             continue
                         if unknown_ and not (g_.description or "").strip():
                             continue
-                        stop_check(w)
-                        asked_x += 1
-                        ex_, added_why = [], ""
+                        rows_x.append((g_, nm_, unknown_))
+                    mesh_paths_ = [m.path for m in idx.meshes]
+                    store_ = self._entities(idx, hint) if rows_x else None
+
+                    def _expand(t):
+                        g_, nm_, unknown_ = t
+                        ex_, why_ = [], ""
                         if not unknown_:   # 이름이 있으면: 원어·음차·지역 코드명 확장 (금지장로 방식)
-                            w.progress.emit(asked_x, 4, "AI 확장 검색 (원어·음차·지역 코드명) " + nm_)
-                            nf_ = identify_namefind.find(prov.ask_text, nm_, hint, [m.path for m in idx.meshes], idx.anims, self._entities(idx, hint))
+                            nf_ = identify_namefind.find(prov.ask_text, nm_, hint, mesh_paths_, idx.anims, store_)
                             for cand_ in (nf_.get("candidates") or [])[:4]:
                                 if cand_["score"] < 0.35 or not cand_["meshes"]:
                                     continue
                                 p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
                                 ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.95), "AI 확장 — " + cand_["why"]))
-                            added_why = "AI 확장"
+                            why_ = "AI 확장"
                         if not ex_:        # 이름이 없거나(잡몹) 이름 확장이 비면: 외형 설명으로 종족 변형 + 부속 파일 특징 (방패 든 늑대 방식)
                             desc_x = " ".join(x for x in (nm_ if not unknown_ else "", g_.description or "") if x).strip()
                             if desc_x:
-                                stop_check(w)
-                                w.progress.emit(asked_x, 4, "외형으로 변형 찾는 중 (종족·들고 있는 것) " + desc_x[:40])
-                                mob_ = identify_namefind.find_mob(prov.ask_text, desc_x, hint, [m.path for m in idx.meshes], idx.anims)
+                                mob_ = identify_namefind.find_mob(prov.ask_text, desc_x, hint, mesh_paths_, idx.anims)
                                 for cand_ in (mob_.get("candidates") or [])[:5]:
                                     if cand_["score"] < 0.35 or not cand_["meshes"]:
                                         continue
                                     p_ = min(cand_["meshes"], key=lambda x: ("base" not in x.lower(), len(x)))
                                     ex_.append(assetidx.MeshCandidate(p_, assetidx.mesh_name(p_), min(cand_["score"], 0.9), "외형 — " + cand_["why"]))
-                                added_why = "외형(종족·들고 있는 것)"
+                                why_ = "외형(종족·들고 있는 것)"
+                        return ex_, why_
+
+                    for (g_, nm_, _u), r_ in zip(rows_x, _pmap(rows_x, _expand, "AI 확장 검색 (원어·음차·지역 코드명 / 외형)")):
+                        if isinstance(r_, Exception):
+                            errors.append("AI 확장 검색: %s" % str(r_)[:120])
+                            continue
+                        ex_, why_ = r_
                         if ex_:
                             try:
                                 g_.ex_cands = ex_
                             except Exception:  # noqa: BLE001
                                 pass
-                            notes.append("'%s' → %s 후보 %d개 (검수 칸에서 고르세요)" % (nm_ or (g_.description or "")[:30], added_why, len(ex_)))
+                            notes.append("'%s' → %s 후보 %d개 (검수 칸에서 고르세요)" % (nm_ or (g_.description or "")[:30], why_, len(ex_)))
                 except _Stopped:
                     raise
                 except Exception as e:  # noqa: BLE001 - 확장은 보조
