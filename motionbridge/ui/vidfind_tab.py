@@ -1187,16 +1187,61 @@ class VidFindTab(QWidget):
             except (OSError, ValueError, TypeError):
                 pass
             lines = []
-            if cards:
+            if cards:        # ① 도감이 있는 게임: 실제 일화 예시로 안내
                 lines.append("💡 이 게임('%s') 팁: 도감 %d종 발견 — 게임이 몬스터 특징을 '글'로 적어 둡니다. 적은 낱말이 이 글과 겹치면 AI 없이 즉시 찾습니다." % (game, len(cards)))
                 ex = self._lore_example(cards)
                 if ex:
                     lines.append("   예) 이 게임의 도감은 이런 식입니다 — %s" % ex)
                     lines.append("   → 저런 글에 나올 법한 낱말(종족·옷차림·무기·장소)이나 '인게임 이름 그대로'를 적으세요.")
+            else:            # 도감이 없는 게임: 있는 내부 데이터 순서로 폴백해서 맞춤 안내
+                book = None
+                try:
+                    book = self.name_book()
+                except Exception:  # noqa: BLE001
+                    book = None
+                if book is not None and len(book):     # ② 글자 사전(locres)은 있는 게임
+                    ex = ""
+                    for e in book.entries:
+                        if str(e[0]).startswith("ko") and e[3] and 2 <= len(str(e[3])) <= 12:
+                            ex = str(e[3])
+                            break
+                    if not ex:
+                        for e in book.entries:
+                            if str(e[0]) == "en" and e[3] and 3 <= len(str(e[3])) <= 16:
+                                ex = str(e[3])
+                                break
+                    lines.append("💡 이 게임('%s') 팁: 도감 글은 없지만 게임 글자 사전 %d개를 읽어 뒀습니다 — 화면/자막의 '인게임 표기 그대로' 적는 게 가장 정확합니다." % (game, len(book)))
+                    if ex:
+                        lines.append("   예) 이 게임의 표기는 '%s' 같은 식 — 보이는 그대로 적으세요. 별명·줄임말은 AI 확장으로 넘어가 느립니다." % ex)
+                else:
+                    gl = None
+                    try:
+                        gl = self.glossary(game)
+                    except Exception:  # noqa: BLE001
+                        gl = None
+                    if gl is not None and gl.entries:   # ③ 뜻 풀이 사전만 있는 게임 (리소스 이름이 병음/암호)
+                        k0 = next(iter(sorted(gl.entries)))
+                        e0 = gl.entries.get(k0) or {}
+                        mean = " / ".join(x for x in (e0.get("ko"), e0.get("en")) if x)
+                        lines.append("💡 이 게임('%s') 팁: 도감·이름 사전이 없고 리소스 이름이 암호 같은 게임입니다 — 뜻 풀이 %d개로 연결하니 '종족 + 특징(무기·옷·색)'을 적으세요." % (game, len(gl.entries)))
+                        if mean:
+                            lines.append("   예) 이 게임의 리소스 '%s' = %s → 이런 '뜻'에 해당하는 낱말로 적으면 걸립니다." % (k0, mean))
+                    else:                               # ④ 아무 사전도 없는 게임: 파일/폴더 이름이 전부
+                        idx0 = self.index or self._load_index_cached()
+                        folder_ex = ""
+                        if idx0:
+                            from ..core import classify as _cls
+                            for mm in idx0.meshes:
+                                f0 = _cls.folder_of(mm.path)
+                                if re.fullmatch(r"[A-Za-z][A-Za-z_]{3,24}", f0 or ""):
+                                    folder_ex = f0
+                                    break
+                        if idx0:
+                            lines.append("💡 이 게임('%s') 팁: 도감·사전 데이터가 없어 '파일 이름 검색'이 기본입니다 — 영어 이름/종족 낱말(wolf, golem …)로 적는 게 잘 걸립니다." % game)
+                            if folder_ex:
+                                lines.append("   예) 이 게임의 캐릭터 폴더는 '%s' 같은 식 — 이런 영어 낱말로 적으세요." % folder_ex)
             if linked:
                 lines.append("   정답표: 게임 데이터에서 이름 ↔ 코드명 %d쌍을 읽어 뒀습니다 — 인게임 이름이면 즉시 확정됩니다." % linked)
-            if not cards and not linked:
-                lines = []     # 아직 자료가 없으면(검사 전/도감 없는 게임) 일반 팁(자리 글)만 보인다
             self.known_tip.setText("\n".join(lines))
             self.known_tip.setVisible(bool(lines))
         except Exception:  # noqa: BLE001 - 팁은 보조
