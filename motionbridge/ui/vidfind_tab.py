@@ -302,6 +302,9 @@ class _LoreDialog(QDialog):
             nm = c["names"].get("ko") or c["names"].get("en") or ""
             if not nm:
                 continue
+            others = [v for k, v in sorted(c["names"].items()) if v and v != nm]   # 다른 언어 표기(영어 등)를 같이 보여 준다
+            if others:
+                nm = "%s / %s" % (nm, " / ".join(others))
             kind = self._KIND.get((int(i) // 1000) % 100, "")
             txt = (c["texts"].get("ko") or c["texts"].get("en") or "").strip()
             self._rows.append((kind, nm, txt))
@@ -356,7 +359,7 @@ class _LoreDialog(QDialog):
     def _go(self) -> None:
         row = self.lst.currentRow()
         if 0 <= row < len(self._shown):
-            self.picked = self._shown[row][1]
+            self.picked = self._shown[row][1].split(" / ")[0]   # 검색에는 첫 표기(한국어)만 — 교차 이름은 검색이 알아서 쓴다
             self.accept()
 
 
@@ -649,6 +652,10 @@ class VidFindTab(QWidget):
         r.addWidget(self.rb_mode_monster)
         r.addWidget(HelpIcon(FIND_TIPS))   # ❓ 잘 찾는 법: 어떤 정보/이미지를 주면 쉽게 찾는지
         r.addStretch(1)
+        self.btn_lore = QPushButton("📖 게임 도감")   # 모드와 상관없이 항상 이 줄 맨 오른쪽
+        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
+        self.btn_lore.clicked.connect(self._open_lore)
+        r.addWidget(self.btn_lore)
         v.addLayout(r)
         # 찾을 종류: 에셋 신호(애니 수·전용 연출·경로 표시)로 자동 분류해, 고른 종류 안에서만 후보를 찾는다
         r2 = QHBoxLayout()
@@ -667,7 +674,10 @@ class VidFindTab(QWidget):
                               "⚠ 분류를 아직 모르는 캐릭터는 어떤 체크든 '걸러지지 않습니다' — 추정으로 잘못 숨기는 일을 막기 위해서예요.\n"
                               "(예전의 '애니 개수로 보스 추정'은 잡몹이 보스로 숨는 오분류가 있어 뺐습니다.)"))
         r2.addStretch(1)
-        v.addLayout(r2)
+        cls_row = QWidget()      # 찾을 종류: 이 게임에서 보스/잡몹을 믿을 만하게 구분하지 못해 화면에서 뺐다 (필터는 꺼짐)
+        cls_row.setLayout(r2)
+        cls_row.setVisible(False)
+        v.addWidget(cls_row)
         eng_line = QLabel("어느 모드든 같은 검색 엔진을 차례로 씁니다: ① 정답표(게임 데이터의 이름↔코드명) → ② 도감 일화 글 검색 → ③ 글자 사전·뜻 풀이 → ④ AI 확장(원어·음차·지역 코드) → ⑤ 외형(종족·들고 있는 것)."
                           "  생김새 렌더 대조(⑥)는 🖼 이미지 모드에서만 돕니다. 자세한 건 옆 ? 와 [▸ 자세히] 로그.")
         eng_line.setWordWrap(True)
@@ -680,11 +690,6 @@ class VidFindTab(QWidget):
         kl = QHBoxLayout()
         self.known_label = QLabel("아는 정보 (선택) — 이 영상/이미지에 나오는 캐릭터를 한 줄에 하나씩: 게임 속 이름 — 메모")
         kl.addWidget(self.known_label, 1)
-        self.btn_lore = QPushButton("📖 게임 도감 열기")
-        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
-        self.btn_lore.clicked.connect(self._open_lore)
-        self.btn_lore.setVisible(False)      # 도감이 있는 게임에서만 보인다 (_update_known_tip 이 켠다)
-        kl.addWidget(self.btn_lore)
         kl.addWidget(HelpIcon("한 줄에 캐릭터 하나씩, 'Enter' 로 줄을 나눠 적으세요. 형식: 이름 — 메모 (메모는 없어도 됩니다)\n\n"
                               "메모에 적으면 도움이 되는 정보:\n"
                               "· 찾으려는 몬스터 이름\n"
@@ -1408,10 +1413,8 @@ class VidFindTab(QWidget):
                 lines.append("   정답표: 게임 데이터에서 이름 ↔ 코드명 %d쌍을 읽어 뒀습니다 — 인게임 이름이면 즉시 확정됩니다." % linked)
             self.known_tip.setText("\n".join(lines))
             self.known_tip.setVisible(bool(lines))
-            if hasattr(self, "btn_lore"):
-                self.btn_lore.setVisible(bool(cards))
-                if cards:
-                    self.btn_lore.setText("📖 게임 도감 (%d종)" % len(cards))
+            if hasattr(self, "btn_lore"):      # 항상 보인다 — 도감을 읽어 두었으면 종 수만 붙인다
+                self.btn_lore.setText(("📖 게임 도감 (%d종)" % len(cards)) if cards else "📖 게임 도감")
         except Exception:  # noqa: BLE001 - 팁은 보조
             self.known_tip.setVisible(False)
 
@@ -1683,30 +1686,39 @@ class VidFindTab(QWidget):
                 w.progress.emit(2, 3, "게임 데이터(정답표/사전)에서 즉시 일치 — AI 확장 생략")
                 return {"candidates": direct, "expansion": {}, "idx": idx, "clue": clue,
                         "note": "게임 데이터 정답표로 즉시 일치 (AI 확장 생략 — 0.1초 미만)"}
+            lore_extra = []
             # ⓪-2 도감 교차 이름: 도감 카드가 '저팔계(ko) ↔ Zhu Bajie(en)' 처럼 여러 언어 표기를 들고 있으니,
             #     한국어로 적어도 다른 언어 표기를 폴더 이름과 퍼지 매칭해 AI 없이 잇는다 (~1초).
             try:
                 cards_n = self._lore_cards()
-                alts = []
+                alts, lore_txt = [], []
                 for c_ in cards_n.values():
                     if any(entstore.norm(nm_) == entstore.norm(clue) for nm_ in c_["names"].values()):
                         alts += list(c_["names"].values())
+                        lore_txt += list(c_["texts"].values())
                 alts = [x for x in dict.fromkeys(alts) if entstore.norm(x) != entstore.norm(clue)]
-                if alts:
-                    w.progress.emit(1, 3, "도감 교차 이름(%s)으로 폴더 매칭 중 — AI 없이" % alts[0])
-                    exp0 = {"official": {}, "romanized": alts, "initials": [], "keywords": [], "codenames": [], "why": ""}
+                stems = identify_namefind.lore_stems(lore_txt)   # 일화 속 종족 낱말(거미 -> zhizhu) — 이름이 폴더와 안 닮았을 때의 다리
+                if alts or stems:
+                    w.progress.emit(1, 3, "도감 교차 이름(%s)·일화 종족(%s)으로 폴더 매칭 중 — AI 없이" % (
+                        alts[0] if alts else "-", ",".join(stems[:3]) or "-"))
+                    exp0 = {"official": {}, "romanized": alts, "species": stems, "initials": [], "keywords": [], "codenames": [], "why": ""}
                     st0 = identify_namefind.folder_stats([m.path for m in idx.meshes], idx.anims)
                     cands0 = identify_namefind.score_folders(exp0, st0, clue=clue, store=store)
-                    if cands0 and cands0[0]["score"] >= 0.5:
+                    lore_extra = [c for c in cands0 if "일화 종족" in c["why"]][:8]   # 종족만 맞은 후보: 확정하지 않고 AI 결과에 합친다
+                    if cands0 and cands0[0]["score"] >= 0.5 and "이름 유사" in cands0[0]["why"]:
+                        src_ = ("도감 교차 이름 '%s'" % alts[0]) if alts else ("도감 일화 종족 '%s'" % stems[0])
                         for c0 in cands0:
-                            c0["why"] = "도감 교차 이름 '%s' — %s" % (alts[0], c0["why"])
-                        w.progress.emit(2, 3, "도감 교차 이름으로 즉시 일치 — AI 확장 생략")
+                            c0["why"] = "%s — %s" % (src_, c0["why"])
+                        w.progress.emit(2, 3, "도감 데이터로 즉시 일치 — AI 확장 생략")
                         return {"candidates": cands0, "expansion": exp0, "idx": idx, "clue": clue,
-                                "note": "도감의 다른 언어 표기('%s')로 바로 이었습니다 (AI 확장 생략)" % alts[0]}
+                                "note": "%s로 바로 이었습니다 (AI 확장 생략)" % src_}
             except Exception:  # noqa: BLE001 - 교차 이름은 보조, 실패하면 AI 확장으로
                 pass
             w.progress.emit(1, 3, "AI 에게 '%s' 확장 요청 중 (원어 정식명·병음 음차·지역 이니셜·모티프 코드명)" % clue)
             res = identify_namefind.find(prov.ask_text, clue, hint, [m.path for m in idx.meshes], idx.anims, store)
+            for c_ in lore_extra:      # 도감 일화 종족으로 모은 후보도 함께 (AI 가 빗나가도 후보에 남게)
+                if not any(x["folder"].lower() == c_["folder"].lower() for x in res["candidates"]):
+                    res["candidates"].append(c_)
             exp_ = res.get("expansion") or {}
             got_ = ", ".join((exp_.get("romanized") or []) + (exp_.get("codenames") or []) + (exp_.get("initials") or []))[:120]
             w.progress.emit(2, 3, ("확장 결과: %s → 폴더 %d개 점수 매김, 동작 이름으로 교차 확인 중" % (got_ or "(없음)", len(res.get("candidates") or []))))
@@ -2394,9 +2406,8 @@ class VidFindTab(QWidget):
         return m
 
     def _cls_want(self):
-        """체크된 종류들. 전부/하나도 체크 안 됨 = 필터 없음(None)."""
-        want = {k for k, cb in self.cls_checks.items() if cb.isChecked()}
-        return None if (not want or len(want) >= len(self.cls_checks)) else want
+        """종류 필터는 화면에서 뺐으므로 항상 '필터 없음'. (분류가 믿을 만해지면 되살린다)"""
+        return None
 
     def _class_ok(self, path: str) -> bool:
         want = self._cls_want()

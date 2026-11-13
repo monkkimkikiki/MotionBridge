@@ -101,6 +101,7 @@ def score_folders(exp: Dict, stats: Dict[str, dict], clue: str = "", store: Opti
     names = [clue] + list(exp.get("romanized", [])) + list(exp.get("codenames", [])) + list(exp.get("official", {}).values())
     names = [norm(n) for n in names if n and norm(n)]
     keywords = [norm(k) for k in exp.get("keywords", []) if norm(k)]
+    species_l = [norm(s) for s in exp.get("species", []) if len(norm(s)) >= 4]
     initials = {norm(i) for i in exp.get("initials", []) if i}
     store_codes = set()
     if store is not None and clue:
@@ -122,7 +123,7 @@ def score_folders(exp: Dict, stats: Dict[str, dict], clue: str = "", store: Opti
                 continue
             if n == core or n == whole:
                 best = max(best, 0.55)
-            elif len(n) >= 4 and (n in whole or core in n):
+            elif len(n) >= 4 and (n in whole or (len(core) >= 4 and core in n)):   # 짧은 폴더명('An')이 아무 이름에나 걸리지 않게
                 best = max(best, 0.45)
             else:
                 r = difflib.SequenceMatcher(None, n, core).ratio()
@@ -131,6 +132,13 @@ def score_folders(exp: Dict, stats: Dict[str, dict], clue: str = "", store: Opti
         if best:
             sc += best
             why.append("이름 유사")
+        else:
+            # 도감 일화의 종족 낱말(거미 -> zhizhu): 이름이 안 맞을 때만, 이름 일치보다 낮게 친다
+            toks_f = {norm(t) for t in re.split(r"[_\-\s]+", folder or "") if t}
+            sp_hit = next((sp for sp in species_l if sp in toks_f or core.startswith(sp)), "")
+            if sp_hit:
+                sc += 0.35
+                why.append("일화 종족 '%s'" % sp_hit)
         if area and norm(area) in initials:
             sc += 0.35
             why.append("지역 코드 %s" % area)
@@ -147,6 +155,10 @@ def score_folders(exp: Dict, stats: Dict[str, dict], clue: str = "", store: Opti
             why.append("전용 연출")
         if s["weapons"]:
             sc += 0.04
+        # 이름·지역·기억·관련 낱말 중 하나라도 맞아야 후보 — 보스 신호(애니 수·연출)만으로는 후보가 되지 않는다
+        # (안 그러면 아무 이름이나 넣어도 애니 많은 같은 폴더들이 늘 위에 나온다)
+        if not why or all(w.startswith("애니") or w == "전용 연출" for w in why):
+            continue
         if sc <= 0.05:
             continue
         out.append({"folder": folder, "score": round(min(sc, 1.0), 3), "why": " + ".join(why),
@@ -223,7 +235,24 @@ _SPECIES_GROUPS = [
      "새", "독수리", "매", "까마귀", "학", "鸟", "鹰", "鹤"],
     ["frog", "toad", "wa", "chan", "개구리", "두꺼비", "蛙"],
     ["deer", "elk", "lu", "사슴", "鹿"],
+    ["spider", "zhizhu", "거미", "蜘蛛"],
+    ["scorpion", "xiezi", "전갈", "蝎"],
+    ["bull", "ox", "cow", "niu", "소", "牛"],
+    ["dragon", "long", "용", "龙"],
+    ["centipede", "wugong", "지네", "蜈蚣"],
+    ["toad", "chanchu", "두꺼비", "蟾"],
 ]
+
+
+def lore_stems(texts: Sequence[str]) -> List[str]:
+    """도감 글(일화·시구)에 나오는 종족 낱말 -> 그 종족 묶음의 낱말 전부 (원어 병음 포함).
+    예: '둘째 언니' 일화에 '거미'가 나오면 zhizhu 를 얻어 PSD_ZhiZhuJing 폴더와 잇는다 — AI 없이."""
+    low = " ".join(t or "" for t in texts).lower()
+    out: List[str] = []
+    for grp in _SPECIES_GROUPS:
+        if any(len(w) >= 2 and w.lower() in low for w in grp if not re.fullmatch(r"[a-z]{1,3}", w)):
+            out += [g for g in grp if re.fullmatch(r"[a-z]{4,}", g)]
+    return list(dict.fromkeys(out))
 
 
 def _expand_species(stems: Sequence[str]) -> List[str]:
