@@ -558,6 +558,25 @@ class VidFindTab(QWidget):
         r.addWidget(self.rb_mode_char)
         r.addStretch(1)
         v.addLayout(r)
+        # 찾을 종류: 에셋 신호(애니 수·전용 연출·경로 표시)로 자동 분류해, 고른 종류 안에서만 후보를 찾는다
+        r2 = QHBoxLayout()
+        r2.addWidget(QLabel("찾을 종류"))
+        self.cls_checks = {}
+        saved_cls = self.cfg.get("vf_cls") if isinstance(self.cfg.get("vf_cls"), dict) else {}
+        for key_, lab_ in (("boss", "보스"), ("mob", "일반 몬스터"), ("player", "플레이어블"), ("npc", "NPC")):
+            cb_ = QCheckBox(lab_)
+            cb_.setChecked(bool(saved_cls.get(key_, True)))
+            cb_.toggled.connect(self._cls_changed)
+            r2.addWidget(cb_)
+            self.cls_checks[key_] = cb_
+        r2.addWidget(HelpIcon("프로그램이 에셋 신호만으로 캐릭터를 네 종류로 자동 분류합니다 (웹·AI 불필요):\n"
+                              "· 보스 = 전용 애니메이션이 많고(120개↑) 전용 연출(처형·사망 시퀀스)이 있는 캐릭터\n"
+                              "· 일반 몬스터 = 그 외의 적 (애니 수십 개)\n"
+                              "· 플레이어블 = 경로/이름에 player·hero 표시\n"
+                              "· NPC = NPC 폴더/이름\n"
+                              "체크한 종류 안에서만 후보를 찾습니다 — 잡몹을 찾는데 보스가 후보에 올라오는 것을 막아 줘요. 전부 체크하면 필터 없음."))
+        r2.addStretch(1)
+        v.addLayout(r2)
         self.char_panel = QWidget()
         cp = QVBoxLayout(self.char_panel)
         cp.setContentsMargins(0, 0, 0, 0)
@@ -1308,7 +1327,7 @@ class VidFindTab(QWidget):
             paths = c.get("meshes") or ([m.path for m in idx.meshes if ("/" + c["folder"].lower() + "/") in m.path.lower()] if idx else [])
             for p in paths:
                 m = idx.mesh(p) if idx else None
-                if p in seen or m is None or not m.rigged:   # 인덱스에 있는 리깅 메시만 (뷰포트에서 열리는 것)
+                if p in seen or m is None or not m.rigged or not self._class_ok(p):   # 인덱스에 있는 리깅 메시만 + 찾을 종류 체크
                     continue
                 seen.add(p)
                 it = QListWidgetItem("[%d%% %s] %s    (%s)" % (round(c["score"] * 100), c["folder"], m.name, p))
@@ -1692,6 +1711,78 @@ class VidFindTab(QWidget):
         if not groups:
             QMessageBox.warning(self, "캐릭터 추측", "캐릭터를 찾지 못했습니다.\n\n" + ("\n".join(res["errors"][:3]) or "다른 장면이나 인식 방식을 시도하세요. '캐릭터 줄 직접 추가'로 직접 넣을 수도 있습니다."))
 
+    # ================================================================== 찾을 종류 (보스/일반 몬스터/플레이어블/NPC)
+    def _cls_changed(self, *_a) -> None:
+        self.cfg["vf_cls"] = {k: bool(cb.isChecked()) for k, cb in self.cls_checks.items()}
+        bridge.save_config(self.cfg)
+        if self.char_mode:
+            self.show_char_meshes()
+
+    def _cls_map(self, idx):
+        """에셋 신호로 만든 '캐릭터 폴더 -> 종류' 표 (인덱스마다 한 번만 계산)."""
+        if idx is None or not idx:
+            return {}
+        memo = self.__dict__.get("_cls_memo")
+        if isinstance(memo, tuple) and memo[0] is idx:
+            return memo[1]
+        from ..core import classify
+        m = classify.classify([mm.path for mm in idx.meshes], idx.anims)
+        try:
+            # 게임 도감의 '공식 분류'(잡요괴/두목/요왕/인물)가 있으면 추정치를 덮어쓴다 — 표시 이름으로 캐릭터 폴더에 잇는다
+            with open(NAMES_CACHE, "r", encoding="utf-8") as f:
+                journal = classify.journal_types((json.load(f) or {}).get("entries") or [])
+            if journal:
+                cat = self._catalog(idx)
+                for ch in cat.chars.values():
+                    k = next((journal[classify.nname(n)] for n in (list(ch.en) + list(ch.ko)) if classify.nname(n) in journal), None)
+                    if not k:
+                        continue
+                    for p in ch.meshes:
+                        f_ = classify.folder_of(p)
+                        if m.get(f_) != "player":   # 플레이어블 표시는 그대로 둔다
+                            m[f_] = k
+        except Exception:  # noqa: BLE001 - 도감이 없는 게임은 추정치로
+            pass
+        try:
+            # 뜻 풀이 사전이 리소스 이름마다 기억해 둔 종류(boss/enemy/npc/player)가 있으면 그걸 우선한다
+            gl = self.glossary()
+            if gl.entries:
+                from ..core import classify
+                to_cls = {"boss": "boss", "enemy": "mob", "npc": "npc", "player": "player"}
+                for mm in idx.meshes:
+                    e = gl.get(mm.name)
+                    k = to_cls.get((e or {}).get("kind") or "")
+                    if k:
+                        f_ = classify.folder_of(mm.path)
+                        if m.get(f_) != "player":
+                            m[f_] = k
+        except Exception:  # noqa: BLE001 - 사전이 없으면 추정치로
+            pass
+        self._cls_memo = (idx, m)
+        return m
+
+    def _cls_want(self):
+        """체크된 종류들. 전부/하나도 체크 안 됨 = 필터 없음(None)."""
+        want = {k for k, cb in self.cls_checks.items() if cb.isChecked()}
+        return None if (not want or len(want) >= len(self.cls_checks)) else want
+
+    def _class_ok(self, path: str) -> bool:
+        want = self._cls_want()
+        if want is None or not path:
+            return True
+        idx = self.index or self._load_index_cached()
+        from ..core import classify
+        return self._cls_map(idx).get(classify.folder_of(path), "mob") in want
+
+    def _cls_tag(self, path: str) -> str:
+        """후보 글머리에 붙일 [보스]/[일반 몬스터] 같은 표시."""
+        idx = self.index
+        if idx is None or not path:
+            return ""
+        from ..core import classify
+        k = self._cls_map(idx).get(classify.folder_of(path))
+        return ("[%s] " % classify.LABEL[k]) if k else ""
+
     # ================================================================== 검수 표
     def _merge_cands(self, idx, base, alts, n: int = 5):
         """랭킹 상위 + AI 가 꼽은 다른 후보(각각 가장 비슷한 메시)를 섞어 n개 (중복 없이)."""
@@ -1711,7 +1802,7 @@ class VidFindTab(QWidget):
         return out
 
     def _cand_text(self, c: assetidx.MeshCandidate) -> str:
-        return "%s   [%d%%] %s" % (c.name, round(min(c.score, 1.0) * 100), c.why)
+        return "%s%s   [%d%%] %s" % (self._cls_tag(c.path), c.name, round(min(c.score, 1.0) * 100), c.why)
 
     def _fill_combo(self, combo, cands: List[assetidx.MeshCandidate], pick_first: bool = True) -> None:
         """후보를 채운다. pick_first=False 면 맨 위에 '직접 고르세요'를 두고 그것이 선택된 채로 시작한다."""
@@ -1741,6 +1832,7 @@ class VidFindTab(QWidget):
             base = ex_ + [c for c in base if c.path not in have_]
         if not base:      # 이름 글자로는 못 찾음 -> 뜻 풀이 사전(한국어/영어/한자 뜻)으로 후보를 낸다
             base = self._gloss_cands(" ".join(x for x in (g.name, g.description) if x))
+        base = [c for c in base if self._class_ok(c.path)]   # 찾을 종류 체크에 맞는 것만
         remembered = bool(base) and base[0].why.startswith("이전에 확정")
         sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
@@ -2020,6 +2112,8 @@ class VidFindTab(QWidget):
             QMessageBox.warning(self, "캐릭터 메쉬 찾기", "에셋 이름 목록이 아직 없습니다. '캐릭터 메쉬 목록 열기'로 게임 파일에서 한 번 읽어 오세요.")
             return False
         meshes = idx.character_meshes(self.char_q.text(), self.char_rig.currentData() or "all", bool(self.ck_char_player.isChecked()))
+        if self._cls_want() is not None:
+            meshes = [m for m in meshes if self._class_ok(m.path)]
         self.char_mode = True
         self.confirmed = [m.path for m in meshes]
         self.mesh_list.clear()
