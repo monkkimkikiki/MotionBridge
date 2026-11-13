@@ -89,6 +89,130 @@ class _PickLabel(QLabel):
             self.owner._picked()
 
 
+class _GrabDialog(QDialog):
+    """영상에서 바로 찾기: 타임바로 장면을 고르고, 그 화면 위에서 몬스터를 마우스로 박스 지정하면 그 영역만 잘라 낸다.
+    장면을 여러 장 저장해 두는 방식이 아니라 '장면 고르기 → 영역 지정 → 찾기'가 한 흐름이다."""
+
+    def __init__(self, parent, ff: str, video: str, out_dir: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("영상에서 몬스터 지정 — " + os.path.basename(video))
+        self.ff, self.video, self.out_dir = ff, video, out_dir
+        self.crops: List[str] = []
+        self.dur = frames.video_duration(ff, video) or 60.0
+        self._full = ""            # 지금 장면의 원본 해상도 프레임 파일
+        self._scale = 1.0
+        v = QVBoxLayout(self)
+        tip = QLabel("① 타임바를 움직여 몬스터가 잘 보이는 장면에 놓고 → ② 화면에서 몬스터를 마우스로 끌어 박스 지정 → ③ [✂ 이 영역으로 바로 찾기]")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        self.view = _PickLabel(self)
+        self.view.setMinimumSize(720, 405)
+        self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.view.setStyleSheet("QLabel{background:#14161c;border:1px solid #3a4560}")
+        v.addWidget(self.view, 0, Qt.AlignmentFlag.AlignHCenter)
+        from PySide6.QtWidgets import QSlider
+        h = QHBoxLayout()
+        h.addWidget(QLabel("타임바"))
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 999)
+        self.slider.valueChanged.connect(self._time_label)
+        self.slider.sliderReleased.connect(self._preview)
+        h.addWidget(self.slider, 1)
+        self.time_lb = QLabel("0:00.0")
+        h.addWidget(self.time_lb)
+        v.addLayout(h)
+        h = QHBoxLayout()
+        self.btn_go = QPushButton("✂ 이 영역으로 바로 찾기")
+        self.btn_go.setEnabled(False)
+        self.btn_go.setToolTip("지정한 박스만 잘라 AI 에게 한 번 보여 주고 곧바로 후보를 찾습니다.")
+        self.btn_go.clicked.connect(self._go)
+        h.addWidget(self.btn_go)
+        self.btn_more = QPushButton("＋ 이 몬스터도 (계속 지정)")
+        self.btn_more.setEnabled(False)
+        self.btn_more.setToolTip("이 박스를 담아 두고 창을 닫지 않습니다 — 다른 장면/다른 몬스터를 더 지정한 뒤 [✂ 바로 찾기]로 한꺼번에 찾습니다.")
+        self.btn_more.clicked.connect(self._keep)
+        h.addWidget(self.btn_more)
+        self.note = QLabel("")
+        h.addWidget(self.note, 1)
+        b = QPushButton("닫기")
+        b.clicked.connect(self.reject)
+        h.addWidget(b)
+        v.addLayout(h)
+        self._preview()
+
+    def _t(self) -> float:
+        return min(self.slider.value() / 999.0, 0.999) * self.dur
+
+    def _time_label(self, *_a) -> None:
+        t = self._t()
+        self.time_lb.setText("%d:%04.1f / %d:%04.1f" % (t // 60, t % 60, self.dur // 60, self.dur % 60))
+
+    def _frame_to(self, out: str) -> bool:
+        try:
+            r = frames._run([self.ff, "-ss", "%.3f" % self._t(), "-i", self.video, "-frames:v", "1", "-y", out], timeout=30.0)
+            return r.returncode == 0 and os.path.isfile(out)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _preview(self) -> None:
+        os.makedirs(self.out_dir, exist_ok=True)
+        self.view.band.hide()
+        self.view.rect_sel = None
+        full = os.path.join(self.out_dir, "_scene.png")
+        if self._frame_to(full):
+            pm = QPixmap(full)
+            if not pm.isNull():
+                self._full = full
+                shown = pm.scaled(960, 540, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self._scale = shown.width() / max(pm.width(), 1)
+                self.view.setPixmap(shown)
+                self.view.setFixedSize(shown.size())
+                self.adjustSize()
+                self._picked()
+                return
+        self._full = ""
+        self.view.setText("이 지점의 장면을 읽지 못했어요 — 타임바를 조금 움직여 보세요")
+        self._picked()
+
+    def _picked(self) -> None:
+        ok = self.view.rect_sel is not None and bool(self._full)
+        self.btn_go.setEnabled(ok or bool(self.crops))
+        self.btn_more.setEnabled(ok)
+
+    def _cut(self) -> Optional[str]:
+        """지정한 박스를 원본 해상도 장면에서 잘라 저장한다."""
+        r = self.view.rect_sel
+        if r is None or not self._full:
+            return None
+        pm = QPixmap(self._full)
+        s = max(self._scale, 1e-9)
+        orig = QRect(int(r.x() / s), int(r.y() / s), int(r.width() / s), int(r.height() / s)).intersected(pm.rect())
+        t = self._t()
+        out = os.path.join(self.out_dir, "crop_%02d-%04.1f_%d.png" % (t // 60, t % 60, len(self.crops)))
+        try:
+            if pm.copy(orig).save(out, "PNG"):
+                return out
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _keep(self) -> None:
+        p = self._cut()
+        if p:
+            self.crops.append(p)
+            self.view.band.hide()
+            self.view.rect_sel = None
+            self._picked()
+            self.note.setText("담아 둔 몬스터 %d개 — 계속 지정하거나 [✂ 바로 찾기]" % len(self.crops))
+
+    def _go(self) -> None:
+        p = self._cut()
+        if p:
+            self.crops.append(p)
+        if self.crops:
+            self.accept()
+
+
 class _CropDialog(QDialog):
     """스크린샷에서 '찾을 몬스터'를 마우스로 박스 지정 — 그 영역만 AI 에게 보여 줘서 빠르고, 어떤 몬스터인지 헷갈리지 않는다."""
 
@@ -259,6 +383,12 @@ class VidFindTab(QWidget):
         h = QHBoxLayout()
         b = QPushButton("영상/이미지 추가…")
         b.clicked.connect(self.add_files)
+        h.addWidget(b)
+        b = QPushButton("🎞 영상에서 몬스터 지정해서 찾기…")
+        b.setToolTip("목록에서 고른 영상(안 골랐으면 첫 영상)을 열어:\n"
+                     "① 타임바로 몬스터가 잘 보이는 장면을 고르고 → ② 그 화면에서 몬스터를 마우스로 박스 지정 → ③ 그 영역만 AI 에게 한 번 보여 줘 몇 초 만에 찾습니다.\n"
+                     "영상 전체 분석(오래 걸림) 없이 원하는 몬스터만 집어서 찾는 가장 빠른 방법입니다.")
+        b.clicked.connect(self.grab_from_video)
         h.addWidget(b)
         b = QPushButton("AnimRef 클립 폴더…")
         b.setToolTip("AnimRef 가 자른 클립 폴더. 분류(타격/피격/스킬…)를 함께 읽습니다.")
@@ -1186,21 +1316,37 @@ class VidFindTab(QWidget):
         self.char_note.setText("\n".join(lines))
         self._refill_anims()
 
-    def start_guess(self, force_index: bool = False) -> None:
+    def grab_from_video(self) -> None:
+        """영상에서 바로 찾기: 타임바로 장면을 고르고 그 화면에서 몬스터를 박스 지정 → 그 영역만 AI 에게 보여 준다."""
+        sel = [p for p in self.source_paths(True) if frames.kind_of(p) == "video"]
+        vids = sel or [p for p in self.source_paths(False) if frames.kind_of(p) == "video"]
+        if not vids:
+            QMessageBox.information(self, "영상에서 몬스터 지정", "1) 목록에 영상을 먼저 추가하세요.")
+            return
+        ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
+        if not ff:
+            QMessageBox.warning(self, "영상에서 몬스터 지정", "ffmpeg 를 찾지 못해 영상에서 장면을 뽑을 수 없습니다.\n환경 설정에서 ffmpeg 경로를 지정해 주세요.")
+            return
+        dlg = _GrabDialog(self, ff, vids[0], os.path.join(bridge.CONFIG_DIR, "vf_crops"))
+        if not dlg.exec() or not dlg.crops:
+            return
+        self.rb_mode_img.setChecked(True)     # 모드 표시도 '이미지로 찾기'로
+        self.start_guess(pre_frames=list(dlg.crops))
+
+    def start_guess(self, force_index: bool = False, pre_frames: Optional[List[str]] = None) -> None:
         if self.rb_mode_char.isChecked():  # 캐릭터 메쉬 찾기: AI 추측 없이 이름 검색
             self.start_chars(force_index)
             return
         srcs = self.source_paths()
-        if not srcs:
+        if not srcs and pre_frames is None:
             QMessageBox.warning(self, "캐릭터 추측", "영상/이미지를 먼저 추가하세요.")
             return
-        pre_frames = None
-        if self.rb_mode_img.isChecked():   # 이미지로 찾기: 이미지 파일만 쓰고(영상은 건드리지 않음), 유저가 몬스터 영역을 박스로 지정
+        if pre_frames is None and self.rb_mode_img.isChecked():   # 이미지로 찾기: 이미지 파일만 쓰고(영상은 건드리지 않음), 유저가 몬스터 영역을 박스로 지정
             imgs = [s for s in srcs if os.path.splitext(s)[1].lower() in IMAGE_EXTS]
             if not imgs:
                 QMessageBox.information(self, "이미지로 찾기",
                                         "1) 목록에 이미지(스크린샷)가 없습니다 — 이 모드는 이미지 파일만 쓰고 영상은 건드리지 않습니다.\n"
-                                        "게임 영상을 일시정지하고 스크린샷을 찍어 1) 에 넣어 주세요 (끌어다 놓기 가능).")
+                                        "영상에서 찾으려면 1) 의 [🎞 영상에서 몬스터 지정해서 찾기…]를 누르세요 (장면 고르기 + 영역 지정).")
                 return
             crop_dir = os.path.join(bridge.CONFIG_DIR, "vf_crops")
             shutil.rmtree(crop_dir, ignore_errors=True)
