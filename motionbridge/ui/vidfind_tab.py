@@ -285,6 +285,79 @@ class _CropDialog(QDialog):
         self.accept()
 
 
+class _LoreDialog(QDialog):
+    """게임 도감 브라우저: 몬스터 이름·분류·일화를 훑어보고, 하나 골라 [메시 찾기]로 바로 넘어간다."""
+
+    _KIND = {1: "잡요괴", 2: "두목", 3: "요왕", 4: "인물"}
+
+    def __init__(self, parent, cards: Dict[int, dict]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("게임 도감 — 몬스터를 고르면 바로 찾습니다")
+        self.resize(760, 520)
+        self.picked: Optional[str] = None
+        self._rows = []
+        for i, c in cards.items():
+            nm = c["names"].get("ko") or c["names"].get("en") or ""
+            if not nm:
+                continue
+            kind = self._KIND.get((int(i) // 1000) % 100, "")
+            txt = (c["texts"].get("ko") or c["texts"].get("en") or "").strip()
+            self._rows.append((kind, nm, txt))
+        self._rows.sort(key=lambda r: ({"요왕": 0, "두목": 1, "잡요괴": 2, "인물": 3}.get(r[0], 4), r[1]))
+        v = QVBoxLayout(self)
+        self.q = QLineEdit()
+        self.q.setPlaceholderText("도감에서 검색 — 이름이나 일화 속 낱말 (예: 늑대, 방패, 흰 옷)")
+        self.q.textChanged.connect(self._refill)
+        v.addWidget(self.q)
+        h = QHBoxLayout()
+        self.lst = QListWidget()
+        self.lst.currentRowChanged.connect(self._show)
+        self.lst.itemDoubleClicked.connect(lambda *_a: self._go())
+        h.addWidget(self.lst, 1)
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        h.addWidget(self.detail, 1)
+        v.addLayout(h, 1)
+        b = QHBoxLayout()
+        self.note = QLabel("몬스터를 고르고 [메시 찾기] — 게임 데이터 정답표·사전으로 바로 이어집니다 (더블클릭도 같음)")
+        self.note.setWordWrap(True)
+        b.addWidget(self.note, 1)
+        go = QPushButton("🔍 이 몬스터의 메시 찾기")
+        go.clicked.connect(self._go)
+        b.addWidget(go)
+        c2 = QPushButton("닫기")
+        c2.clicked.connect(self.reject)
+        b.addWidget(c2)
+        v.addLayout(b)
+        self._shown = []
+        self._refill()
+
+    def _refill(self, *_a) -> None:
+        q = (self.q.text() or "").strip().lower()
+        self.lst.clear()
+        self._shown = []
+        for kind, nm, txt in self._rows:
+            if q and q not in nm.lower() and q not in txt.lower():
+                continue
+            self._shown.append((kind, nm, txt))
+            self.lst.addItem("%s%s" % (("[%s] " % kind) if kind else "", nm))
+        if self._shown:
+            self.lst.setCurrentRow(0)
+        else:
+            self.detail.setPlainText("")
+
+    def _show(self, row: int) -> None:
+        if 0 <= row < len(self._shown):
+            kind, nm, txt = self._shown[row]
+            self.detail.setPlainText("%s%s\n\n%s" % (nm, (" — %s" % kind) if kind else "", txt or "(일화 없음)"))
+
+    def _go(self) -> None:
+        row = self.lst.currentRow()
+        if 0 <= row < len(self._shown):
+            self.picked = self._shown[row][1]
+            self.accept()
+
+
 class _Row:
     """검수 표의 한 줄."""
 
@@ -603,6 +676,11 @@ class VidFindTab(QWidget):
         eng_line.setWordWrap(True)
         eng_line.setStyleSheet("color:#8a93a6")
         v.addWidget(eng_line)
+        self.btn_lore = QPushButton("📖 게임 도감 열기 — 몬스터를 고르면 바로 찾기")
+        self.btn_lore.setToolTip("이 게임의 도감(몬스터 이름·분류·일화)을 목록으로 보여 줍니다.\n몬스터를 고르고 [메시 찾기]를 누르면 그 이름으로 바로 검색합니다 — 이름을 몰라도 도감을 훑어서 찾으세요.")
+        self.btn_lore.clicked.connect(self._open_lore)
+        self.btn_lore.setVisible(False)      # 도감이 있는 게임에서만 보인다 (_update_known_tip 이 켠다)
+        v.addWidget(self.btn_lore)
         self.char_panel = QWidget()
         cp = QVBoxLayout(self.char_panel)
         cp.setContentsMargins(0, 0, 0, 0)
@@ -1244,8 +1322,24 @@ class VidFindTab(QWidget):
                 lines.append("   정답표: 게임 데이터에서 이름 ↔ 코드명 %d쌍을 읽어 뒀습니다 — 인게임 이름이면 즉시 확정됩니다." % linked)
             self.known_tip.setText("\n".join(lines))
             self.known_tip.setVisible(bool(lines))
+            if hasattr(self, "btn_lore"):
+                self.btn_lore.setVisible(bool(cards))
+                if cards:
+                    self.btn_lore.setText("📖 게임 도감 열기 (%d종) — 몬스터를 고르면 바로 찾기" % len(cards))
         except Exception:  # noqa: BLE001 - 팁은 보조
             self.known_tip.setVisible(False)
+
+    def _open_lore(self) -> None:
+        """도감 브라우저: 몬스터를 고르면 그 이름으로 '이름·설명으로 찾기'를 바로 돌린다."""
+        cards = self._lore_cards()
+        if not cards:
+            QMessageBox.information(self, "게임 도감", "이 게임에서 도감 데이터를 찾지 못했습니다. (글자 사전을 만든 뒤에 생깁니다 — 찾기를 한 번 돌리면 자동)")
+            return
+        dlg = _LoreDialog(self, cards)
+        if dlg.exec() and dlg.picked:
+            self.rb_mode_char.setChecked(True)     # 이름·설명으로 찾기 모드로
+            self.char_q.setText(dlg.picked)
+            self.start_namefind()
 
     @staticmethod
     def _lore_example(cards) -> str:
