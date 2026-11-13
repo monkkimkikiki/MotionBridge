@@ -38,12 +38,34 @@ def render_thumb(glb: str, out_png: str, blender: Optional[str] = None, size: in
     return os.path.isfile(out_png)
 
 
+def render_batch(pairs: Sequence[Tuple[str, str]], blender: Optional[str] = None, size: int = THUMB_SIZE) -> int:
+    """여러 (GLB, PNG) 를 Blender '한 번'으로 렌더한다 — 장마다 Blender 를 새로 띄우는 비용을 없앤다. 만든 수를 돌려준다."""
+    pairs = [(g, t) for g, t in pairs if g and os.path.isfile(g)]
+    if not pairs:
+        return 0
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        jobs = f.name
+        for g, t in pairs:
+            os.makedirs(os.path.dirname(os.path.abspath(t)), exist_ok=True)
+            f.write("%s\t%s\n" % (os.path.abspath(g), os.path.abspath(t)))
+    try:
+        bridge.run_script("blender_thumb.py", ["--jobs", jobs, str(size)], blender)
+    finally:
+        try:
+            os.unlink(jobs)
+        except OSError:
+            pass
+    return sum(1 for _g, t in pairs if os.path.isfile(t))
+
+
 def ensure_thumbs(game: str, mesh_paths: Sequence[str], glb_of: Callable[[str], Optional[str]],
                   blender: Optional[str] = None, render: Callable = render_thumb,
                   progress: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Optional[str]]:
     """메시 경로 -> 썸네일 PNG (못 만들면 None). 이미 있으면 다시 만들지 않는다."""
     out: Dict[str, Optional[str]] = {}
     todo = list(dict.fromkeys(mesh_paths))
+    need: List[Tuple[str, str, str]] = []           # (메시 경로, GLB, 썸네일) — 캐시에 없는 것만
     for i, p in enumerate(todo):
         if progress:
             progress(i, len(todo), os.path.basename(p))
@@ -59,11 +81,19 @@ def ensure_thumbs(game: str, mesh_paths: Sequence[str], glb_of: Callable[[str], 
             out[p] = None
             continue
         os.makedirs(os.path.dirname(t), exist_ok=True)
+        need.append((p, glb, t))
+    if len(need) > 1:                                # Blender 를 한 번만 띄워 전부 렌더
         try:
-            ok = render(glb, t, blender)
-        except Exception:  # noqa: BLE001 - 렌더 실패는 건너뜀
-            ok = False
-        out[p] = t if (ok and os.path.isfile(t)) else None
+            render_batch([(g, t) for _p, g, t in need], blender)
+        except Exception:  # noqa: BLE001 - 배치 실패는 아래 한 장씩으로
+            pass
+    for p, glb, t in need:                           # 배치에서 빠진 것은 한 장씩 (배치가 안 되는 환경 폴백)
+        if not os.path.isfile(t):
+            try:
+                render(glb, t, blender)
+            except Exception:  # noqa: BLE001 - 렌더 실패는 건너뜀
+                pass
+        out[p] = t if os.path.isfile(t) else None
     return out
 
 

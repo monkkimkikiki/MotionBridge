@@ -1,6 +1,8 @@
-"""GLB 하나를 참조 썸네일 PNG 로 렌더한다 (생김새 검증용).
+"""GLB 를 참조 썸네일 PNG 로 렌더한다 (생김새 검증용).
 
 사용: blender -b --factory-startup -P blender_thumb.py -- <glb> <out_png> [크기]
+      blender -b --factory-startup -P blender_thumb.py -- --jobs <목록파일> [크기]
+      (목록파일: 한 줄에 '<glb>\t<out_png>' — Blender 를 한 번만 띄워 여러 장을 연달아 렌더)
 카메라는 모델 전체가 들어오게 3/4 각도에서 자동으로 잡고, 회색 배경에 해 조명 하나.
 """
 import math
@@ -12,9 +14,20 @@ from mathutils import Vector
 
 def main() -> None:
     argv = sys.argv[sys.argv.index("--") + 1:]
-    glb, out = argv[0], argv[1]
-    size = int(argv[2]) if len(argv) > 2 else 512
+    if argv and argv[0] == "--jobs":
+        size = int(argv[2]) if len(argv) > 2 else 512
+        with open(argv[1], "r", encoding="utf-8") as f:
+            jobs = [ln.rstrip("\n").split("\t") for ln in f if "\t" in ln]
+        for glb, out in jobs:
+            try:
+                render_one(glb, out, size)
+            except Exception as e:  # noqa: BLE001 - 한 장 실패해도 다음 장은 계속
+                print("THUMB FAIL:", glb, e)
+        return
+    render_one(argv[0], argv[1], int(argv[2]) if len(argv) > 2 else 512)
 
+
+def render_one(glb: str, out: str, size: int) -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=glb)
 

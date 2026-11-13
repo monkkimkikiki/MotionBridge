@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
+from ..core import classify
 from ..core import nameglossary
 from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, framepick, frames, gamenames, layout, loader, motionmatch, motionsearch, movecatalog, ollama_setup as setup_mod, pairing, panel, screenname, skelgraph, textmatch, vision
 from ..core.identify import apply as identify_apply
@@ -1092,6 +1093,11 @@ class VidFindTab(QWidget):
             raise RuntimeError("메시(SK_*)를 하나도 찾지 못했습니다. 0번 탭에서 UE 버전/mappings 를 확인하세요.")
         idx = assetidx.AssetIndex(meshes, anims, statics)
         assetidx.save_index(INDEX_CACHE, idx, game)
+        try:
+            w.progress.emit(0, 1, "캐릭터 종류 분류 중 (보스/일반 몬스터/플레이어블/NPC — 목록 만들 때 한 번만)")
+            self._cls_map(idx)      # 분류를 지금 계산해 파일로 저장 — 이후 찾기에서는 바로 읽는다
+        except Exception:  # noqa: BLE001 - 분류는 보조
+            pass
         return idx
 
     def _catalog(self, idx: assetidx.AssetIndex) -> "charcatalog.Catalog":
@@ -1417,6 +1423,7 @@ class VidFindTab(QWidget):
         ff = frames.find_ffmpeg(self.cfg.get("ffmpeg"))
         w_cap = 24
         fast = bool(self.ck_fast.isChecked())
+        want_cls = self._cls_want()      # 찾을 종류: 비싼 단계(확장·생김새 비교)도 이 종류 안에서만 돌게 job 에 넘긴다
 
         class _Stopped(Exception):
             pass
@@ -1460,6 +1467,12 @@ class VidFindTab(QWidget):
                     raise RuntimeError(msg2)
             idx = self._ensure_index(a, w, force_index)
             stop_check(w)
+            cls_map_j = self._cls_map(idx) if want_cls else {}
+
+            def cls_ok_j(p_):
+                """찾을 종류 체크: 비싼 단계(확장 검색·생김새 비교)도 체크한 종류의 캐릭터만 다룬다."""
+                return not want_cls or cls_map_j.get(classify.folder_of(p_), "mob") in want_cls
+
             if pre_frames is not None:        # 이미지로 찾기: 유저가 지정한 영역(크롭)을 그대로 장면으로 쓴다 — 장면 뽑기 생략
                 from types import SimpleNamespace
                 os.makedirs(FRAME_DIR, exist_ok=True)      # 빠르게 모드의 장면 시트 저장용
@@ -1515,7 +1528,7 @@ class VidFindTab(QWidget):
                 # 유력 후보 보스들을 전부 검수 후보에 넣어 검수자가 고르게 한다 (여러 개면 동시에 질의)
                 ks_ = [k for k in known if k.top is None]
                 store_k = self._entities(idx, hint) if ks_ else None
-                mp_k = [m.path for m in idx.meshes]
+                mp_k = [m.path for m in idx.meshes if cls_ok_j(m.path)]
                 for k, nf_ in zip(ks_, _pmap(ks_, lambda k_: identify_namefind.find(prov.ask_text, k_.name, hint, mp_k, idx.anims, store_k),
                                              "아는 정보 AI 확장 검색 (원어·음차·지역 코드명)")):
                     if isinstance(nf_, Exception):
@@ -1595,7 +1608,7 @@ class VidFindTab(QWidget):
                         if unknown_ and not (g_.description or "").strip():
                             continue
                         rows_x.append((g_, nm_, unknown_))
-                    mesh_paths_ = [m.path for m in idx.meshes]
+                    mesh_paths_ = [m.path for m in idx.meshes if cls_ok_j(m.path)]
                     store_ = self._entities(idx, hint) if rows_x else None
 
                     def _expand(t):
@@ -1643,25 +1656,9 @@ class VidFindTab(QWidget):
                     try:
                         helper_a, game_a, ue_a, aes_a, usmap_a = a
                         gname_v = hint or "game"
-
-                        def glb_of(p_):
-                            out_dir = identify_verify.cache_dir(gname_v, "refglb")
-                            os.makedirs(out_dir, exist_ok=True)
-                            files_ = extractor.export_assets(helper_a, game_a, ue_a, aes_a, usmap_a, [p_], out_dir,
-                                                             on_event=lambda _e: None, kind="mesh", mesh_format="glb", textures=True)
-                            stem_ = os.path.splitext(os.path.basename(p_))[0].lower()
-                            for f_ in files_ or []:
-                                if f_.lower().endswith(".glb") and stem_ in os.path.basename(f_).lower():
-                                    return f_
-                            for root_, _dd, nn_ in os.walk(out_dir):
-                                for n_ in nn_:
-                                    if n_.lower() == stem_ + ".glb":
-                                        return os.path.join(root_, n_)
-                            return None
-
-                        n_v = 0
+                        rows_v = []
                         for g_ in groups_:
-                            if n_v >= 3 or not getattr(g_, "frame", "") or not os.path.isfile(g_.frame):
+                            if len(rows_v) >= 3 or not getattr(g_, "frame", "") or not os.path.isfile(g_.frame):
                                 continue
                             cands_v = [c.path for c in idx.rank_meshes(g_.name, g_.description, 6, self.memory)]
                             for c_ in (getattr(g_, "ex_cands", None) or []):
@@ -1670,18 +1667,40 @@ class VidFindTab(QWidget):
                             ok_v = []
                             for p_ in cands_v:
                                 mi_ = idx.mesh(p_)
-                                if mi_ is not None and mi_.rigged:
+                                if mi_ is not None and mi_.rigged and cls_ok_j(p_):   # 찾을 종류 체크 안의 후보만 렌더
                                     ok_v.append(p_)
                             ok_v = ok_v[:identify_verify.MAX_CANDS]
-                            if len(ok_v) < 2:
-                                continue
-                            n_v += 1
+                            if len(ok_v) >= 2:
+                                rows_v.append((g_, ok_v))
+                        # 썸네일이 아직 없는 후보만 모아 '한 번에' 추출 — 추출기가 호출마다 pak 전체를 다시 마운트해서
+                        # 한 개씩 뽑으면 후보 수 × 수십 초가 걸리던 것을 마운트 1번으로 줄인다.
+                        glb_map = {}
+                        need_ = list(dict.fromkeys(p_ for _g, ov in rows_v for p_ in ov
+                                                   if not os.path.isfile(identify_verify.thumb_path(gname_v, p_))))
+                        if need_:
                             stop_check(w)
+                            w.progress.emit(0, 1, "생김새 비교: 후보 메시 %d개를 한 번에 추출 중 (게임마다 처음 한 번)" % len(need_))
+                            out_dir = identify_verify.cache_dir(gname_v, "refglb")
+                            os.makedirs(out_dir, exist_ok=True)
+                            files_ = extractor.export_assets(helper_a, game_a, ue_a, aes_a, usmap_a, need_, out_dir,
+                                                             on_event=lambda _e: None, kind="mesh", mesh_format="glb", textures=True) or []
+                            by_stem = {}
+                            for f_ in files_:
+                                if f_.lower().endswith(".glb"):
+                                    by_stem.setdefault(os.path.splitext(os.path.basename(f_))[0].lower(), f_)
+                            if len(by_stem) < len(need_):     # 반환 목록에 없으면 캐시 폴더에서 찾는다
+                                for root_, _dd, nn_ in os.walk(out_dir):
+                                    for n_ in nn_:
+                                        if n_.lower().endswith(".glb"):
+                                            by_stem.setdefault(os.path.splitext(n_)[0].lower(), os.path.join(root_, n_))
+                            for p_ in need_:
+                                glb_map[p_] = by_stem.get(os.path.splitext(os.path.basename(p_))[0].lower())
+                        for vi_, (g_, ok_v) in enumerate(rows_v):
+                            stop_check(w)
+                            w.progress.emit(vi_, len(rows_v), "생김새 비교: 후보 렌더(한 번에)·AI 대조 중")
                             thumbs_ = identify_verify.ensure_thumbs(
-                                gname_v, ok_v, glb_of,
-                                progress=lambda i_, nn2, nm_: (stop_check(w),
-                                                               w.progress.emit(i_, nn2, "생김새 비교: 후보 렌더 중 %s (게임마다 처음 한 번)" % nm_)))
-                            w.progress.emit(0, 1, "생김새 비교: 지정한 이미지와 후보 렌더를 AI 가 대조 중")
+                                gname_v, ok_v, lambda p_: glb_map.get(p_),
+                                progress=lambda i_, nn2, nm_: w.progress.emit(i_, nn2, "후보 렌더 %s" % nm_))
                             r_v = identify_verify.verify_one(prov.ask, gname_v,
                                                              g_.frame, getattr(g_, "box", None), ok_v, thumbs_,
                                                              FRAME_DIR, panel.make_sheet)
@@ -1781,17 +1800,51 @@ class VidFindTab(QWidget):
         if self.char_mode:
             self.show_char_meshes()
 
+    def _cls_stamp(self) -> list:
+        """분류 입력(에셋 목록·글자 사전·뜻 풀이)의 수정 시각 — 하나라도 바뀌면 분류를 다시 계산."""
+        out = []
+        for p in (INDEX_CACHE, NAMES_CACHE, getattr(self.__dict__.get("_gloss"), "path", "") or ""):
+            try:
+                out.append(round(os.path.getmtime(p), 2) if p and os.path.isfile(p) else 0)
+            except OSError:
+                out.append(0)
+        return out
+
     def _cls_map(self, idx):
-        """에셋 신호로 만든 '캐릭터 폴더 -> 종류' 표 (인덱스마다 한 번만 계산)."""
+        """'캐릭터 폴더 -> 종류' 표. 인덱스를 묶을 때 한 번 계산해 파일로 저장하고, 다음부터는 바로 읽는다.
+        근거 서열(아래가 위를 덮어씀): 추정(애니 수·전용 연출) < 뜻 풀이 사전(AI) < 게임 도감(공식 분류). 플레이어블 표시는 유지."""
         if idx is None or not idx:
             return {}
         memo = self.__dict__.get("_cls_memo")
         if isinstance(memo, tuple) and memo[0] is idx:
             return memo[1]
+        cache_p = os.path.join(bridge.CONFIG_DIR, "cls_cache.json")
+        stamp = self._cls_stamp()
+        try:
+            with open(cache_p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict) and d.get("stamp") == stamp and isinstance(d.get("map"), dict):
+                self._cls_memo = (idx, d["map"])
+                return d["map"]
+        except (OSError, ValueError):
+            pass
         from ..core import classify
         m = classify.classify([mm.path for mm in idx.meshes], idx.anims)
         try:
-            # 게임 도감의 '공식 분류'(잡요괴/두목/요왕/인물)가 있으면 추정치를 덮어쓴다 — 표시 이름으로 캐릭터 폴더에 잇는다
+            # ① 뜻 풀이 사전이 리소스 이름마다 기억해 둔 종류(boss/enemy/npc/player) — AI 추정이라 도감보다 약하다
+            gl = self.glossary()
+            if gl.entries:
+                to_cls = {"boss": "boss", "enemy": "mob", "npc": "npc", "player": "player"}
+                for mm in idx.meshes:
+                    k = to_cls.get(((gl.get(mm.name) or {}).get("kind")) or "")
+                    if k:
+                        f_ = classify.folder_of(mm.path)
+                        if m.get(f_) != "player":
+                            m[f_] = k
+        except Exception:  # noqa: BLE001 - 사전이 없으면 추정치로
+            pass
+        try:
+            # ② 게임 도감의 '공식 분류'(잡요괴/두목/요왕/인물) — 가장 확실하므로 마지막에 덮어쓴다
             with open(NAMES_CACHE, "r", encoding="utf-8") as f:
                 journal = classify.journal_types((json.load(f) or {}).get("entries") or [])
             if journal:
@@ -1807,19 +1860,9 @@ class VidFindTab(QWidget):
         except Exception:  # noqa: BLE001 - 도감이 없는 게임은 추정치로
             pass
         try:
-            # 뜻 풀이 사전이 리소스 이름마다 기억해 둔 종류(boss/enemy/npc/player)가 있으면 그걸 우선한다
-            gl = self.glossary()
-            if gl.entries:
-                from ..core import classify
-                to_cls = {"boss": "boss", "enemy": "mob", "npc": "npc", "player": "player"}
-                for mm in idx.meshes:
-                    e = gl.get(mm.name)
-                    k = to_cls.get((e or {}).get("kind") or "")
-                    if k:
-                        f_ = classify.folder_of(mm.path)
-                        if m.get(f_) != "player":
-                            m[f_] = k
-        except Exception:  # noqa: BLE001 - 사전이 없으면 추정치로
+            with open(cache_p, "w", encoding="utf-8") as f:
+                json.dump({"stamp": stamp, "map": m}, f, ensure_ascii=False)
+        except OSError:
             pass
         self._cls_memo = (idx, m)
         return m
