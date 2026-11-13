@@ -29,6 +29,7 @@ from ..core import animlink, animref, assetidx, bridge, charcatalog, extractor, 
 from ..core.identify import apply as identify_apply
 from ..core.identify import entity_store as entstore
 from ..core.identify import namefind as identify_namefind
+from ..core.identify import verify as identify_verify
 from .viewer import ASSET_MIME
 from .uikit import HelpIcon, Resizable, with_help
 from .widgets import CollapsibleBox, EditPanel, fit_widths, wrappable
@@ -1635,6 +1636,68 @@ class VidFindTab(QWidget):
                     raise
                 except Exception as e:  # noqa: BLE001 - 확장은 보조
                     errors.append("AI 확장 검색: %s" % str(e)[:120])
+                # 이미지(영역 지정) 모드: 후보 메시를 실제로 렌더해 '생김새'로 가린다 — Lang_03 을 찾은 방식 그대로.
+                # 후보 -> GLB 추출 -> Blender 썸네일(게임마다 캐시) -> 지정한 이미지와 한 시트 -> VLM 이 같은 캐릭터를 지목.
+                # 추출/Blender/VLM 어느 하나라도 안 되면 조용히 건너뛴다 (보조 기능).
+                if pre_frames is not None:
+                    try:
+                        helper_a, game_a, ue_a, aes_a, usmap_a = a
+                        gname_v = hint or "game"
+
+                        def glb_of(p_):
+                            out_dir = identify_verify.cache_dir(gname_v, "refglb")
+                            os.makedirs(out_dir, exist_ok=True)
+                            files_ = extractor.export_assets(helper_a, game_a, ue_a, aes_a, usmap_a, [p_], out_dir,
+                                                             on_event=lambda _e: None, kind="mesh", mesh_format="glb", textures=True)
+                            stem_ = os.path.splitext(os.path.basename(p_))[0].lower()
+                            for f_ in files_ or []:
+                                if f_.lower().endswith(".glb") and stem_ in os.path.basename(f_).lower():
+                                    return f_
+                            for root_, _dd, nn_ in os.walk(out_dir):
+                                for n_ in nn_:
+                                    if n_.lower() == stem_ + ".glb":
+                                        return os.path.join(root_, n_)
+                            return None
+
+                        n_v = 0
+                        for g_ in groups_:
+                            if n_v >= 3 or not getattr(g_, "frame", "") or not os.path.isfile(g_.frame):
+                                continue
+                            cands_v = [c.path for c in idx.rank_meshes(g_.name, g_.description, 6, self.memory)]
+                            for c_ in (getattr(g_, "ex_cands", None) or []):
+                                if c_.path not in cands_v:
+                                    cands_v.append(c_.path)
+                            ok_v = []
+                            for p_ in cands_v:
+                                mi_ = idx.mesh(p_)
+                                if mi_ is not None and mi_.rigged:
+                                    ok_v.append(p_)
+                            ok_v = ok_v[:identify_verify.MAX_CANDS]
+                            if len(ok_v) < 2:
+                                continue
+                            n_v += 1
+                            stop_check(w)
+                            thumbs_ = identify_verify.ensure_thumbs(
+                                gname_v, ok_v, glb_of,
+                                progress=lambda i_, nn2, nm_: (stop_check(w),
+                                                               w.progress.emit(i_, nn2, "생김새 비교: 후보 렌더 중 %s (게임마다 처음 한 번)" % nm_)))
+                            w.progress.emit(0, 1, "생김새 비교: 지정한 이미지와 후보 렌더를 AI 가 대조 중")
+                            r_v = identify_verify.verify_one(prov.ask, gname_v,
+                                                             g_.frame, getattr(g_, "box", None), ok_v, thumbs_,
+                                                             FRAME_DIR, panel.make_sheet)
+                            if r_v and r_v.get("path") and float(r_v.get("confidence") or 0) >= 0.45:
+                                try:
+                                    g_.ver_pick = r_v["path"]
+                                    g_.ver_why = str(r_v.get("why") or "")
+                                except Exception:  # noqa: BLE001
+                                    pass
+                                notes.append("생김새 비교로 지목: %s (%.0f%%%s)" % (
+                                    assetidx.mesh_name(r_v["path"]), float(r_v.get("confidence") or 0) * 100,
+                                    (", " + r_v["why"]) if r_v.get("why") else ""))
+                    except _Stopped:
+                        raise
+                    except Exception as e:  # noqa: BLE001 - 생김새 비교는 보조
+                        errors.append("생김새 비교: %s" % str(e)[:120])
                 return groups_
 
             if fast:   # 영상마다 장면 시트 한 장 -> AI 호출 1번 (클라우드 AI 는 영상 여러 개를 동시에)
@@ -1833,8 +1896,15 @@ class VidFindTab(QWidget):
         if not base:      # 이름 글자로는 못 찾음 -> 뜻 풀이 사전(한국어/영어/한자 뜻)으로 후보를 낸다
             base = self._gloss_cands(" ".join(x for x in (g.name, g.description) if x))
         base = [c for c in base if self._class_ok(c.path)]   # 찾을 종류 체크에 맞는 것만
+        vp = getattr(g, "ver_pick", "") or ""
+        if vp:   # 생김새 비교(렌더 대조)가 지목한 메시는 맨 앞에
+            hit = next((c for c in base if c.path == vp), None)
+            if hit is not None:
+                base.remove(hit)
+            base.insert(0, assetidx.MeshCandidate(vp, assetidx.mesh_name(vp), 0.97,
+                                                  "생김새 일치 — " + ((getattr(g, "ver_why", "") or "렌더 대조")[:80])))
         remembered = bool(base) and base[0].why.startswith("이전에 확정")
-        sure = remembered or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
+        sure = remembered or bool(vp) or (bool(g.name) and g.confidence >= self.min_conf.value() / 100.0)
         it = QTableWidgetItem("")
         pm = _thumb(g.frame, g.box)
         if pm is not None:
